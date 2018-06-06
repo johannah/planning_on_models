@@ -6,7 +6,7 @@ import config
 import numpy as np
 from IPython import embed
 from datasets import transform_freeway
-num_train = 50000
+num_train = 5000
 num_test = 64*4
 rdn = np.random.RandomState(555)
 
@@ -20,15 +20,17 @@ cnt =  0
 
 while cnt<(num_train+num_test):
     o, r, done, info = env.step(0)
-    max_o = o # np.maximum(last_o, o)
+    if done:
+        last_o = env.reset()
+    max_o = np.maximum(last_o, o)
     out = transform_freeway(max_o)
-    last_o = o
     if cnt < num_train:
         fname = os.path.join(config.freeway_train_frames_dir, 'freeway_train_%09d.png'%cnt)
     else:
         fname = os.path.join(config.freeway_test_frames_dir, 'freeway_test_%09d.png'%cnt)
-        imwrite(fname, out)
     if not cnt%100:
         print('writing',os.path.abspath(fname))
+    imwrite(fname, out)
+    last_o = o
     cnt +=1
 

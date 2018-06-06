@@ -12,6 +12,7 @@ def transform_freeway(obs):
     h,w,c = obs.shape
     o = obs[25:(h-26),9:,:]
     cr = rgb2gray(resize(o, (80,80)))
+    #cr = resize(o, (80,80))
     return cr
 
 
@@ -44,7 +45,6 @@ class FroggerDataset(Dataset):
         if self.transform is not None:
             # bt 0 and 1
             image = (self.transform(image)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
-            image = image-0.5
         return image,img_name
 
 #class FlattenedFroggerDataset(Dataset):
