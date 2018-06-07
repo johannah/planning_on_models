@@ -7,13 +7,21 @@ import os, sys
 from imageio import imread
 from skimage.color import rgb2gray
 from skimage.transform import resize
+from skimage import img_as_ubyte
 
+background = imread('median.png')
+known_min = -125
 def transform_freeway(obs):
     h,w,c = obs.shape
     o = obs[25:(h-26),9:,:]
-    cr = rgb2gray(resize(o, (80,80)))
-    #cr = resize(o, (80,80))
+    cr = img_as_ubyte(rgb2gray(resize(o, (80,80), order=0)))
     return cr
+
+def remove_background(gimg):
+    # background has two colors - 142 is the asphalt and 214 is the lines
+    gimg[gimg==142] = 0
+    gimg[gimg==214] = 0
+    return gimg
 
 
 class FroggerDataset(Dataset):
@@ -45,6 +53,7 @@ class FroggerDataset(Dataset):
         if self.transform is not None:
             # bt 0 and 1
             image = (self.transform(image)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+
         return image,img_name
 
 #class FlattenedFroggerDataset(Dataset):
@@ -193,32 +202,32 @@ class FroggerDataset(Dataset):
 #        return mu_diff_scaled,mu_diff,mu,sig_diff_scaled,sig_diff,sig,dname
 #
 #
-#class EpisodicVqVaeFroggerDataset(Dataset):
-#    def __init__(self, root_dir, transform=None, limit=-1, search='seed*episode*.npz'):
-#        # what really matters is the seed - only generated one game per seed
-#        #seed_00334_episode_00029_frame_00162.png
-#        self.root_dir = root_dir
-#        self.transform = transform
-#        search_path = os.path.join(self.root_dir, search)
-#        self.indexes = sorted(glob(search_path))
-#        print("will use transform:%s"%transform)
-#        print("found %s files in %s" %(len(self.indexes), search_path))
-#        if not len(self.indexes):
-#            print("Error no files found at {}".format(search_path))
-#            sys.exit()
-#        if limit > 0:
-#            self.indexes = self.indexes[:min(len(self.indexes), limit)]
-#            print('limited to first %s examples' %len(self.indexes))
-#
-#    def __len__(self):
-#        return len(self.indexes)
-#
-#    def __getitem__(self, idx):
-#        dname = self.indexes[idx]
-#        d = np.load(open(dname, 'rb'))
-#        latents = d['latents']
-#        return latents,dname
-#
+class EpisodicVqVaeFroggerDataset(Dataset):
+    def __init__(self, root_dir, transform=None, limit=-1, search='seed*episode*.npz'):
+        # what really matters is the seed - only generated one game per seed
+        #seed_00334_episode_00029_frame_00162.png
+        self.root_dir = root_dir
+        self.transform = transform
+        search_path = os.path.join(self.root_dir, search)
+        self.indexes = sorted(glob(search_path))
+        print("will use transform:%s"%transform)
+        print("found %s files in %s" %(len(self.indexes), search_path))
+        if not len(self.indexes):
+            print("Error no files found at {}".format(search_path))
+            sys.exit()
+        if limit > 0:
+            self.indexes = self.indexes[:min(len(self.indexes), limit)]
+            print('limited to first %s examples' %len(self.indexes))
+
+    def __len__(self):
+        return len(self.indexes)
+
+    def __getitem__(self, idx):
+        dname = self.indexes[idx]
+        d = np.load(open(dname, 'rb'))
+        latents = d['latents']
+        return latents,dname
+
 
 
 

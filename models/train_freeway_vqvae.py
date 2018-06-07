@@ -25,6 +25,7 @@ from utils import sample_from_discretized_mix_logistic
 from utils import get_cuts, to_scalar
 from datasets import FroggerDataset
 import config
+torch.manual_seed(7)
 
 def train(epoch,train_loader):
     print("starting epoch {}".format(epoch))
@@ -121,7 +122,7 @@ def generate_episodic_npz(data_loader,save_path,make_imgs=False):
                 if len(frames) == batch_size:
                     if not os.path.exists(episode_path):
                         print("episode: %s length: %s" %(episode_path, len(frames)))
-                    A_idx = torch.LongTensor(frames) # the index vector
+                    A_idx = torch.LongTensor(frames).to(DEVICE) # the index vector
                     XX = x.index_select(0, A_idx)
                     # make batch
                     x_d, z_e_x, z_q_x, latents = vmodel(XX)
@@ -170,7 +171,9 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vmodel = AutoEncoder(nr_logistic_mix=nr_logistic_mix,num_clusters=num_clusters, encoder_output_size=args.num_z, data_channels_size=num_channels).to(DEVICE)
+    vmodel = AutoEncoder(nr_logistic_mix=nr_logistic_mix,
+                         num_clusters=num_clusters, encoder_output_size=args.num_z,
+                         data_channels_size=num_channels).to(DEVICE)
     opt = torch.optim.Adam(vmodel.parameters(), lr=learning_rate)
     train_loss_list = []
     test_loss_list = []
@@ -187,7 +190,6 @@ if __name__ == '__main__':
 
     test_loss_logger = VisdomPlotLogger(
                   'line', port=port, opts={'title': '%s Test Loss'%basename})
-
 
     if args.model_loadname is not None:
         model_loadpath = os.path.abspath(os.path.join(default_base_savedir, args.model_loadname))
@@ -265,12 +267,10 @@ if __name__ == '__main__':
                                       max_pixel_used=max_pixel, min_pixel_used=min_pixel),
                                       batch_size=bs, shuffle=False)
 
-
-        test_gen_dir = os.path.join(os.path.split(test_data_dir)[0], 'test_'  + basename+'_e%05d'%epoch)
-        train_gen_dir = os.path.join(os.path.split(test_data_dir)[0], 'train_'+ basename+'_e%05d'%epoch)
+        basedatadir = '../../dataset'
+        test_gen_dir =  os.path.join(basedatadir, 'test_' + basename+'_e%05d'%epoch)
+        train_gen_dir = os.path.join(basedatadir, 'train_'+ basename+'_e%05d'%epoch)
 
         generate_episodic_npz(data_test_loader,test_gen_dir)
         generate_episodic_npz(data_train_loader,train_gen_dir)
-
-
 

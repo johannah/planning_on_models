@@ -5,9 +5,10 @@ import os
 import config
 import numpy as np
 from IPython import embed
-from datasets import transform_freeway
-num_train = 5000
-num_test = 64*4
+from datasets import transform_freeway, remove_background
+bs = 64
+num_train = 1000*bs
+num_test = 4*bs
 rdn = np.random.RandomState(555)
 
 for dd in [config.freeway_test_frames_dir, config.freeway_train_frames_dir]:
@@ -24,13 +25,14 @@ while cnt<(num_train+num_test):
         last_o = env.reset()
     max_o = np.maximum(last_o, o)
     out = transform_freeway(max_o)
+    outb = remove_background(out)
     if cnt < num_train:
         fname = os.path.join(config.freeway_train_frames_dir, 'freeway_train_%09d.png'%cnt)
     else:
         fname = os.path.join(config.freeway_test_frames_dir, 'freeway_test_%09d.png'%cnt)
     if not cnt%100:
         print('writing',os.path.abspath(fname))
-    imwrite(fname, out)
+    imwrite(fname, outb.astype(np.uint8))
     last_o = o
     cnt +=1
 

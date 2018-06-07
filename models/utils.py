@@ -129,8 +129,9 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
     lse = log_sum_exp(log_probs)
     # hacky hack mask to weight cars and frogs
-    #masked = (target[:,0,:,:]>-.98).float()*lse
-    out = lse#+masked
+    #from IPython import embed; embed()
+    masked = (target[:,0,:,:]>-.99).float()*lse
+    out = lse+masked
     return -out.mean()
 
 
@@ -238,7 +239,7 @@ def sample_from_discretized_mix_logistic(l, nr_mix, only_mean=True, deterministi
 
     # unpack parameters
     logit_probs = l[:, :, :, :nr_mix]
-    from IPython import embed; embed()
+    #from IPython import embed; embed()
     l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix * 2])
     # sample mixture indicator from softmax
     temp = torch.FloatTensor(logit_probs.size())
