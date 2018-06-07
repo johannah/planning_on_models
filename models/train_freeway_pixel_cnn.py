@@ -86,22 +86,30 @@ def test(epoch,test_loader,DEVICE,history_size,save_img_path=None):
             )
     ## make image from the last example
     ep = 0
-    ep_name = os.path.split(dname[ep])[1].replace('_seq.npz', '.png')
+    skip_length = 4
+    # not sure if this is right yet
+    first_img_number = int(os.path.split(dname[ep])[1].split('test_')[1].replace('_seq.npz', ''))
+    this_img_number = first_img_number + (i*skip_length)
+    bimg_dir = os.path.split(os.path.split(dname[ep])[0])[0]
+    # test or train? - ttname
+    ttname = os.path.split(os.path.split(dname[ep])[0])[1].split('_')[0]
+    img_dir = os.path.join(bimg_dir, 'freeway_%s_frames'%ttname)
+    orig_img_path = os.path.join(img_dir, 'freeway_%s_%09d.png'%(ttname,this_img_number))
     # need to get exact name
-    orig_img_path = os.path.join(base_orig_name, ep_name)
-    frame_save_path = os.path.abspath(os.path.join(config.model_savedir, 'vqpcnn_e%04d.png'%epoch))
+    frame_save_path = os.path.join(config.model_savedir, 'vqpcnn_e%04d.png'%epoch)
+    print("Plotting orig", orig_img_path)
+    if not os.path.exists(orig_img_path):
+        embed()
     # dshape was (6,6) for dyanmic env
     gen_latents = pcnn_model.generate(spatial_cond=cond_x[ep][None],
                                    shape=dshape,batch_size=1)
-    generate(i, gen_latents, orig_img_path=orig_img_path, save_img_path=frame_save_path, dshape=dshape)
+    generate(this_img_number, gen_latents, orig_img_path=orig_img_path, save_img_path=frame_save_path, dshape=dshape)
     return np.mean(test_loss)
-
 
 def save_checkpoint(state, filename='model.pkl'):
     print("starting save of model %s" %filename)
     torch.save(state, filename)
     print("finished save of model %s" %filename)
-
 
 def generate(frame_num, gen_latents, orig_img_path, save_img_path, dshape):
     z_q_x = vmodel.embedding(gen_latents.view(gen_latents.size(0),-1))
@@ -283,7 +291,8 @@ Test Loss"""%basename})
                 orig_img_path = os.path.abspath(os.path.join(base_orig_name, ep_name))
                 frame_save_path = os.path.abspath(os.path.join(base_save_name, ep_name.replace('.png', '_pcnn_vqvae.png')))
                 cond_x = x[:,(i-history_size):i]
-                latent_shape=(6,6)
+                # below may be wrong
+                latent_shape = cond_x[0].shape[2:]
                 gen_latents = pcnn_model.generate(spatial_cond=cond_x,
                                                   shape=latent_shape,batch_size=batch_size)
                 generate(i, gen_latents, orig_img_path=orig_img_path,

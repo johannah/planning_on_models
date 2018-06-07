@@ -9,8 +9,6 @@ from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
 
-background = imread('median.png')
-known_min = -125
 def transform_freeway(obs):
     h,w,c = obs.shape
     o = obs[25:(h-26),9:,:]

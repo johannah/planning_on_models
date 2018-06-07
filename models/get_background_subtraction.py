@@ -8,8 +8,6 @@ from IPython import embed
 from datasets import transform_freeway, remove_background
 from glob import glob
 import matplotlib.pyplot as plt
-fs = glob(os.path.join(config.freeway_train_frames_dir, '*.png'))
-print("len", len(fs))
 num = 10000
 rdn = np.random.RandomState(100)
 nn = rdn.choice(range(len(fs)), num)
