@@ -146,6 +146,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--model_savename', default='_')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-se', '--save_every', default=1, type=int)
+    parser.add_argument('-nl', '--num_layers', default=15, type=int)
     parser.add_argument('-bs', '--batch_size', default=64, type=int)
     parser.add_argument('-e', '--num_epochs', default=350, type=int)
     parser.add_argument('-p', '--port', default=8097, type=int, help='8097 for erehwon 8096 for numenor by default')
@@ -162,7 +163,7 @@ if __name__ == '__main__':
     #epochs = []
     #epoch = 1
 
-    N_LAYERS = 15
+    N_LAYERS = args.num_layers
     DIM = 256
     history_size = 4
     cond_size = history_size*DIM
