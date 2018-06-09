@@ -8,6 +8,7 @@ from imageio import imread
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
+import matplotlib.pyplot as plt
 oy = 15
 # height - oyb
 ox = 9
@@ -18,9 +19,9 @@ staging = 170
 input_ysize = input_xsize = 80
 orig_ysize = 210
 orig_xsize = 160
-# i dont think this changes 
-extra_chicken = np.array([[77, 78, 78, 78, 79], [54, 52, 53, 54, 54]]) 
-import matplotlib.pyplot as plt
+# i dont think this changes
+extra_chicken = np.array([[77, 78, 78, 78, 79], [54, 52, 53, 54, 54]])
+
 def prepare_img(obs):
     # turn to gray
     cropped = obs[oy:(orig_ysize-oy),ox:]
@@ -28,7 +29,6 @@ def prepare_img(obs):
     gimg[stripes == gimg] = 0
     gimg[road == gimg] = 0
     gimg[staging == gimg] = 0
-    print(np.where(gimg == chicken_color))
     sgimg = img_as_ubyte(resize(gimg, (input_ysize, input_xsize), order=0))
     sgimg[extra_chicken[0], extra_chicken[1]] = 0
     our_chicken = np.where(sgimg == chicken_color)
