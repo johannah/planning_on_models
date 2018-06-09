@@ -180,7 +180,7 @@ if __name__ == '__main__':
     epochs = []
     epoch = 1
 
-    basename = '%s_%s_%s_k%s_z%s'%(args.datatype, vmodel.name,
+    basename = 'n%s_%s_%s_k%s_z%s'%(args.datatype, vmodel.name,
                                         args.model_savename,
                                         args.num_k, args.num_z,
                                         )

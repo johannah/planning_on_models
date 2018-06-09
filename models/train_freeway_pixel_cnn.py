@@ -137,8 +137,12 @@ def generate(frame_num, gen_latents, orig_img_path, save_img_path, dshape):
 if __name__ == '__main__':
     import argparse
     base_savedir = '../../../trajectories_frames/saved/vqvae'
-    vqvae_model_loadname = 'freeway_vqvae4layer_nl_k512_z64e00181.pkl'
-    vqvae_dataset = 'freeway_vqvae4layer_nl_k512_z64_e00182'
+    #vqvae_model_loadname = 'freeway_vqvae4layer_nl_k512_z64e00181.pkl'
+    #vqvae_dataset = 'freeway_vqvae4layer_nl_k512_z64_e00182'
+
+
+    vqvae_model_loadname = 'nfreeway_vqvae4layer_nl_k512_z64e00250.pkl'
+    vqvae_dataset = 'nfreeway_vqvae4layer_nl_k512_z64_e00251'
     num_clusters = 512
     num_z = 64
     parser = argparse.ArgumentParser(description='train pixel-cnn on vqvae latents')
