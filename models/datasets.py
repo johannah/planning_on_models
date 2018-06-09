@@ -8,6 +8,39 @@ from imageio import imread
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
+oy = 15
+# height - oyb
+ox = 9
+chicken_color = 240
+stripes = 214
+road = 142
+staging = 170
+input_ysize = input_xsize = 80
+orig_ysize = 210
+orig_xsize = 160
+# i dont think this changes 
+extra_chicken = np.array([[77, 78, 78, 78, 79], [54, 52, 53, 54, 54]]) 
+import matplotlib.pyplot as plt
+def prepare_img(obs):
+    # turn to gray
+    cropped = obs[oy:(orig_ysize-oy),ox:]
+    gimg = img_as_ubyte(rgb2gray(cropped))
+    gimg[stripes == gimg] = 0
+    gimg[road == gimg] = 0
+    gimg[staging == gimg] = 0
+    print(np.where(gimg == chicken_color))
+    sgimg = img_as_ubyte(resize(gimg, (input_ysize, input_xsize), order=0))
+    sgimg[extra_chicken[0], extra_chicken[1]] = 0
+    our_chicken = np.where(sgimg == chicken_color)
+    sgimg[our_chicken[0], our_chicken[1]] = 0
+    return sgimg, our_chicken
+
+def undo_img_scaling(sgimg, our_chicken):
+    sgimg[our_chicken] = chicken_color
+    rec = np.zeros((orig_ysize, orig_xsize))
+    outimg = img_as_ubyte(resize(sgimg, (orig_ysize-(oy*2), orig_xsize-ox), order=0))
+    rec[oy:(orig_ysize-oy),ox:] = outimg
+    return rec
 
 def transform_freeway(obs):
     h,w,c = obs.shape
@@ -17,9 +50,15 @@ def transform_freeway(obs):
 
 def remove_background(gimg):
     # background has two colors - 142 is the asphalt and 214 is the lines
-    gimg[gimg==142] = 0
-    gimg[gimg==214] = 0
+    gimg[gimg==road] = 0
+    gimg[gimg==stripes] = 0
     return gimg
+
+def remove_chicken(gimg):
+    # remove chicken from background removed image
+    chicken = np.where(gimg==chicken_color)
+    gimg[chicken] = 0
+    return gimg, chicken
 
 
 class FroggerDataset(Dataset):
