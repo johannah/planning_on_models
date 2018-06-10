@@ -136,7 +136,6 @@ def generate(frame_num, gen_latents, orig_img_path, save_img_path, dshape):
 #
 if __name__ == '__main__':
     import argparse
-    base_savedir = '../../../trajectories_frames/saved/vqvae'
     #vqvae_model_loadname = 'freeway_vqvae4layer_nl_k512_z64e00181.pkl'
     #vqvae_dataset = 'freeway_vqvae4layer_nl_k512_z64_e00182'
 
