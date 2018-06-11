@@ -24,7 +24,7 @@ while cnt<(num_train+num_test):
     if done:
         last_o = env.reset()
     max_o = np.maximum(last_o, o)
-    out, chicken = prepare_img(max_o)
+    chicken,out = prepare_img(max_o)
     if cnt < num_train:
         fname = os.path.join(config.freeway_train_frames_dir, 'freeway_train_%09d.png'%cnt)
     else:

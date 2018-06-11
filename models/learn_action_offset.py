@@ -10,7 +10,7 @@ import sys, gym, time
 #
 from datasets import transform_freeway, remove_background, remove_chicken, prepare_img, undo_img_scaling
 import matplotlib.pyplot as plt
-from IPython import embed 
+from IPython import embed
 import matplotlib.pyplot as plt
 import numpy as np
 from copy import deepcopy
@@ -30,8 +30,8 @@ def plot_transformation(orig_img, input_img, out_img, step):
 
 #def sim_step(current_location, action):
     # action 1 is up
-    # action 0 is 
-    # action 2 is 
+    # action 0 is
+    # action 2 is
 
 def rollout(env):
     global human_agent_action, human_wants_restart, human_sets_pause
@@ -42,7 +42,7 @@ def rollout(env):
     win_steps = []
     obser = env.reset()
     tobs.append(obser)
-    input_img, small_chicken = prepare_img(obser)
+    small_chicken, input_img = prepare_img(obser)
     trans.append(input_img)
     skip = 0
     total_reward = 0
@@ -53,7 +53,7 @@ def rollout(env):
     while 1:
         a = 1
         obser, r, done, info = env.step(a)
-        input_img,small_chicken = prepare_img(obser)
+        small_chicken,input_img = prepare_img(obser)
         tobs.append(obser)
         trans.append(input_img)
         total_timesteps += 1

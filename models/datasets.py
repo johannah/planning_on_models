@@ -13,6 +13,8 @@ oy = 15
 # height - oyb
 ox = 9
 chicken_color = 240
+chicken_color1 = 244
+chicken_color2 = 246
 stripes = 214
 road = 142
 staging = 170
@@ -21,6 +23,7 @@ orig_ysize = 210
 orig_xsize = 160
 # i dont think this changes
 extra_chicken = np.array([[77, 78, 78, 78, 79], [54, 52, 53, 54, 54]])
+base_chicken = np.array([[77, 78, 78, 78, 79], [20, 21, 21, 20, 20]])
 
 def prepare_img(obs):
     # turn to gray
@@ -33,7 +36,18 @@ def prepare_img(obs):
     sgimg[extra_chicken[0], extra_chicken[1]] = 0
     our_chicken = np.where(sgimg == chicken_color)
     sgimg[our_chicken[0], our_chicken[1]] = 0
-    return sgimg, our_chicken
+
+    # remove spurious color from moving chicken
+    for sc in range(241, 250):
+        oc = np.where(sgimg == sc)
+        sgimg[oc[0], oc[1]] = 0
+
+
+    # there are 14 more 252 color when chicken moves -
+    # there are 14 more 252 color when chicken moves -
+    #our_chicken2 = np.where(sgimg == chicken_color2)
+    #sgimg[our_chicken2[0], our_chicken2[1]] = 0
+    return our_chicken, sgimg
 
 def undo_img_scaling(sgimg, our_chicken):
     sgimg[our_chicken] = chicken_color
