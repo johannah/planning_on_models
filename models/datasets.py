@@ -44,8 +44,9 @@ def prepare_img(obs):
     # remove spurious color from moving chicken
     for sc in stray_chickens:
         oc = np.where(sgimg == sc)
-        y.extend(oc[0])
-        x.extend(oc[1])
+        if not len(y):
+            y.extend(oc[0])
+            x.extend(oc[1])
         sgimg[oc[0], oc[1]] = 0
 
     if not len(y):
