@@ -36,13 +36,24 @@ def prepare_img(obs):
     sgimg[extra_chicken[0], extra_chicken[1]] = 0
     our_chicken = np.where(sgimg == chicken_color)
     sgimg[our_chicken[0], our_chicken[1]] = 0
+    n,c = np.unique(sgimg, return_counts=True)
+    stray_chickens = n[n>240]
+    stray_chickens = stray_chickens[stray_chickens<250]
+    y,x = list(our_chicken[0]), list(our_chicken[1])
 
     # remove spurious color from moving chicken
-    for sc in range(241, 250):
+    for sc in stray_chickens:
         oc = np.where(sgimg == sc)
+        y.extend(oc[0])
+        x.extend(oc[1])
         sgimg[oc[0], oc[1]] = 0
 
+    if not len(y):
+        print("COULDNT FIND CHICKEN IN OBSERVED IMAGE")
+        y = base_chicken[0]
+        x = base_chicken[1]
 
+    our_chicken = (np.array(y), np.array(x))
     # there are 14 more 252 color when chicken moves -
     # there are 14 more 252 color when chicken moves -
     #our_chicken2 = np.where(sgimg == chicken_color2)

@@ -101,7 +101,8 @@ def test(epoch,test_loader,DEVICE,history_size,save_img_path=None):
     if not os.path.exists(orig_img_path):
         embed()
     # dshape was (6,6) for dyanmic env
-    gen_latents = pcnn_model.generate(spatial_cond=cond_x[ep][None],
+    spatial_cond = cond_x[ep][None]
+    gen_latents = pcnn_model.generate(spatial_cond=spatial_cond,
                                    shape=dshape,batch_size=1)
     generate(this_img_number, gen_latents, orig_img_path=orig_img_path, save_img_path=frame_save_path, dshape=dshape)
     return np.mean(test_loss)
@@ -184,7 +185,7 @@ if __name__ == '__main__':
     epochs = []
     epoch = 1
 
-    basename = 'm%s_%s_k%s_z%s'%(pcnn_model.name, args.model_savename,
+    basename = 'e%s_%s_k%s_z%s'%(pcnn_model.name, args.model_savename,
                                         num_clusters, num_z)
     port = args.port
     train_loss_logger = VisdomPlotLogger(
