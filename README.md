@@ -1,4 +1,4 @@
-# planning_on_models
+# planning on imagined models of the future in dynamic environments
 
 Atari forward planning with vqvae+pixel-cnn
 
