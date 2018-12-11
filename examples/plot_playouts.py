@@ -1,7 +1,6 @@
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from vqvae_pcnn_future_model import VQPCNN_model
 import numpy as np
 import pickle
 import os, sys
@@ -40,21 +39,7 @@ def get_basepath_data(basepath, rerun=False):
                 shutil.rmtree(i)
         if not os.path.exists(i):
             os.makedirs(i)
-
-    future_model = ''
-    #if records['args'].future_model == 'vqvae_pcnn':
-    #    # TODO load from model
-    #    future_model = VQPCNN_model(records['DEVICE'],
-    #                                config.model_savedir,
-    #                                load_vq_name=  records['args'].vq_model_name,
-    #                                load_pcnn_name=records['args'].pcnn_model_name,
-    #                                dsize=80, nr_logistic_mix=10,
-    #                                num_z=64, num_clusters=512,
-    #                                N_LAYERS = 10, # layers in pixelcnn
-    #                                DIM = 256,
-    #                                history_size=records['args'].history_size,
-    #                                )
-    return records, arr, img_path, future_model
+    return records, arr, img_path
 
 def plot_true_state_actions(records, arr, img_path):
     obs_count = records['obs_count']
@@ -78,7 +63,7 @@ def plot_true_state_actions(records, arr, img_path):
             pobs[records['agent_position_y_max'][c], records['agent_position_x_max'][c]] = 255
             imsave(pobs_name, pobs)
 
-def plot_predictions(basepath, records, arr, img_path, future_model, override_predictions):
+def plot_predictions(basepath, records, arr, img_path, override_predictions):
     pred_count = records['future_prediction_indexes']
     lpred = arr['lpredictions']
     pobs = arr['pobservations']
@@ -86,6 +71,20 @@ def plot_predictions(basepath, records, arr, img_path, future_model, override_pr
     num_preds = lpred.shape[1]
     print(arr.keys())
     if (('ppredictions' not in arr.keys()) or (override_predictions)):
+        from vqvae_pcnn_future_model import VQPCNN_model
+        if records['args'].future_model == 'vqvae_pcnn':
+            # TODO load from model
+            future_model = VQPCNN_model(records['DEVICE'],
+                                        config.model_savedir,
+                                        load_vq_name=  records['args'].vq_model_name,
+                                        load_pcnn_name=records['args'].pcnn_model_name,
+                                        dsize=80, nr_logistic_mix=10,
+                                        num_z=64, num_clusters=512,
+                                        N_LAYERS = 10, # layers in pixelcnn
+                                        DIM = 256,
+                                        history_size=records['args'].history_size,
+                                        )
+
         ppred = np.zeros((len(pred_count), num_preds, pobs.shape[-2], pobs.shape[-1]))
         for cc, ic in enumerate(pred_count):
             print("decoding %s latents from %s prediction %s/%s"%(num_preds, ic, cc+1, len(pred_count)))
@@ -126,8 +125,6 @@ def plot_predictions(basepath, records, arr, img_path, future_model, override_pr
             plt.close()
     return ppred
 
-
-
 def newest(search_path):
     files = glob(search_path)
     newest_file = max(files, key=os.path.getctime)
@@ -153,7 +150,7 @@ if __name__ == '__main__':
         npz_list = glob(args.base_dir+'*.npz')
         for n in npz_list:
             project_path = n.replace('_data.npz', '')
-            records, arr, img_path, future_model = get_basepath_data(project_path, args.rerun)
+            records, arr, img_path = get_basepath_data(project_path, args.rerun)
             plot_true_state_actions(records, arr, img_path)
 
     else:
@@ -164,7 +161,7 @@ if __name__ == '__main__':
             project_path = newest_path.replace('_data.npz', '')
         else:
             project_path = os.path.join(args.base_dir, args.project_name)
-        records, arr, img_path, future_model = get_basepath_data(project_path, args.rerun)
+        records, arr, img_path = get_basepath_data(project_path, args.rerun)
         plot_true_state_actions(records, arr, img_path)
-        plot_predictions(project_path, records, arr, img_path, future_model, override_predictions=args.override_predictions)
+        plot_predictions(project_path, records, arr, img_path, override_predictions=args.override_predictions)
 

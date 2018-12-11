@@ -19,6 +19,7 @@ for dd in [config.freeway_test_frames_dir, config.freeway_train_frames_dir]:
 env = gym.make('FreewayNoFrameskip-v4')
 last_o = env.reset()
 cnt =  0
+embed()
 while cnt<(num_train+num_test):
     o, r, done, info = env.step(0)
     if done:

@@ -146,10 +146,10 @@ def run_trace(seed,
     while not done:
         if obs_count >= step_limit:
             done = True
-        if rdn.rand()<.01:
+        if rdn.rand()<.3:
             # search
-            records, this_state_future_latents, lpredictions = predict_future_latents(records, lobservations, lpredictions, obs_count, rollout_steps)
-            print('adding obs_count', obs_count, lpredictions[obs_count].sum())
+            #records, this_state_future_latents, lpredictions = predict_future_latents(records, lobservations, lpredictions, obs_count, rollout_steps)
+            #print('adding obs_count', obs_count, lpredictions[obs_count].sum())
             action = rdn.choice(action_space)
         else:
             action = 1 #TODO
@@ -179,10 +179,9 @@ if __name__ == "__main__":
     parser.add_argument('-gs', '--goal_speed', type=float , default=0.5)
     parser.add_argument('-neo', '--neo_goal_prior', type=float , default=0.01)
     parser.add_argument('-sm', '--smoothing', type=float , default=0.5)
-    parser.add_argument('-sl', '--step_limit', type=float , default=1000)
+    parser.add_argument('-sl', '--step_limit', type=float , default=18000)
     parser.add_argument('-fs', '--frame_skip', type=float , default=4)
     parser.add_argument('-ne', '--num_episodes', type=float , default=30)
-
     parser.add_argument('--save_pkl', action='store_false', default=True)
     parser.add_argument('--render', action='store_true', default=False)
     parser.add_argument('-gap', '--plot_playout_gap', type=int, default=5, help='gap between plot playouts for each step')
@@ -249,7 +248,6 @@ if __name__ == "__main__":
                                 lpredictions=e_lpreds,
                      )
             print("saved start_index %s"%start_index)
-            embed()
     print("FINISHED")
 
 

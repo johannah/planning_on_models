@@ -1,321 +1,170 @@
-# base functions originally from https://github.com/pclucas14/pixel-cnn-pp/blob/master/utils.py#L34
-import pdb
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from copy import deepcopy
+import time
+import os, sys
 from torch.autograd import Variable
-from torch.nn.utils import weight_norm as wn
+import pickle
 import numpy as np
+import matplotlib.pyplot as plt
+import torch.nn.init as init
 from IPython import embed
+import shutil
+import torch # package for building functions with learnable parameters
+from torch.autograd import Variable # storing data while learning
+rdn = np.random.RandomState(33)
+# TODO one-hot the action space?
 
-def to_scalar(arr):
-    if type(arr) == list:
-        return [x.cpu().data.tolist() for x in arr]
-    else:
-        return arr.cpu().data.tolist()
+torch.manual_seed(139)
 
+def plot_losses(train_cnts, train_losses, test_cnts, test_losses, name='loss_example.png'):
+    f,ax=plt.subplots(1,1,figsize=(3,3))
+    ax.plot(train_cnts, train_losses, label='train loss', lw=1)
+    ax.plot(test_cnts, test_losses, label='test loss', lw=1)
+    ax.legend()
+    plt.savefig(name)
+    plt.close()
 
-def get_cuts(length,window_size):
-    if window_size<length:
-        st_pts = list(np.arange(0,length,window_size,dtype=np.int))
-        end_pts = st_pts[1:]
-        if end_pts[-1] != length:
-             end_pts.append(length)
+def split_strokes(points):
+    points = np.array(points)
+    strokes = []
+    b = 0
+    for e in range(len(points)):
+        if points[e, 2] == 1.:
+            strokes += [points[b: e + 1, :2].copy()]
+            b = e + 1
+    strokes += [points[b: e + 1, :2].copy()]
+    return strokes
+
+def get_dummy_data(v_x, v_y):
+    for i in range(v_x.shape[1]):
+        v_x[:,i] = v_x[:,0]
+        v_y[:,i] = v_y[:,0]
+    return v_x, v_y
+
+def plot_strokes_vo(strokes_x_in, strokes_y_in, strokes_vo_in, lead_in=0, name='example.png',pen=True):
+    f, ax1 = plt.subplots(1,1, figsize=(6,6))
+    strokes_x = deepcopy(strokes_x_in)
+    for i in range(strokes_x.shape[1]):
+        strokes_xi = np.cumsum(deepcopy(strokes_x[:,i]), axis=0)
+        if not i:
+            ax1.plot(strokes_xi[:,0], strokes_xi[:,1], c='b', label='%s pred paths'%strokes_x.shape[1], linewidth=.5, alpha=0.5)
         else:
-             print("cutting start")
-             st_pts = st_pts[:-1]
-        return zip(st_pts, end_pts)
+            ax1.plot(strokes_xi[:,0], strokes_xi[:,1], c='b', linewidth=.5, alpha=.5)
+        ax1.scatter(strokes_xi[:,0], strokes_xi[:,1], c='b', s=.2, alpha=.5)
+    strokes_y = np.cumsum(strokes_y_in, axis=0)
+    sc=ax1.scatter(strokes_y[:,0,0], strokes_y[:,0,1], c=np.arange(strokes_y.shape[0]),  s=10)
+    #ax1.scatter(strokes_y[:,0,0], strokes_y[:,0,1], c='g', s=.9)
+    #ax1.plot(strokes_y[:,0,0], strokes_y[:,0,1], c='g',label='gt', linewidth=2, alpha=.9)
+    if lead_in:
+        ax1.scatter([strokes_y[lead_in,0,0]], [strokes_y[lead_in,0,1]], c='r', marker='o', s=10, label='lead in')
+    strokes_vo = np.cumsum(deepcopy(strokes_vo_in), axis=0)
+    ax1.plot(strokes_vo[:,0,0], strokes_vo[:,0,1], c='orangered', label='vo', linewidth=.9, alpha=0.5)
+    ax1.scatter([[strokes_y[0,0,0]]], [[strokes_y[0,0,1]]], c='k', marker='o', s=10, edgecolor='k', label='start')
+    ax1.legend()
+    plt.colorbar(sc)
+    print('plotting %s'%name)
+    plt.savefig(name)
+    plt.close()
+
+def plot_strokes(strokes_x_in, strokes_y_in, lead_in=0, name='example.png',pen=True):
+    strokes_x = deepcopy(strokes_x_in)
+    f, ax1 = plt.subplots(1,1, figsize=(6,3))
+    gt = 'lightseageen'
+
+    if pen: # pen up pen down is third channel
+        strokes_x[:, :2] = np.cumsum(strokes_x[:, :2], axis=0)
+        ax1.scatter(strokes_x[:,0], -strokes_x[:,1], c='b', s=2, label='pred path')
+        for stroke in split_strokes(strokes_x):
+            ax1.plot(stroke[:,0], -stroke[:,1], c='b', linewidth=1)
+
+        if np.abs(strokes_y_in).sum()>0:
+            strokes_y = deepcopy(strokes_y_in)
+            strokes_y[:, :2] = np.cumsum(strokes_y[:, :2], axis=0)
+            ax1.scatter(strokes_y[:,0], -strokes_y[:,1], c=gt, s=2, label='true path')
+            for stroke in split_strokes(strokes_y):
+                ax1.plot(stroke[:,0], -stroke[:,1], c=gt, linewidth=1)
     else:
-        return zip([0], [length])
+        # no pen indicator
+        pc = 'cornflowerblue'
+        gt = 'lightsalmon'
+        for i in range(strokes_x.shape[1]):
+            strokes_xi = np.cumsum(deepcopy(strokes_x[:,i]), axis=0)
+            if not i:
+                ax1.plot(strokes_xi[:,0], -strokes_xi[:,1], c=pc, label='%s pred paths'%strokes_x.shape[1], linewidth=.5, alpha=0.5)
+            else:
+                ax1.plot(strokes_xi[:,0], -strokes_xi[:,1], c=pc, linewidth=.5, alpha=.5)
+            ax1.scatter(strokes_xi[:,0], -strokes_xi[:,1], c=pc, s=.2, alpha=.5)
+        if np.abs(strokes_y_in).sum()>0:
+            strokes_y = deepcopy(strokes_y_in)
+            strokes_y = np.cumsum(strokes_y, axis=0)
+            ax1.scatter(strokes_y[:,0,0], -strokes_y[:,0,1], c=gt, s=.9)
+            ax1.plot(strokes_y[:,0,0], -strokes_y[:,0,1], c=gt, label='true path', linewidth=2, alpha=.9)
+        if lead_in:
+            ax1.scatter([strokes_y[lead_in,0,0]], [-strokes_y[lead_in,0,1]], c='r', marker='o', s=15, label='lead in')
+
+    plt.legend()
+    print('plotting %s'%name)
+    plt.savefig(name)
+    plt.close()
+
+def save_checkpoint(state, filename='model.pkl'):
+    print("starting save of {}".format(filename))
+    torch.save(state, filename)
+    print("finishing save of {}".format(filename))
+
+def load_xyr_agent(filepath):
+    records = pickle.load(open(filepath+'_summary.pkl'))
+    arr = np.load(filepath+'_data.npz')
+
+
+class DataLoader():
+    def __init__(self, load_function, train_load_path, test_load_path, batch_size=32, random_number=394):
+        self.rdn = np.random.RandomState(random_number)
+        self.batch_size = batch_size
+        self.x,self.y,self.x_subgoals,self.x_keys,self.x_pts,self.x_state, self.state_keys = load_function(train_load_path)
+        self.num_batches = self.x.shape[1]//self.batch_size
+        self.batch_array = np.arange(self.x.shape[1])
+        self.valid_x,self.valid_y,self.v_x_subgoals,self.v_x_keys,self.v_x_pts, self.v_state, _ = load_function(test_load_path)
+
+    def validation_data(self):
+        max_idx = min(self.batch_size, self.valid_x.shape[1])
+        return self.valid_x[:,:max_idx], self.valid_y[:,:max_idx]
+
+    def next_batch(self):
+        batch_choice = self.rdn.choice(self.batch_array, self.batch_size,replace=False)
+        return self.x[:,batch_choice], self.y[:,batch_choice]
+
+def plot_traces(trues_e, tf_predicts_e, predicts_e, filename):
+    ugty = np.cumsum(trues_e[:,0])
+    ugtx = np.cumsum(trues_e[:,1])
+    tfy = np.cumsum(tf_predicts_e[:,0])
+    tfx = np.cumsum(tf_predicts_e[:,1])
+    py = np.cumsum(predicts_e[:,0])
+    px = np.cumsum(predicts_e[:,1])
+
+    xmin = np.min([px.min(), tfx.min(), ugtx.min()])-10
+    xmax = np.max([px.max(), tfx.max(), ugtx.max()])+10
+    ymin = np.min([py.min(), tfy.min(), ugty.min()])-10
+    ymax = np.max([py.max(), tfy.max(), ugty.max()])+10
+    f,ax=plt.subplots(1,3, figsize=(9,3))
+    ## original coordinates
+    ax[0].scatter(ugtx,ugty, c=np.arange(ugty.shape[0]))
+    ax[0].set_xlim([xmin,xmax])
+    ax[0].set_ylim([ymin,ymax])
+    ax[0].set_title("target")
+    ax[1].scatter(tfx,tfy, c=np.arange(tfy.shape[0]))
+    ax[1].set_xlim([xmin,xmax])
+    ax[1].set_ylim([ymin,ymax])
+    ax[1].set_title('teacher force predict')
+    ax[2].scatter(px, py, c=np.arange(py.shape[0]))
+    ax[2].set_xlim([xmin,xmax])
+    ax[2].set_ylim([ymin,ymax])
+    ax[2].set_title('predict')
+    plt.savefig(filename)
+    plt.close()
 
 
 
 
-
-
-def concat_elu(x):
-    """ like concatenated ReLU (http://arxiv.org/abs/1603.05201), but then with ELU """
-    # Pytorch ordering
-    axis = len(x.size()) - 3
-    return F.elu(torch.cat([x, -x], dim=axis))
-
-
-def log_sum_exp(x):
-    """ numerically stable log_sum_exp implementation that prevents overflow """
-    # TF ordering
-    axis  = len(x.size()) - 1
-    m, _  = torch.max(x, dim=axis)
-    m2, _ = torch.max(x, dim=axis, keepdim=True)
-    return m + torch.log(torch.sum(torch.exp(x - m2), dim=axis))
-
-
-def log_prob_from_logits(x):
-    """ numerically stable log_softmax implementation that prevents overflow """
-    # TF ordering
-    axis = len(x.size()) - 1
-    m, _ = torch.max(x, dim=axis, keepdim=True)
-    return x - m - torch.log(torch.sum(torch.exp(x - m), dim=axis, keepdim=True))
-
-
-def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
-    """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
-    # Pytorch ordering
-    l = prediction
-    x = target
-    x = x.permute(0, 2, 3, 1)
-    l = l.permute(0, 2, 3, 1)
-    xs = [int(y) for y in x.size()]
-    ls = [int(y) for y in l.size()]
-
-    # here and below: unpacking the params of the mixture of logistics
-    #nr_mix = int(ls[-1] / 10)
-    # l is prediction
-    logit_probs = l[:, :, :, :nr_mix]
-
-    l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix*2]) # 3--changed to 1 for mean, scale, coef
-    means = l[:, :, :, :, :nr_mix]
-    # log_scales = torch.max(l[:, :, :, :, nr_mix:2 * nr_mix], -7.)
-    log_scales = torch.clamp(l[:, :, :, :, nr_mix:2 * nr_mix], min=-7.)
-
-    #coeffs = F.tanh(l[:, :, :, :, 2 * nr_mix:3 * nr_mix])
-    # here and below: getting the means and adjusting them based on preceding
-    # sub-pixels
-    x = x.contiguous()
-    x = x.unsqueeze(-1) + Variable(torch.zeros(xs + [nr_mix]).to(DEVICE), requires_grad=False)
-
-    # ugggghhh
-    # m2 = (means[:, :, :, 1, :] + coeffs[:, :, :, 0, :]
-    #             * x[:, :, :, 0, :]).view(xs[0], xs[1], xs[2], 1, nr_mix)
-
-    # m3 = (means[:, :, :, 2, :] + coeffs[:, :, :, 1, :] * x[:, :, :, 0, :] +
-    #             coeffs[:, :, :, 2, :] * x[:, :, :, 1, :]).view(xs[0], xs[1], xs[2], 1, nr_mix)
-    #
-    # means = torch.cat((means[:, :, :, 0, :].unsqueeze(3), m2, m3), dim=3)
-    centered_x = x - means
-    inv_stdv = torch.exp(-log_scales)
-    plus_in = inv_stdv * (centered_x + 1. / 255.)
-    cdf_plus = F.sigmoid(plus_in)
-    min_in = inv_stdv * (centered_x - 1. / 255.)
-    cdf_min = F.sigmoid(min_in)
-    # log probability for edge case of 0 (before scaling)
-    log_cdf_plus = plus_in - F.softplus(plus_in)
-    # log probability for edge case of 255 (before scaling)
-    log_one_minus_cdf_min = -F.softplus(min_in)
-    cdf_delta = cdf_plus - cdf_min  # probability for all other cases
-    mid_in = inv_stdv * centered_x
-    # log probability in the center of the bin, to be used in extreme cases
-    # (not actually used in our code)
-    log_pdf_mid = mid_in - log_scales - 2. * F.softplus(mid_in)
-
-    # now select the right output: left edge case, right edge case, normal
-    # case, extremely low prob case (doesn't actually happen for us)
-
-    # this is what we are really doing, but using the robust version below for extreme cases in other applications and to avoid NaN issue with tf.select()
-    # log_probs = tf.select(x < -0.999, log_cdf_plus, tf.select(x > 0.999, log_one_minus_cdf_min, tf.log(cdf_delta)))
-
-    # robust version, that still works if probabilities are below 1e-5 (which never happens in our code)
-    # tensorflow backpropagates through tf.select() by multiplying with zero instead of selecting: this requires use to use some ugly tricks to avoid potential NaNs
-    # the 1e-12 in tf.maximum(cdf_delta, 1e-12) is never actually used as output, it's purely there to get around the tf.select() gradient issue
-    # if the probability on a sub-pixel is below 1e-5, we use an approximation
-    # based on the assumption that the log-density is constant in the bin of
-    # the observed sub-pixel value
-
-    inner_inner_cond = (cdf_delta > 1e-5).float()
-    inner_inner_out  = inner_inner_cond * torch.log(torch.clamp(cdf_delta, min=1e-12)) + (1. - inner_inner_cond) * (log_pdf_mid - np.log(127.5))
-    inner_cond       = (x > 0.999).float()
-    inner_out        = inner_cond * log_one_minus_cdf_min + (1. - inner_cond) * inner_inner_out
-    cond             = (x < -0.999).float()
-    log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
-    log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
-    lse = log_sum_exp(log_probs)
-    # hacky hack mask to weight cars and frogs
-    #from IPython import embed; embed()
-    masked = (target[:,0,:,:]>-.99).float()*lse
-    out = lse+masked
-    return -out.mean()
-
-
-def discretized_mix_logistic_loss_1d(x, l, DEVICE='cpu'):
-    # Pytorch ordering
-    x = x.permute(0, 2, 3, 1)
-    l = l.permute(0, 2, 3, 1)
-    xs = [int(y) for y in x.size()]
-    ls = [int(y) for y in l.size()]
-
-    """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
-    # Pytorch ordering
-    l = prediction
-    x = target
-    embed()
-    x = x.permute(0, 2, 3, 1)
-    l = l.permute(0, 2, 3, 1)
-    xs = [int(y) for y in x.size()]
-    ls = [int(y) for y in l.size()]
-
-    # here and below: unpacking the params of the mixture of logistics
-    nr_mix = int(ls[-1] / 3)
-    logit_probs = l[:, :, :, :nr_mix]
-    l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix * 2]) # 2 for mean, scale
-    means = l[:, :, :, :, :nr_mix]
-    log_scales = torch.clamp(l[:, :, :, :, nr_mix:2 * nr_mix], min=-7.)
-    # here and below: getting the means and adjusting them based on preceding
-    # sub-pixels
-    x = x.contiguous()
-    x = x.unsqueeze(-1) + Variable(torch.zeros(xs + [nr_mix]).to(DEVICE), requires_grad=False)
-    # means = torch.cat((means[:, :, :, 0, :].unsqueeze(3), m2, m3), dim=3)
-    centered_x = x - means
-    inv_stdv = torch.exp(-log_scales)
-    plus_in = inv_stdv * (centered_x + 1. / 255.)
-    cdf_plus = F.sigmoid(plus_in)
-    min_in = inv_stdv * (centered_x - 1. / 255.)
-    cdf_min = F.sigmoid(min_in)
-    # log probability for edge case of 0 (before scaling)
-    log_cdf_plus = plus_in - F.softplus(plus_in)
-    # log probability for edge case of 255 (before scaling)
-    log_one_minus_cdf_min = -F.softplus(min_in)
-    cdf_delta = cdf_plus - cdf_min  # probability for all other cases
-    mid_in = inv_stdv * centered_x
-    # log probability in the center of the bin, to be used in extreme cases
-    # (not actually used in our code)
-    log_pdf_mid = mid_in - log_scales - 2. * F.softplus(mid_in)
-
-    inner_inner_cond = (cdf_delta > 1e-5).float()
-    inner_inner_out  = inner_inner_cond * torch.log(torch.clamp(cdf_delta, min=1e-12)) + (1. - inner_inner_cond) * (log_pdf_mid - np.log(127.5))
-    inner_cond       = (x > 0.999).float()
-    inner_out        = inner_cond * log_one_minus_cdf_min + (1. - inner_cond) * inner_inner_out
-    cond             = (x < -0.999).float()
-    log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
-    log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
-
-    return -torch.sum(log_sum_exp(log_probs))
-
-
-def to_one_hot(tensor, n, fill_with=1.):
-    # we perform one hot encore with respect to the last axis
-    one_hot = torch.FloatTensor(tensor.size() + (n,)).zero_()
-    if tensor.is_cuda : one_hot = one_hot.cuda()
-    one_hot.scatter_(len(tensor.size()), tensor.unsqueeze(-1), fill_with)
-    return Variable(one_hot)
-
-
-def sample_from_discretized_mix_logistic_1d(l, nr_mix):
-    # Pytorch ordering
-    l = l.permute(0, 2, 3, 1)
-    ls = [int(y) for y in l.size()]
-    xs = ls[:-1] + [1] #[3]
-
-    # unpack parameters
-    logit_probs = l[:, :, :, :nr_mix]
-    l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix * 2]) # for mean, scale
-
-    # sample mixture indicator from softmax
-    temp = torch.FloatTensor(logit_probs.size())
-    if l.is_cuda : temp = temp.cuda()
-    temp.uniform_(1e-5, 1. - 1e-5)
-    temp = logit_probs.data - torch.log(- torch.log(temp))
-    _, argmax = temp.max(dim=3)
-
-    one_hot = to_one_hot(argmax, nr_mix)
-    sel = one_hot.view(xs[:-1] + [1, nr_mix])
-    # select logistic parameters
-    means = torch.sum(l[:, :, :, :, :nr_mix] * sel, dim=4)
-    log_scales = torch.clamp(torch.sum(
-        l[:, :, :, :, nr_mix:2 * nr_mix] * sel, dim=4), min=-7.)
-    u = torch.FloatTensor(means.size())
-    if l.is_cuda : u = u.cuda()
-    u.uniform_(1e-5, 1. - 1e-5)
-    u = Variable(u)
-    x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1. - u))
-    x0 = torch.clamp(torch.clamp(x[:, :, :, 0], min=-1.), max=1.)
-    out = x0.unsqueeze(1)
-    return out
-
-
-def sample_from_discretized_mix_logistic(l, nr_mix, only_mean=True, deterministic=False):
-    # Pytorch ordering
-    l = l.permute(0, 2, 3, 1)
-    ls = [int(y) for y in l.size()]
-    xs = ls[:-1] + [1]
-
-    # unpack parameters
-    logit_probs = l[:, :, :, :nr_mix]
-    #from IPython import embed; embed()
-    l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix * 2])
-    # sample mixture indicator from softmax
-    temp = torch.FloatTensor(logit_probs.size())
-    if l.is_cuda : temp = temp.cuda()
-    temp.uniform_(1e-5, 1. - 1e-5)
-    # hack to make deterministic JRH
-    # could also just take argmax of logit_probs
-    if deterministic:
-        temp = temp*0.0+0.5
-    temp = logit_probs.data - torch.log(- torch.log(temp))
-    _, argmax = temp.max(dim=3)
-
-    one_hot = to_one_hot(argmax, nr_mix)
-    sel = one_hot.view(xs[:-1] + [1, nr_mix])
-    # select logistic parameters
-    means = torch.sum(l[:, :, :, :, :nr_mix] * sel, dim=4)
-    log_scales = torch.clamp(torch.sum(
-        l[:, :, :, :, nr_mix:2 * nr_mix] * sel, dim=4), min=-7.)
-    # sample from logistic & clip to interval
-    # we don't actually round to the nearest 8bit value when sampling
-    u = torch.FloatTensor(means.size())
-    if l.is_cuda : u = u.cuda()
-    u.uniform_(1e-5, 1. - 1e-5)
-    # hack to make deterministic JRH
-    if deterministic:
-        u= u*0.0+0.5
-    u = Variable(u)
-
-    if only_mean:
-        x = means
-    else:
-        x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1. - u))
-    out = torch.clamp(torch.clamp(x,min=-1.),max=1.)
-    #x0 = torch.clamp(torch.clamp(x[:, :, :, 0], min=-1.), max=1.)
-    #x1 = torch.clamp(torch.clamp(
-    #   x[:, :, :, 1] + coeffs[:, :, :, 0] * x0, min=-1.), max=1.)
-    #x2 = torch.clamp(torch.clamp(
-    #   x[:, :, :, 2] + coeffs[:, :, :, 1] * x0 + coeffs[:, :, :, 2] * x1, min=-1.), max=1.)
-
-    #out = torch.cat([x0.view(xs[:-1] + [1]), x1.view(xs[:-1] + [1]), x2.view(xs[:-1] + [1])], dim=3)
-    # put back in Pytorch ordering
-    out = out.permute(0, 3, 1, 2)
-    return out
-
-
-
-''' utilities for shifting the image around, efficient alternative to masking convolutions '''
-def down_shift(x, pad=None):
-    # Pytorch ordering
-    xs = [int(y) for y in x.size()]
-    # when downshifting, the last row is removed
-    x = x[:, :, :xs[2] - 1, :]
-    # padding left, padding right, padding top, padding bottom
-    pad = nn.ZeroPad2d((0, 0, 1, 0)) if pad is None else pad
-    return pad(x)
-
-
-def right_shift(x, pad=None):
-    # Pytorch ordering
-    xs = [int(y) for y in x.size()]
-    # when righshifting, the last column is removed
-    x = x[:, :, :, :xs[3] - 1]
-    # padding left, padding right, padding top, padding bottom
-    pad = nn.ZeroPad2d((1, 0, 0, 0)) if pad is None else pad
-    return pad(x)
-
-
-def load_part_of_model(model, path):
-    params = torch.load(path)
-    added = 0
-    for name, param in params.items():
-        if name in model.state_dict().keys():
-            try :
-                model.state_dict()[name].copy_(param)
-                added += 1
-            except Exception as e:
-                print(e)
-                pass
-    print('added %s of params:' % (added / float(len(model.state_dict().keys()))))
