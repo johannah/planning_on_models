@@ -38,5 +38,7 @@ while cnt<(num_train+num_test):
     last_o = o
     cnt +=1
 
-np.savez('freeway_train_%05d.npz'%num_train, train_data)
-np.savez('freeway_test_%05d.npz'%num_test, test_data)
+np.savez(os.path.join(config.base_datadir, 'freeway_train_%05d.npz'%num_train), train_data)
+np.savez(os.path.join(config.base_datadir, 'freeway_test_%05d.npz'%num_test), test_data)
+for i in range(20):
+    imwrite('ex_%03d.png'%i, train_data[i])

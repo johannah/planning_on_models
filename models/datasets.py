@@ -87,6 +87,7 @@ def remove_chicken(gimg):
     return gimg, chicken
 
 
+
 class FroggerDataset(Dataset):
     def __init__(self, root_dir, transform=None, limit=None, max_pixel_used=254.0, min_pixel_used=0.0):
         self.root_dir = root_dir
@@ -119,33 +120,64 @@ class FroggerDataset(Dataset):
 
         return image,img_name
 
-#class FlattenedFroggerDataset(Dataset):
-#    def __init__(self, root_dir, transform=None, limit=None):
-#        self.root_dir = root_dir
-#        self.transform = transform
-#        search_path = os.path.join(self.root_dir, 'seed_*.png')
-#        ss = sorted(glob(search_path))
-#        self.indexes = [s for s in ss if 'gen' not in s]
-#        print("found %s files in %s" %(len(self.indexes), search_path))
-#
-#        if not len(self.indexes):
-#            print("Error no files found at {}".format(search_path))
-#            raise
-#        if limit > 0:
-#            self.indexes = self.indexes[:min(len(self.indexes), limit)]
-#            print('limited to first %s examples' %len(self.indexes))
-#
-#    def __len__(self):
-#        return len(self.indexes)
-#
-#    def __getitem__(self, idx):
-#        img_name = self.indexes[idx]
-#        image = imread(img_name)
-#        image = image[:,:,None].astype(np.float32)
-#        # TODO - this is non-normalized
-#        image = np.array(image.ravel())
-#        return image,img_name
-#
+
+class FreewayForwardDataset(Dataset):
+    def __init__(self,  data_file, number_condition=4,
+                        steps_ahead=1, limit=None, batch_size=300,
+                        max_pixel_used=254.0, min_pixel_used=0.0):
+
+        self.data_file = os.path.abspath(data_file)
+        self.num_condition = int(number_condition)
+        assert(self.num_condition>0)
+        self.steps_ahead = int(steps_ahead)
+        assert(self.steps_ahead>=0)
+        self.max_pixel_used = max_pixel_used
+        self.min_pixel_used = min_pixel_used
+        self.data = np.load(self.data_file)['arr_0']
+        _,self.data_h,self.data_w = self.data.shape
+        self.num_examples = self.data.shape[0]-(self.steps_ahead+self.num_condition)
+
+    def __len__(self):
+        return self.num_examples
+
+    def __getitem__(self, idx):
+        try:
+            n = idx.shape[0]
+        except:
+            n = 1
+        self.dummy_x = np.zeros((n, self.num_condition, self.data_h, self.data_w), dtype=np.float16)
+        pred = [i+self.num_condition+self.steps_ahead for i in idx]
+        for i in range(self.num_condition):
+            self.dummy_x[:,i] = self.data[idx]
+        y = self.data[pred][:,None]
+        # bt 0 and 1
+        x = (torch.FloatTensor(self.dummy_x)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+        y = (torch.FloatTensor(y)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+        return x,y
+
+class DataLoader():
+    def __init__(self, train_load_function, test_load_function,
+                 batch_size, random_number=394):
+        self.batch_size = batch_size
+        self.test_loader = test_load_function
+        self.train_loader = train_load_function
+        self.train_rdn = np.random.RandomState(random_number)
+        self.test_rdn = np.random.RandomState(random_number)
+        self.batch_array = np.arange(len(self.train_loader))
+        self.test_array = np.arange(len(self.test_loader))
+        self.num_batches = len(self.train_loader)/self.batch_size
+
+    def validation_data(self):
+        batch_choice = self.test_rdn.choice(self.test_array, self.batch_size, replace=False)
+        vx,vy = self.test_loader[batch_choice]
+        return vx,vy
+
+    def next_batch(self):
+        batch_choice = self.train_rdn.choice(self.batch_array, self.batch_size, replace=False)
+        x,y = self.train_loader[batch_choice]
+        return x,y
+
+
 #
 #z_q_x_mean = 0.16138
 #z_q_x_std = 0.7934

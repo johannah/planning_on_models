@@ -8,10 +8,9 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from copy import deepcopy
 from IPython import embed
-#from utils import discretized_mix_logistic_loss
-#from utils import sample_from_discretized_mix_logistic
 class AutoEncoder(nn.Module):
-    def __init__(self, num_clusters=512, encoder_output_size=32, nr_logistic_mix=10, data_channels_size=1):
+    def __init__(self, num_clusters=512, encoder_output_size=32,
+                 nr_logistic_mix=10, in_channels_size=1, out_channels_size=1):
         super(AutoEncoder, self).__init__()
         self.nr_logistic_mix = nr_logistic_mix
         # the encoder_output_size is the size of the vector that is compressed
@@ -25,10 +24,10 @@ class AutoEncoder(nn.Module):
         # (40x40x1x8)/(10x10x9) = 12800/900 = 14.22
 
         self.name = 'vqvae4layer'
-        num_mixture = 2*self.nr_logistic_mix*data_channels_size+self.nr_logistic_mix
+        self.num_mixture = 2*self.nr_logistic_mix*out_channels_size+self.nr_logistic_mix
 
         self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels=data_channels_size,
+            nn.Conv2d(in_channels=in_channels_size,
                       out_channels=16,
                       kernel_size=4,
                       stride=2, padding=1),
@@ -81,7 +80,7 @@ class AutoEncoder(nn.Module):
                 nn.BatchNorm2d(16),
                 nn.ReLU(True),
                 nn.ConvTranspose2d(in_channels=16,
-                        out_channels=num_mixture,
+                        out_channels=self.num_mixture,
                         kernel_size=4,
                         stride=2, padding=1),
                 #nn.Sigmoid()
