@@ -56,7 +56,7 @@ def train():
         loss_3.backward()
         opt.step()
 
-        def handle_plot_ckpt():
+        def handle_plot_ckpt(do_plot=False):
             train_loss = np.array(to_scalar([loss_1, loss_2, loss_3])).mean(0)
             info['train_losses'].append(train_loss)
             info['train_cnts'].append(train_cnt)
@@ -66,23 +66,24 @@ def train():
             info['test_losses'].append(test_loss)
             info['test_cnts'].append(train_cnt)
 
-            plot_name = os.path.join(default_base_savedir, basename + "loss%05d.png"%train_cnt)
-            n = 10
-            plot_losses(rolling_average(info['train_cnts'], n),
-                        rolling_average(info['train_losses'], n),
-                        rolling_average(info['test_cnts'], n),
-                        rolling_average(info['test_losses'], n), name=plot_name)
+            if do_plot:
+                plot_name = os.path.join(default_base_savedir, basename + "loss%05d.png"%train_cnt)
+                n = 10
+                plot_losses(rolling_average(info['train_cnts'], n),
+                            rolling_average(info['train_losses'], n),
+                            rolling_average(info['test_cnts'], n),
+                            rolling_average(info['test_losses'], n), name=plot_name)
 
-            print('plotting: %s'%plot_name)
-            print('examples %010d train loss %03.03f test loss %03.03f' %(train_cnt,
-                                  info['train_losses'][-1], info['test_losses'][-1]))
+                print('plotting: %s'%plot_name)
+                print('examples %010d train loss %03.03f test loss %03.03f' %(train_cnt,
+                                      info['train_losses'][-1], info['test_losses'][-1]))
 
             info['last_plot'] = train_cnt
 
-        if (train_cnt-info['last_save'])>targs.save_every:
+        if (train_cnt-info['last_save'])>=targs.save_every:
             info['last_save'] = train_cnt
             info['save_times'] = time.time()
-            handle_plot_ckpt()
+            handle_plot_ckpt(True)
             filename = os.path.join(default_base_savedir , basename + "ex%05d.pkl"%train_cnt)
             state = {
                      'state_dict':vmodel.state_dict(),
@@ -90,9 +91,11 @@ def train():
                      'info':info,
                      }
             save_checkpoint(state, filename=filename)
+        elif not train_cnt or (train_cnt-info['last_plot'])>=targs.log_every:
+            handle_plot_ckpt(False)
         else:
-            if (train_cnt-info['last_plot'])>targs.plot_every:
-                handle_plot_ckpt()
+            if (train_cnt-info['last_plot'])>=targs.plot_every:
+             handle_plot_ckpt(True)
 
         train_cnt += data_loader.batch_size
 
@@ -115,11 +118,15 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-s', '--model_savename', default='fp')
     parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-se', '--save_every', default=10000, type=int)
-    parser.add_argument('-pe', '--plot_every', default=5000, type=int)
+    parser.add_argument('-se', '--save_every', default=50000, type=int)
+    parser.add_argument('-pe', '--plot_every', default=10000, type=int)
+    parser.add_argument('-le', '--log_every', default=1000, type=int)
+    parser.add_argument('-bs', '--batch_size', default=32, type=int)
+    parser.add_argument('-nc', '--number_condition', default=4, type=int)
+    parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-z', '--num_z', default=32, type=int)
     parser.add_argument('-k', '--num_k', default=256, type=int)
-    parser.add_argument('-e', '--num_examples_to_train', default=1000000, type=int)
+    parser.add_argument('-e', '--num_examples_to_train', default=5000000, type=int)
     args = parser.parse_args()
     use_cuda = args.cuda
     nr_logistic_mix = 10
@@ -133,7 +140,7 @@ if __name__ == '__main__':
 
     vmodel = AutoEncoder(nr_logistic_mix=nr_logistic_mix,
                          num_clusters=num_clusters, encoder_output_size=args.num_z,
-                         in_channels_size=4, out_channels_size=1).to(DEVICE)
+                         in_channels_size=args.number_condition, out_channels_size=1).to(DEVICE)
     opt = torch.optim.Adam(vmodel.parameters(), lr=learning_rate)
 
     info = {'train_cnts':[],
@@ -146,8 +153,10 @@ if __name__ == '__main__':
             'last_plot':-args.plot_every,
             }
 
-    basename = 'f%s_%s_'%(vmodel.name,
+    basename = 'f%s_%s_c%df%02d'%(vmodel.name,
                            args.model_savename,
+                           args.number_condition,
+                           args.steps_ahead,
                            )
     if args.model_loadname is not None:
         model_loadpath = os.path.abspath(os.path.join(default_base_savedir, args.model_loadname))
@@ -168,19 +177,19 @@ if __name__ == '__main__':
     test_data_file = os.path.join(config.base_datadir, 'freeway_test_00150.npz')
     train_data_function = FreewayForwardDataset(
                                    train_data_file,
-                                   number_condition=4,
-                                   steps_ahead=1,
+                                   number_condition=args.number_condition,
+                                   steps_ahead=args.steps_ahead,
                                    max_pixel_used=config.freeway_max_pixel,
                                    min_pixel_used=config.freeway_min_pixel)
     test_data_function = FreewayForwardDataset(
                                    test_data_file,
-                                   number_condition=4,
-                                   steps_ahead=1,
+                                   number_condition=args.number_condition,
+                                   steps_ahead=args.steps_ahead,
                                    max_pixel_used=config.freeway_max_pixel,
                                    min_pixel_used=config.freeway_min_pixel)
 
     data_loader = DataLoader(train_data_function, test_data_function,
-                                   batch_size=32)
+                                   batch_size=args.batch_size)
 
     train()
 
