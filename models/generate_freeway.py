@@ -7,9 +7,9 @@ import numpy as np
 from IPython import embed
 from config import freeway_gt_dir, freeway_test_frames_dir, freeway_train_frames_dir
 from datasets import prepare_img
-bs = 64
-num_train = 1000*bs
-num_test = 4*bs
+bs = 500
+num_train = int(bs)
+num_test = int(.3*bs)
 rdn = np.random.RandomState(555)
 
 for dd in [config.freeway_test_frames_dir, config.freeway_train_frames_dir]:
@@ -19,7 +19,11 @@ for dd in [config.freeway_test_frames_dir, config.freeway_train_frames_dir]:
 env = gym.make('FreewayNoFrameskip-v4')
 last_o = env.reset()
 cnt =  0
-embed()
+test_cnt = 0
+h, w = 80,80
+train_data = np.zeros((num_train, h, w), dtype=last_o.dtype)
+test_data = np.zeros((num_test, h, w),   dtype=last_o.dtype)
+
 while cnt<(num_train+num_test):
     o, r, done, info = env.step(0)
     if done:
@@ -27,12 +31,12 @@ while cnt<(num_train+num_test):
     max_o = np.maximum(last_o, o)
     chicken,out = prepare_img(max_o)
     if cnt < num_train:
-        fname = os.path.join(config.freeway_train_frames_dir, 'freeway_train_%09d.png'%cnt)
+        train_data[cnt] = out
     else:
-        fname = os.path.join(config.freeway_test_frames_dir, 'freeway_test_%09d.png'%cnt)
-    if not cnt%100:
-        print('writing',os.path.abspath(fname))
-    imwrite(fname, out.astype(np.uint8))
+        test_data[test_cnt] = out
+        test_cnt+=1
     last_o = o
     cnt +=1
 
+np.savez('freeway_train_%05d.npz'%num_train, train_data)
+np.savez('freeway_test_%05d.npz'%num_test, test_data)
