@@ -20,8 +20,9 @@ torch.manual_seed(139)
 
 def plot_losses(train_cnts, train_losses, test_cnts, test_losses, name='loss_example.png'):
     f,ax=plt.subplots(1,1,figsize=(3,3))
-    ax.plot(train_cnts, train_losses, label='train loss', lw=1)
-    ax.plot(test_cnts, test_losses, label='test loss', lw=1)
+    ax.plot(train_cnts, train_losses, label='train loss', lw=1, c='orangered')
+    ax.plot(test_cnts, test_losses, label='test loss', lw=1, c='cornflowerblue')
+    ax.scatter(test_cnts, test_losses, s=4, c='cornflowerblue')
     ax.legend()
     plt.savefig(name)
     plt.close()

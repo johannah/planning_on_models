@@ -86,8 +86,6 @@ def remove_chicken(gimg):
     gimg[chicken] = 0
     return gimg, chicken
 
-
-
 class FroggerDataset(Dataset):
     def __init__(self, root_dir, transform=None, limit=None, max_pixel_used=254.0, min_pixel_used=0.0):
         self.root_dir = root_dir
@@ -158,24 +156,51 @@ class FreewayForwardDataset(Dataset):
 class DataLoader():
     def __init__(self, train_load_function, test_load_function,
                  batch_size, random_number=394):
+        self.last_batch_idx = 0
+        self.done = False
+        self.last_test_batch_idx = 0
+        self.test_done = False
+
         self.batch_size = batch_size
         self.test_loader = test_load_function
         self.train_loader = train_load_function
+
         self.train_rdn = np.random.RandomState(random_number)
         self.test_rdn = np.random.RandomState(random_number)
-        self.batch_array = np.arange(len(self.train_loader))
-        self.test_array = np.arange(len(self.test_loader))
+
+        self.max_idx = len(self.train_loader)
+        self.max_test_idx = len(self.test_loader)
+        self.batch_array = np.arange(self.max_idx)
+        self.test_array = np.arange(self.max_test_idx)
         self.num_batches = len(self.train_loader)/self.batch_size
 
     def validation_data(self):
         batch_choice = self.test_rdn.choice(self.test_array, self.batch_size, replace=False)
         vx,vy = self.test_loader[batch_choice]
-        return vx,vy
+        return vx,vy,batch_choice
+
+    def validation_ordered_batch(self):
+        batch_choice = np.arange(self.last_test_batch_idx, self.last_test_batch_idx+self.batch_size)
+        self.last_test_batch_idx += self.batch_size
+        batch_choice = batch_choice[batch_choice<self.max_test_idx-1]
+        if batch_choice.shape[0] < 2:
+            self.test_done = True
+        x,y = self.test_loader[batch_choice]
+        return x,y,batch_choice
+
+    def ordered_batch(self):
+        batch_choice = np.arange(self.last_batch_idx, self.last_batch_idx+self.batch_size)
+        self.last_batch_idx += self.batch_size
+        batch_choice = batch_choice[batch_choice<self.max_idx-1]
+        if batch_choice.shape[0] < 2:
+            self.done = True
+        x,y = self.train_loader[batch_choice]
+        return x,y,batch_choice
 
     def next_batch(self):
         batch_choice = self.train_rdn.choice(self.batch_array, self.batch_size, replace=False)
         x,y = self.train_loader[batch_choice]
-        return x,y
+        return x,y,batch_choice
 
 
 #
