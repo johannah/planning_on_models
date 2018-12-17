@@ -44,7 +44,7 @@ def forward_pass(x,y):
 def train():
     targs = args
     train_cnt = info['last_save']
-    for i in range(targs.num_examples_to_train):
+    while train_cnt <= targs.num_examples_to_train:
         x,y,_ = data_loader.next_batch()
         opt.zero_grad()
         loss_1,loss_2,loss_3,x_d,z_e_x,z_q_x,latents = forward_pass(x,y)
@@ -67,15 +67,15 @@ def train():
 
             print('examples %010d train loss %03.03f test loss %03.03f' %(train_cnt,
                                       info['train_losses'][-1], info['test_losses'][-1]))
-            n = 5
-            if do_plot and  len(info['train_losses'])>n*3:
+            rolling = 3
+            if do_plot and  len(info['train_losses'])>rolling*3:
                 info['last_plot'] = train_cnt
                 plot_name = os.path.join(default_base_savedir, basename + "_%010dloss.png"%train_cnt)
                 print('plotting: %s with %s points'%(plot_name, len(info['train_cnts'])))
-                plot_losses(rolling_average(info['train_cnts'], n),
-                            rolling_average(info['train_losses'], n),
-                            rolling_average(info['test_cnts'], n),
-                            rolling_average(info['test_losses'], n), name=plot_name)
+                plot_losses(info['train_cnts'],
+                            info['train_losses'],
+                            info['test_cnts'],
+                            info['test_losses'], name=plot_name, rolling_length=rolling)
 
         if ((train_cnt-info['last_save'])>=targs.save_every):
             info['last_save'] = train_cnt
@@ -92,7 +92,6 @@ def train():
             handle_plot_ckpt(False)
         else:
             if (train_cnt-info['last_plot'])>=targs.plot_every:
-                print("going to plot", train_cnt, info['last_plot'], train_cnt-info['last_plot'])
                 handle_plot_ckpt(True)
 
         train_cnt += data_loader.batch_size
@@ -113,11 +112,6 @@ def save_checkpoint(state, filename='model.pkl'):
     torch.save(state, filename)
     print("finished save of model %s" %filename)
 
-def rolling_average(a, n=10) :
-    ret = np.cumsum(a, dtype=float)
-    ret[n:] = ret[n:] - ret[:-n]
-    return ret[n - 1:] / n
-
 def get_one_step_prediction(vmodel,x,y,batch_idx):
     x_d, z_e_x, z_q_x, latents = vmodel(x.to(DEVICE))
     x_tilde = sample_from_discretized_mix_logistic(x_d, args.nr_logistic_mix)
@@ -127,6 +121,7 @@ def get_one_step_prediction(vmodel,x,y,batch_idx):
     return pred
 
 def generate_output_dataset(model_loadname, vmodel, dataloader):
+    print("generating output dataset for: %s" %model_loadname)
     oh,ow = 80,80
     fs = 1
     all_test_output = np.zeros((max(dataloader.test_loader.index_array)+fs,oh,ow))
@@ -145,18 +140,16 @@ def generate_output_dataset(model_loadname, vmodel, dataloader):
             # prediction from one step ahead
             all_test_output[batch_idx+fs] = pred
 
-    mname = os.path.split(model_loadname)[1]
-    output_train_data_file = train_data_file.replace('.pkl', mname) + '.npz'
-    output_test_data_file = test_data_file.replace('.pkl', mname) +'.npz'
+    output_train_data_file = train_data_file.replace('.npz', model_loadname) + '.npz'
+    output_test_data_file = test_data_file.replace('.npz', model_loadname) + '.npz'
 
     np.savez(output_train_data_file, all_train_output)
     np.savez(output_test_data_file, all_test_output)
 
     mimsave(output_train_data_file.replace('.npz','.gif'), all_train_output[:100])
     mimsave(output_test_data_file.replace('.npz','.gif'), all_test_output)
+    print('wrote dataset to: %s'%output_train_data_file)
     return output_train_data_file, output_test_data_file
-
-
 
 
 if __name__ == '__main__':
@@ -187,51 +180,9 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    if args.log_every > args.plot_every/3:
-        args.log_every = args.plot_every/3
+    if args.log_every > int(args.plot_every/3):
+        args.log_every = int(args.plot_every/3)
         print("forcing increase in log every to: %s" %args.log_every)
-    #info = {'train_cnts':[],
-    #        'train_losses':[],
-    #        'test_cnts':[],
-    #        'test_losses':[],
-    #        'save_times':[],
-    #        'args':[args],
-    #        'last_save':0,
-    #        'last_plot':-args.plot_every,
-    #        }
-
-    #if args.model_loadname is None:
-   #        vmodel = AutoEncoder(nr_logistic_mix=args.nr_logistic_mix,
-   #                          num_clusters=args.num_k, encoder_output_size=args.num_z,
-   #                          in_channels_size=args.number_condition, out_channels_size=1).to(DEVICE)
-   #     opt = torch.optim.Adam(vmodel.parameters(), lr=args.learning_rate)
- #else:
-    #    model_loadpath = os.path.abspath(os.path.join(default_base_savedir, args.model_loadname))
-    #    if os.path.exists(model_loadpath):
-    #        model_dict = torch.load(model_loadpath)
-    #        info = model_dict['info']
-    #        largs = info['args'][-1]
-    #        args.number_condition = largs.number_condition
-    #        args.steps_ahead = largs.number_condition
-    #        args.num_z = args.num_z
-    #        args.nr_logistic_mix
-    #        args.num_k = largs.num_k
-    #        loaded_vmodel = AutoEncoder(nr_logistic_mix=largs.nr_logistic_mix,
-    #                             num_clusters=largs.num_k,
-    #                             encoder_output_size=largs.num_z,
-    #                             in_channels_size=largs.number_condition,
-    #                             out_channels_size=1).to(DEVICE)
-    #        # use new arg learing rate
-    #        opt = torch.optim.Adam(vmodel.parameters(), lr=args.learning_rate)
-
-    #        _vmodel.load_state_dict(model_dict['state_dict'])
-    #        opt.load_state_dict(model_dict['optimizer'])
-    #        info['args'][train_cnt+1] = args
-    #        targs.append(args)
-    #        print('loaded checkpoint from {}'.format(model_loadpath))
-    #    else:
-    #        print('could not find checkpoint at {}'.format(model_loadpath))
-
     # original unaugmented data files
     train_data_file = os.path.join(config.base_datadir, 'freeway_train_01000.npz')
     test_data_file = os.path.join(config.base_datadir, 'freeway_test_00300.npz')

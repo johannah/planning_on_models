@@ -4,7 +4,7 @@ from IPython import embed
 from glob import glob
 from torch.utils.data import Dataset, DataLoader
 import os, sys
-from imageio import imread
+from imageio import imread, imwrite, mimwrite
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
@@ -122,9 +122,19 @@ class FroggerDataset(Dataset):
 class FreewayForwardDataset(Dataset):
     def __init__(self,  data_file, number_condition=4,
                         steps_ahead=1, limit=None, batch_size=300,
-                        max_pixel_used=254.0, min_pixel_used=0.0):
+                        max_pixel_used=254.0, min_pixel_used=0.0, augment_file="None",
+                        rdn_num=3949):
 
+        self.rdn = np.random.RandomState(rdn_num)
+        if augment_file is not "None":
+            self.do_augment = True
+        else:
+            self.do_augment = False
+
+        # index right now is by the oldest observation needed to compute
+        # prediction
         self.data_file = os.path.abspath(data_file)
+        self.augment_data_file = os.path.abspath(augment_file)
         self.num_condition = int(number_condition)
         assert(self.num_condition>0)
         self.steps_ahead = int(steps_ahead)
@@ -132,8 +142,18 @@ class FreewayForwardDataset(Dataset):
         self.max_pixel_used = max_pixel_used
         self.min_pixel_used = min_pixel_used
         self.data = np.load(self.data_file)['arr_0']
+        if self.do_augment:
+            self.augmented_data = np.load(self.augment_data_file)['arr_0']
         _,self.data_h,self.data_w = self.data.shape
         self.num_examples = self.data.shape[0]-(self.steps_ahead+self.num_condition)
+        # index by observation number ( last sample of conditioning )
+        # if i ask for frame 3 - return w/ steps_ahead=1
+        # x = data[0,1,2,3]
+        # y = data[4]
+        self.index_array = np.arange(self.num_condition-1, self.data.shape[0]-self.steps_ahead)
+
+    def __max__(self):
+        return max(self.index_array)
 
     def __len__(self):
         return self.num_examples
@@ -143,14 +163,38 @@ class FreewayForwardDataset(Dataset):
             n = idx.shape[0]
         except:
             n = 1
-        self.dummy_x = np.zeros((n, self.num_condition, self.data_h, self.data_w), dtype=np.float16)
-        pred = [i+self.num_condition+self.steps_ahead for i in idx]
-        for i in range(self.num_condition):
-            self.dummy_x[:,i] = self.data[idx]
-        y = self.data[pred][:,None]
-        # bt 0 and 1
-        x = (torch.FloatTensor(self.dummy_x)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
-        y = (torch.FloatTensor(y)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+        dx = []
+        add_range = np.arange(-(self.num_condition-1), 1)
+        # old way which doesnt allow augmentation
+        #for i in add_range:
+        #    i_idx = idx+i
+        #    dx.append(self.data[i_idx])
+        #dx = np.array(dx).swapaxes(1,0)
+
+        if self.do_augment:
+            # choose the augmented data for the most recent observations some of
+            # the time
+            start_augment_idx = self.rdn.choice(add_range, n, replace=True)
+        else:
+            # always choose the real data
+            start_augment_idx = np.zeros((n))
+
+        for nidx, start in enumerate(idx):
+            this_sample = []
+            for i in add_range:
+                i_idx = start+i
+                if i > start_augment_idx[nidx]:
+                    pp = 'pred'
+                    this_sample.append(self.augmented_data[i_idx])
+                else:
+                    pp = 'real'
+                    this_sample.append(self.data[i_idx])
+                #print(start, i_idx, i,pp, start_augment_idx[nidx])
+            dx.append(this_sample)
+
+        dy = self.data[idx+self.steps_ahead][:,None]
+        x = (torch.FloatTensor(dx)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+        y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
         return x,y
 
 class DataLoader():
@@ -168,22 +212,19 @@ class DataLoader():
         self.train_rdn = np.random.RandomState(random_number)
         self.test_rdn = np.random.RandomState(random_number)
 
-        self.max_idx = len(self.train_loader)
-        self.max_test_idx = len(self.test_loader)
-        self.batch_array = np.arange(self.max_idx)
-        self.test_array = np.arange(self.max_test_idx)
         self.num_batches = len(self.train_loader)/self.batch_size
 
     def validation_data(self):
-        batch_choice = self.test_rdn.choice(self.test_array, self.batch_size, replace=False)
+        batch_choice = self.test_rdn.choice(self.test_loader.index_array, self.batch_size, replace=False)
         vx,vy = self.test_loader[batch_choice]
         return vx,vy,batch_choice
 
     def validation_ordered_batch(self):
         batch_choice = np.arange(self.last_test_batch_idx, self.last_test_batch_idx+self.batch_size)
         self.last_test_batch_idx += self.batch_size
-        batch_choice = batch_choice[batch_choice<self.max_test_idx-1]
-        if batch_choice.shape[0] < 2:
+        batch_choice = batch_choice[batch_choice<max(self.test_loader.index_array)]
+        batch_choice = batch_choice[batch_choice>min(self.test_loader.index_array)]
+        if batch_choice.shape[0] <= 1:
             self.test_done = True
         x,y = self.test_loader[batch_choice]
         return x,y,batch_choice
@@ -191,14 +232,15 @@ class DataLoader():
     def ordered_batch(self):
         batch_choice = np.arange(self.last_batch_idx, self.last_batch_idx+self.batch_size)
         self.last_batch_idx += self.batch_size
-        batch_choice = batch_choice[batch_choice<self.max_idx-1]
-        if batch_choice.shape[0] < 2:
+        batch_choice = batch_choice[batch_choice<max(self.train_loader.index_array)]
+        batch_choice = batch_choice[batch_choice>min(self.train_loader.index_array)]
+        if batch_choice.shape[0] <= 1:
             self.done = True
         x,y = self.train_loader[batch_choice]
         return x,y,batch_choice
 
     def next_batch(self):
-        batch_choice = self.train_rdn.choice(self.batch_array, self.batch_size, replace=False)
+        batch_choice = self.train_rdn.choice(self.train_loader.index_array, self.batch_size, replace=False)
         x,y = self.train_loader[batch_choice]
         return x,y,batch_choice
 
