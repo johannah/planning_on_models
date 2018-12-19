@@ -9,12 +9,14 @@ https://github.com/pytorch/examples/blob/master/vae/main.py
 """
 
 import os
+import time
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 from torch import nn, optim
 import torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
+from torch.utils.data import Dataset, DataLoader
 import config
 from torchvision.utils import save_image
 from IPython import embed
@@ -90,7 +92,7 @@ class PriorNetwork(nn.Module):
         self.fc2_s = nn.Linear(n_hidden, self.code_length)
 
         # TODO why 2*k
-        self.knn = KNeighborsClassifier(n_neighbors=2*self.k, n_jobs=-1)
+        self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
         # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
         codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
         self.fit_knn(codes)
@@ -98,34 +100,114 @@ class PriorNetwork(nn.Module):
     def fit_knn(self, codes):
         ''' will reset the knn  given an nd array
         '''
+        st = time.time()
         self.codes = codes
         self.seen = set()
-        y = np.zeros((self.size_training_set))
+        assert(len(self.codes)>1)
+        y = np.zeros((len(self.codes)))
         self.knn.fit(self.codes, y)
+        #print("FIT KNN!", time.time()-st)
 
-    def pick_close_neighbor(self, code):
+
+    def batch_pick_close_neighbor(self, codes):
         '''
         :code latent activation of training example as np
         '''
+        #st = time.time()
+        #print('pick close neighbor start' )
         # returns neighbors, n_neighbors
-        neighbor_indexes = self.knn.kneighbors([code], return_distance=False)[0]
-        # get index for neighbors
-        valid_indexes = [n for n in neighbor_indexes if n not in self.seen]
-        if len(valid_indexes) < self.k:
-            codes_new = [c for i, c in enumerate(self.codes) if i not in self.seen]
-            self.fit_knn(codes_new)
-            return self.pick_close_neighbors(code)
-        neighbor_codes = [self.codes[idx] for idx in valid_indexes]
+        # get index for neighbors that are unique
+        # add new codes to book
+        neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
+        bsize = neighbor_indexes.shape[0]
+        rand_neighbor_index = self.rdn.randint(0,neighbor_indexes.shape[1],size=bsize)
+        return self.codes[neighbor_indexes[np.arange(bsize), rand_neighbor_index]]
+
+        # add new codes to stack
+        #valid_indexes = []
+        #run_index = 0
+        #good_ks = True
+        #keep_going = True
+        # go thru each data point in the batch sequentially
+        #while run_index < len(codes):
+#            self.fit_knn(self.codes)
+#            neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
+#            example = neighbor_indexes[run_index]
+#            # make sure these neighbors have not been in seen yet
+#            print(run_index, 'example', example)
+#            #print('seen', self.seen)
+#            #ev_indexes = [n for n in example if n not in self.seen]
+#            #if len(ev_indexes) >= self.k:
+#            # good codes - lets do something
+#            ev_indexes = ev_indexes[:self.k]
+#            # choose the code of the right index
+#            rdn_index = self.rdn.choice(ev_indexes)
+#            self.seen.add(rdn_index)
+#            valid_indexes.append(self.codes[rdn_index])
+#            print(run_index)
+#            run_index+=1
+            #else:
+            #    # not enough unseen codes
+            #    print(run_index, ev_indexes)
+            #    codes_new = [c for i, c in enumerate(self.codes) if i not in self.seen]
+            #    print("valid indexes=%s, less than k=%s "%(len(ev_indexes), self.k), 'new codes', len(codes_new))
+            #    self.fit_knn(codes_new)
+            #    neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=min(len(self.codes), self.k), return_distance=True)
+
+
+
+
+        #return np.array(valid_indexes)
+        #neighbor_codes = self.codes[neighbor_indexes]
+        #if len(valid_indexes) < self.k:
+        #    return self.batch_pick_close_neighbors(codes)
+        #neighbor_codes = [self.codes[idx] for idx in valid_indexes]
         # TODO < > seems like there is one missing
-        if len(neighbor_codes) > self.k:
-            # TODO - use distances from knn neighbors
-            neighbor_codes = neighbor_codes = sorted(neighbor_codes, key=lambda n: ((code - n) ** 2).sum())[:self.k]
-        rand_neighbor_index = self.rdn.randint(len(neighbor_codes))
-        return neighbor_codes[rand_neighbor_index]
+        #if len(neighbor_codes) > self.k:
+        #    # TODO - use distances from knn neighbors
+        #    neighbor_codes = sorted(neighbor_codes, key=lambda n: ((code - n) ** 2).sum())[:self.k]
+        #rand_neighbor_index = self.rdn.randint(len(neighbor_codes))
+        #bsize = neighbor_codes.shape[0]
+        #rand_neighbor_index = self.rdn.randint(0,neighbor_codes.shape[1],size=bsize)
+        #print('pick close neighbor end', time.time()-st)
+        #return neighbor_codes[np.arange(asize), rand_neighbor_index]
+
+
+#    def pick_close_neighbor(self, code):
+#        '''
+#        :code latent activation of training example as np
+#        '''
+#        #st = time.time()
+#        #print('pick close neighbor start' )
+#        # returns neighbors, n_neighbors
+#        nst = time.time()
+#        # 0.1 seconds for each pass of this
+#        neighbor_indexes = self.knn.kneighbors([code], return_distance=False)[0]
+#        net = time.time()
+#        # get index for neighbors that are unique
+#        valid_indexes = [n for n in neighbor_indexes if n not in self.seen]
+#        if len(valid_indexes) < self.k:
+#            print("valid indexes less than k", len(valid_indexes), self.k)
+#            codes_new = [c for i, c in enumerate(self.codes) if i not in self.seen]
+#            self.fit_knn(codes_new)
+#            return self.pick_close_neighbors(code)
+#        neighbor_codes = [self.codes[idx] for idx in valid_indexes]
+#        # TODO < > seems like there is one missing
+#        if len(neighbor_codes) > self.k:
+#            # TODO - use distances from knn neighbors
+#            neighbor_codes = sorted(neighbor_codes, key=lambda n: ((code - n) ** 2).sum())[:self.k]
+#        rand_neighbor_index = self.rdn.randint(len(neighbor_codes))
+#        #print('pick close neighbor end', time.time()-st)
+#        return neighbor_codes[rand_neighbor_index]
 
     def forward(self, codes):
-        previous_codes = [self.pick_close_neighbor(c.detach().numpy()) for c in codes]
-        previous_codes = torch.FloatTensor(previous_codes)
+        st = time.time()
+        #print("starting forward")
+        np_codes = codes.cpu().detach().numpy()
+        #previous_codes = [self.pick_close_neighbor(c) for c in np_codes]
+        previous_codes = self.batch_pick_close_neighbor(np_codes)
+        #print('finished forward', time.time()-st)
+        previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
         return self.encode(previous_codes)
 
     def encode(self, prev_code):
@@ -140,23 +222,26 @@ def train_acn(train_cnt):
     vae_model.train()
     prior_model.train()
     train_loss = 0
-    new_codes = []
-    for batch_idx, (data, _) in enumerate(train_loader):
+    init_cnt = train_cnt
+    for batch_idx, (data, _, data_index) in enumerate(train_loader):
+        st = time.time()
         data = data.view(data.shape[0], -1).to(DEVICE)
-        print(data.shape)
+        print('starting new batch', data.shape)
         opt.zero_grad()
         yhat_batch, u_q, s_q = vae_model(data)
-        new_codes.append(u_q)
+        prior_model.codes[data_index] = u_q.detach().cpu().numpy()
+        prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
         loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
         loss.backward()
         train_loss+= loss.item()
         opt.step()
+        train_cnt+=len(data)
+
         def handle_plot_ckpt(do_plot=False):
-            train_loss = loss.data.numpy().mean()/len(data)
-            info['train_losses'].append(train_loss)
+            info['train_losses'].append(train_loss/float(train_cnt-init_cnt))
             info['train_cnts'].append(train_cnt)
-            test_loss = test_acn(train_cnt)
+            test_loss = test_acn(train_cnt,do_plot)
             info['test_losses'].append(test_loss)
             info['test_cnts'].append(train_cnt)
             print('examples %010d train loss %03.03f test loss %03.03f' %(train_cnt,
@@ -178,53 +263,57 @@ def train_acn(train_cnt):
             handle_plot_ckpt(True)
             filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
             state = {
-                     'state_dict':vae_model.state_dict(),
+                     'vae_state_dict':vae_model.state_dict(),
+                     'prior_state_dict':prior_model.state_dict(),
                      'optimizer':opt.state_dict(),
                      'info':info,
                      }
             save_checkpoint(state, filename=filename)
-        elif not train_cnt or (train_cnt-info['train_cnts'][-1])>=args.log_every:
+        elif not len(info['train_cnts']):
+            handle_plot_ckpt(False)
+        elif (train_cnt-info['train_cnts'][-1])>=args.log_every:
             handle_plot_ckpt(False)
         else:
             if (train_cnt-info['last_plot'])>=args.plot_every:
                 handle_plot_ckpt(True)
+        #print("finished loop", time.time()-st, train_cnt)
 
-        train_cnt+=len(data)
-    new_codes = torch.cat(new_codes).detach().cpu().data
-    prior.fit_knn(new_codes)
     return train_cnt
 
-def test_acn(train_cnt):
+def test_acn(train_cnt, do_plot):
     vae_model.eval()
     prior_model.eval()
     test_loss = 0
-    new_codes = []
+    print('starting test', train_cnt)
+    st = time.time()
+    print(len(test_loader))
     with torch.no_grad():
-        for i, (data, _) in enumerate(test_loader):
+        for i, (data, _, data_index) in enumerate(test_loader):
             data = data.view(data.shape[0], -1).to(DEVICE)
             yhat_batch, u_q, s_q = vae_model(data)
-            new_codes.append(u_q)
             u_p, s_p = prior_model(u_q)
             loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
             test_loss+= loss.item()
-            opt.step()
-
-            #test_loss += vae_loss_function(yhat, data, mu, logvar).item()
-            #if i == 0:
-            #    n = min(data.size(0), 8)
-            #    comparison = torch.cat([data[:n],
-            #                          yhat.view(args.batch_size, 1, 28, 28)[:n]])
-            #img_name = vae_base_filepath + "_%010dvalid_sample.png"%train_cnt
-            #save_image(comparison.cpu(), img_name, nrow=n)
+            #print(i, test_loss)
+            #print(len(test_loader))
+            if i == 0 and do_plot:
+                print('writing img')
+                n = min(data.size(0), 8)
+                comparison = torch.cat([data.view(args.batch_size, 1, 28, 28)[:n],
+                                      yhat_batch.view(args.batch_size, 1, 28, 28)[:n]])
+                img_name = vae_base_filepath + "_%010d_valid_sample.png"%train_cnt
+                save_image(comparison.cpu(), img_name, nrow=n)
+                print('finished writing img')
 
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
+    print('finished test', time.time()-st)
     return test_loss
 
 def train_vae(train_cnt):
     vae_model.train()
     train_loss = 0
-    for batch_idx, (data, _) in enumerate(train_loader):
+    for batch_idx, (data, _, data_index) in enumerate(train_loader):
         data = data.to(DEVICE)
         opt.zero_grad()
         yhat_batch, mu, logvar = vae_model(data)
@@ -232,6 +321,7 @@ def train_vae(train_cnt):
         loss.backward()
         train_loss+= loss.item()
         opt.step()
+        print(train_cnt)
         def handle_plot_ckpt(do_plot=False):
             train_loss = loss.data.numpy().mean()/len(data)
             info['train_losses'].append(train_loss)
@@ -291,18 +381,34 @@ def test_vae(train_cnt):
     print('====> Test set loss: {:.4f}'.format(test_loss))
     return test_loss
 
+
+class MyMNISTDataset(Dataset):
+    def __init__(self, path, train=True, download=True, transform=transforms.ToTensor()):
+        self.mnist = datasets.MNIST(path,
+                                    download=download,
+                                    train=train,
+                                    transform=transform)
+
+    def __getitem__(self, index):
+        data, target = self.mnist[index]
+        # Your transformations here (or set it in CIFAR10)
+        return data, target, index
+
+    def __len__(self):
+        return len(self.mnist)
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
     parser = ArgumentParser(description='train vq-vae for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-se', '--save_every', default=60000, type=int)
-    parser.add_argument('-pe', '--plot_every', default=10000, type=int)
-    parser.add_argument('-le', '--log_every', default=10000, type=int)
-    parser.add_argument('-bs', '--batch_size', default=32, type=int)
-    parser.add_argument('-nc', '--number_condition', default=4, type=int)
-    parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
+    parser.add_argument('-se', '--save_every', default=60000*5, type=int)
+    parser.add_argument('-pe', '--plot_every', default=120000, type=int)
+    parser.add_argument('-le', '--log_every', default=120000, type=int)
+    parser.add_argument('-bs', '--batch_size', default=64, type=int)
+    #parser.add_argument('-nc', '--number_condition', default=4, type=int)
+    #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=20, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
@@ -310,19 +416,22 @@ if __name__ == '__main__':
     parser.add_argument('-lr', '--learning_rate', default=1e-5)
     args = parser.parse_args()
     if args.cuda:
-        DEVICE = 'gpu'
+        DEVICE = 'cuda'
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'vae')
-    prior_base_filepath = os.path.join(config.model_savedir, 'prior')
+    vae_base_filepath = os.path.join(config.model_savedir, 'acn')
 
-    train_data = datasets.MNIST(config.base_datadir, train=True, download=True,
+    #train_data = datasets.MNIST(config.base_datadir, train=True, download=True,
+    #                      transform=transforms.ToTensor())
+    train_data = MyMNISTDataset(config.base_datadir, train=True, download=True,
                           transform=transforms.ToTensor())
-    train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    test_data = datasets.MNIST(config.base_datadir, train=False, download=True,
+    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+    #test_data = datasets.MNIST(config.base_datadir, train=False, download=True,
+    #                      transform=transforms.ToTensor())
+    test_data = MyMNISTDataset(config.base_datadir, train=False, download=True,
                           transform=transforms.ToTensor())
-    test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=args.batch_size*2, shuffle=True)
 
 
     info = {'train_cnts':[],
@@ -337,8 +446,8 @@ if __name__ == '__main__':
 
     size_training_set = len(train_data)
 
-    vae_model = VAE(args.code_length, h=512, input_size=28*28)
-    prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k)
+    vae_model = VAE(args.code_length, h=512, input_size=28*28).to(DEVICE)
+    prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
     parameters = list(vae_model.parameters()) + list(prior_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     train_cnt = 0
