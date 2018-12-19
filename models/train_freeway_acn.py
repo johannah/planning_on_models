@@ -29,6 +29,7 @@ torch.manual_seed(394)
 class ConvVAE(nn.Module):
     def __init__(self, code_len, input_size=1):
         super(ConvVAE, self).__init__()
+        self.code_len = code_len
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels=input_size,
                       out_channels=16,
@@ -43,39 +44,23 @@ class ConvVAE(nn.Module):
             nn.BatchNorm2d(32),
             nn.ReLU(True),
             nn.Conv2d(in_channels=32,
-                      out_channels=42,
-                      kernel_size=4,
-                      stride=2, padding=1),
-            nn.BatchNorm2d(42),
+                      out_channels=code_len*2,
+                      kernel_size=1,
+                      stride=1, padding=0),
+            nn.BatchNorm2d(code_len*2),
             nn.ReLU(True),
-            #nn.Conv2d(in_channels=42,
-            #          out_channels=code_len,
-            #          kernel_size=1,
-            #          stride=1, padding=0),
-            #nn.BatchNorm2d(code_len),
-            )
+           )
         # found via experimentation - 3 for mnist
-        self.eo=eo=encode_output_size = 3
-        self.fc21 = nn.Linear(42*eo*eo, code_len)
-        self.fc22 = nn.Linear(42*eo*eo, code_len)
-
-        self.fc3 = nn.Linear(code_len, 42*eo*eo)
-
-
+        # input_image == 28 -> eo=7
+        self.eo=eo=encode_output_size = 7
+        self.fc21 = nn.Linear(code_len*2*eo*eo, code_len)
+        self.fc22 = nn.Linear(code_len*2*eo*eo, code_len)
+        self.fc3 = nn.Linear(code_len, code_len*2*eo*eo)
         self.decoder = nn.Sequential(
-                nn.Conv2d(in_channels=code_len,
-                          out_channels=42,
-                          kernel_size=1,
-                          stride=1, padding=0),
-                nn.BatchNorm2d(42),
-                nn.ReLU(True),
-                # applies a 2d transposed convolution operator over input image
-                # composed of several input planes. Can be seen as gradient of Conv2d
-                # with respsct to its input. also known as fractionally-strided conv.
-                nn.ConvTranspose2d(in_channels=42,
+               nn.ConvTranspose2d(in_channels=code_len*2,
                       out_channels=32,
-                      kernel_size=4,
-                      stride=2, padding=1),
+                      kernel_size=1,
+                      stride=1, padding=0),
                 nn.BatchNorm2d(32),
                 nn.ReLU(True),
                 nn.ConvTranspose2d(in_channels=32,
@@ -95,11 +80,12 @@ class ConvVAE(nn.Module):
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
         return self.fc21(ol), self.fc22(ol)
 
-    def decode(self, c):
+    def decode(self, mu, logvar):
+        c = self.reparameterize(mu,logvar)
         co = F.relu(self.fc3(c))
-        col = co.view(o.shape[0], 1, self.eo, self.eo)
-        return torch.sigmoid(self.decoder(col))
-
+        col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
+        do = torch.sigmoid(self.decoder(col))
+        return do
 
     def reparameterize(self, mu, logvar):
         if self.training:
@@ -113,7 +99,7 @@ class ConvVAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar
+        return  mu, logvar
 
 def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     ''' reconstruction loss + coding cost
@@ -131,10 +117,6 @@ def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
     acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
     return BCE+acn_KLD
-
-
-
-
 
 class PriorNetwork(nn.Module):
     def __init__(self, size_training_set, code_length, n_hidden=512, k=5, random_seed=4543):
@@ -240,8 +222,6 @@ def handle_checkpointing(train_cnt, avg_train_loss):
             print("Logging Model at cnt:%s cnt since last logged:%s"%(train_cnt, train_cnt-info['train_cnts'][-1]))
             handle_plot_ckpt(False, train_cnt, avg_train_loss)
 
-
-
 def train_acn(train_cnt):
     vae_model.train()
     prior_model.train()
@@ -252,10 +232,11 @@ def train_acn(train_cnt):
         lst = time.time()
         data = data.to(DEVICE)
         opt.zero_grad()
-        yhat_batch, u_q, s_q = vae_model(data)
+        u_q, s_q = vae_model(data)
         prior_model.codes[data_index] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
+        yhat_batch = vae_model.decode(u_p,s_p)
         loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
         loss.backward()
         train_loss+= loss.item()
@@ -279,8 +260,9 @@ def test_acn(train_cnt, do_plot):
             lst = time.time()
             #data = data.view(data.shape[0], -1).to(DEVICE)
             data = data.to(DEVICE)
-            yhat_batch, u_q, s_q = vae_model(data)
+            u_q, s_q = vae_model(data)
             u_p, s_p = prior_model(u_q)
+            yhat_batch = vae_model.decode(u_p,s_p)
             loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
             test_loss+= loss.item()
             if i == 0 and do_plot:
