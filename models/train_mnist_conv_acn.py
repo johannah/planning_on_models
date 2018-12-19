@@ -99,7 +99,7 @@ class ConvVAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        return  mu, logvar
+        return self.decode(mu, logvar), mu, logvar
 
 def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     ''' reconstruction loss + coding cost
@@ -232,11 +232,10 @@ def train_acn(train_cnt):
         lst = time.time()
         data = data.to(DEVICE)
         opt.zero_grad()
-        u_q, s_q = vae_model(data)
+        yhat_batch, u_q, s_q = vae_model(data)
         prior_model.codes[data_index] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
-        yhat_batch = vae_model.decode(u_p,s_p)
         loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
         loss.backward()
         train_loss+= loss.item()
@@ -260,9 +259,8 @@ def test_acn(train_cnt, do_plot):
             lst = time.time()
             #data = data.view(data.shape[0], -1).to(DEVICE)
             data = data.to(DEVICE)
-            u_q, s_q = vae_model(data)
+            yhat_batch, u_q, s_q = vae_model(data)
             u_p, s_p = prior_model(u_q)
-            yhat_batch = vae_model.decode(u_p,s_p)
             loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
             test_loss+= loss.item()
             if i == 0 and do_plot:
