@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from copy import deepcopy
 from IPython import embed
+
 class AutoEncoder(nn.Module):
     def __init__(self, num_clusters=512, encoder_output_size=32,
                  nr_logistic_mix=10, in_channels_size=1, out_channels_size=1):
@@ -25,7 +26,6 @@ class AutoEncoder(nn.Module):
 
         self.name = 'vqvae4layer'
         self.num_mixture = 2*self.nr_logistic_mix*out_channels_size+self.nr_logistic_mix
-
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels=in_channels_size,
                       out_channels=16,
