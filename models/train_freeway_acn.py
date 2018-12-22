@@ -26,14 +26,6 @@ from IPython import embed
 from lstm_utils import plot_losses
 torch.manual_seed(394)
 
-"""
-\cite{acn} The ACN encoder was a convolutional
-network fashioned after a VGG-style classifier (Simonyan
-& Zisserman, 2014), and the encoding distribution q(z|x)
-was a unit variance Gaussian with mean specified by the
-output of the encoder network.
-size of z is 16 for mnist, 128 for others
-"""
 class ConvVAE(nn.Module):
     def __init__(self, code_len, input_size=1):
         super(ConvVAE, self).__init__()
@@ -58,21 +50,12 @@ class ConvVAE(nn.Module):
             nn.BatchNorm2d(code_len*2),
             nn.ReLU(True),
            )
-        # found via experimentation - 3 for mnist
+        # found via experimentation -
         # input_image == 28 -> eo=7
         self.eo=eo=encode_output_size = 7
         self.fc21 = nn.Linear(code_len*2*eo*eo, code_len)
         self.fc22 = nn.Linear(code_len*2*eo*eo, code_len)
         self.fc3 = nn.Linear(code_len, code_len*2*eo*eo)
-
-        out_layer = nn.ConvTranspose2d(in_channels=16,
-                        out_channels=input_size,
-                        kernel_size=4,
-                        stride=2, padding=1)
-
-        # set bias to 0.5 for sigmoid
-        out_layer.bias.data.fill_(0.5)
-
         self.decoder = nn.Sequential(
                nn.ConvTranspose2d(in_channels=code_len*2,
                       out_channels=32,
@@ -86,8 +69,11 @@ class ConvVAE(nn.Module):
                       stride=2, padding=1),
                 nn.BatchNorm2d(16),
                 nn.ReLU(True),
-                out_layer
-                     )
+                nn.ConvTranspose2d(in_channels=16,
+                        out_channels=input_size,
+                        kernel_size=4,
+                        stride=2, padding=1),
+                )
 
     def encode(self, x):
         o = self.encoder(x)
@@ -132,13 +118,6 @@ def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
     return BCE+acn_KLD
 
-
-"""
-/cite{acn} The prior network was an
-MLP with three hidden layers each containing 512 tanh
-units, and skip connections from the input to all hidden
-layers and all hiddens to the output layer
-"""
 class PriorNetwork(nn.Module):
     def __init__(self, size_training_set, code_length, n_hidden=512, k=5, random_seed=4543):
         super(PriorNetwork, self).__init__()
@@ -160,9 +139,12 @@ class PriorNetwork(nn.Module):
         '''
         st = time.time()
         self.codes = codes
+        self.seen = set()
         assert(len(self.codes)>1)
         y = np.zeros((len(self.codes)))
         self.knn.fit(self.codes, y)
+        #print("FIT KNN!", time.time()-st)
+
 
     def batch_pick_close_neighbor(self, codes):
         '''
@@ -248,7 +230,6 @@ def train_acn(train_cnt):
         data = data.to(DEVICE)
         opt.zero_grad()
         yhat_batch, u_q, s_q = vae_model(data)
-        # add the predicted codes to the input
         prior_model.codes[data_index] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
@@ -332,7 +313,7 @@ if __name__ == '__main__':
     parser.add_argument('-cl', '--code_length', default=20, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
+    parser.add_argument('-e', '--num_examples_to_train', default=5000000, type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-5)
     args = parser.parse_args()
     if args.cuda:
@@ -340,7 +321,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn')
+    vae_base_filepath = os.path.join(config.model_savedir, 'cacn')
     train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())

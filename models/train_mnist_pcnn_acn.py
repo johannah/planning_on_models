@@ -24,6 +24,7 @@ import config
 from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_losses
+from pixel_cnn import GatetPixelCNN
 torch.manual_seed(394)
 
 """
@@ -73,32 +74,41 @@ class ConvVAE(nn.Module):
         # set bias to 0.5 for sigmoid
         out_layer.bias.data.fill_(0.5)
 
-        self.decoder = nn.Sequential(
-               nn.ConvTranspose2d(in_channels=code_len*2,
-                      out_channels=32,
-                      kernel_size=1,
-                      stride=1, padding=0),
-                nn.BatchNorm2d(32),
-                nn.ReLU(True),
-                nn.ConvTranspose2d(in_channels=32,
-                      out_channels=16,
-                      kernel_size=4,
-                      stride=2, padding=1),
-                nn.BatchNorm2d(16),
-                nn.ReLU(True),
-                out_layer
-                     )
+        DIM = 256
+        num_classes = 10
+        num_pcnn_layers = 12
+        self.pcnn_decoder = GatedPixelCNN(input_dim=code_len*2,
+                                          dim=possible_values,
+                                          n_layers=num_pcnn_layers,
+                                          n_classes=num_classes,
+                                          spatial_cond_size=1)
+        #self.decoder = nn.Sequential(
+        #       nn.ConvTranspose2d(in_channels=code_len*2,
+        #              out_channels=32,
+        #              kernel_size=1,
+        #              stride=1, padding=0),
+        #        nn.BatchNorm2d(32),
+        #        nn.ReLU(True),
+        #        nn.ConvTranspose2d(in_channels=32,
+        #              out_channels=16,
+        #              kernel_size=4,
+        #              stride=2, padding=1),
+        #        nn.BatchNorm2d(16),
+        #        nn.ReLU(True),
+        #        out_layer
+        #             )
 
     def encode(self, x):
         o = self.encoder(x)
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
         return self.fc21(ol), self.fc22(ol)
 
-    def decode(self, mu, logvar):
+    def decode(self, mu, logvar, conditioning):
         c = self.reparameterize(mu,logvar)
         co = F.relu(self.fc3(c))
         col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
-        do = torch.sigmoid(self.decoder(col))
+        embed()
+        do = torch.sigmoid(self.pcnn_decoder(col, conditioning))
         return do
 
     def reparameterize(self, mu, logvar):
