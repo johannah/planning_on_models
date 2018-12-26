@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.distributions.normal import Normal
 from torch.distributions import kl_divergence
 from IPython import embed
+
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
@@ -22,10 +23,10 @@ class GatedActivation(nn.Module):
 
     def forward(self, x):
         x,y = x.chunk(2,dim=1)
-        return F.tanh(x)*F.sigmoid(y)
+        return torch.tanh(x)*torch.sigmoid(y)
 
 class GatedMaskedConv2d(nn.Module):
-    def __init__(self, mask_type, dim, kernel, residual=True, n_classes=10, cond_size=None):
+    def __init__(self, mask_type, dim, kernel, residual=True, n_classes=10, cond_size=None, float_condition_size=None):
         super(GatedMaskedConv2d, self).__init__()
         assert (kernel % 2 == 1 )
         print("Kernel size must be odd")
@@ -34,6 +35,11 @@ class GatedMaskedConv2d(nn.Module):
         # unique for every layer of the pixelcnn - takes integer from 0-x and
         # returns slice which is 0 to 1ish - treat each latent value like a
         # "word" embedding
+        self.dim = dim
+
+        self.hsize = 28
+        self.wsize = 28
+
         self.class_cond_embedding = nn.Embedding(n_classes, 2*dim)
         vkernel_shape = (kernel//2 + 1, kernel)
         vpadding_shape = (kernel//2, kernel//2)
@@ -44,6 +50,9 @@ class GatedMaskedConv2d(nn.Module):
         hkernel_shape = (1,kernel//2+1)
         hpadding_shape = (0,kernel//2)
 
+        if float_condition_size is not None:
+            # 28 is from size of mnist - should pass this in TODO
+            self.float_condition_layer = nn.Linear(float_condition_size, 2*self.dim*self.hsize*self.wsize)
         if cond_size is not None:
             self.spatial_cond_stack = nn.Conv2d(cond_size, dim*2, kernel_size=cond_kernel_shape, stride=1, padding=cond_padding_shape)
 
@@ -58,7 +67,7 @@ class GatedMaskedConv2d(nn.Module):
         self.vert_stack.weight.data[:,:,-1].zero_() # mask final row
         self.horiz_stack.weight.data[:,:,:,-1].zero_() # mask final column
 
-    def forward(self, x_v, x_h, class_condition=None, spatial_condition=None):
+    def forward(self, x_v, x_h, class_condition=None, spatial_condition=None, float_condition=None):
         # class condition coming in is just an integer
         # spatial_condition should be the same size as the input
         if self.mask_type == 'A':
@@ -76,6 +85,12 @@ class GatedMaskedConv2d(nn.Module):
 
         input_to_out_v = h_vert
         input_to_out_h = v2h + h_horiz
+
+        if float_condition is not None:
+            float_out = self.float_condition_layer(float_condition)
+            float_out = float_out.view(-1,2*self.dim,self.hsize,self.wsize)
+            input_to_out_v += float_out[:,:,:,:]
+            input_to_out_h += float_out[:,:,:,:]
 
         # add class conditioning
         if class_condition is not None:
@@ -98,7 +113,7 @@ class GatedMaskedConv2d(nn.Module):
         return out_v, out_h
 
 class GatedPixelCNN(nn.Module):
-    def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=10, spatial_cond_size=None):
+    def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=10, spatial_cond_size=None, float_condition_size=None, last_layer_bias=0.0):
         super(GatedPixelCNN, self).__init__()
         if spatial_cond_size is None:
             scond_size = 'na'
@@ -109,50 +124,66 @@ class GatedPixelCNN(nn.Module):
         self.name = 'rpcnn_id%d_d%d_l%d_nc%d_cs%s'%(input_dim, dim, n_layers, n_classes, scond_size)
         self.dim = dim
         # lookup table to store input
-        self.embedding = nn.Embedding(input_dim, self.dim)
+        #self.embedding = nn.Embedding(input_dim, self.dim)
 
-        if spatial_cond_size is not None:
-            # assume same vocab size - but input_dim could be different here
-            self.spatial_cond_embedding = nn.Embedding(input_dim, self.dim)
+        #if spatial_cond_size is not None:
+        #    # assume same vocab size - but input_dim could be different here
+        #    self.spatial_cond_embedding = nn.Embedding(input_dim, self.dim)
         # build pixelcnn layers - functions like normal python list, but modules are registered
         self.layers = nn.ModuleList()
         # first block has Mask-A convolution - (no residual connections)
         # subsequent blocks have Mask-B convolutions
         self.layers.append(GatedMaskedConv2d(mask_type='A', dim=self.dim,
-                           kernel=7, residual=False, n_classes=n_classes, cond_size=spatial_cond_size))
+                           kernel=7, residual=False, n_classes=n_classes,
+                                             cond_size=spatial_cond_size,
+                                             float_condition_size=float_condition_size))
         for i in range(1,n_layers):
             self.layers.append(GatedMaskedConv2d(mask_type='B', dim=self.dim,
-                           kernel=3, residual=True, n_classes=n_classes, cond_size=spatial_cond_size))
+                           kernel=3, residual=True, n_classes=n_classes, cond_size=spatial_cond_size,
+                                                 float_condition_size=float_condition_size))
 
         self.output_conv = nn.Sequential(
                                          nn.Conv2d(self.dim, 512, 1),
                                          nn.ReLU(True),
                                          nn.Conv2d(512, input_dim, 1)
                                          )
+
         # in pytorch - apply(fn)  recursively applies fn to every submodule as returned by .children
         # apply xavier_uniform init to all weights
         self.apply(weights_init)
+        self.output_conv[-1].bias.data.fill_(last_layer_bias)
 
-    def forward(self, x, label=None, spatial_cond=None):
-        # x is (B,H,W,C)
+    def forward(self, x, label=None, spatial_cond=None, float_condition=None):
+        # mnist x is (B,C,W,H)
         shp = x.size()+(-1,)
-        xo = self.embedding(x.contiguous().view(-1)).view(shp)
+        xo=x
+        #xo = self.embedding(x.contiguous().view(-1)).view(shp)
         # change order to (B,C,H,W)
-        xo = xo.permute(0,3,1,2)
+        #xo = x.permute(0,3,1,2)
         x_v, x_h = (xo,xo)
 
-        if spatial_cond is not None:
+        ## vqvae x is (B,H,W,C)
+        #shp = x.size()+(-1,)
+        ##xo = self.embedding(x.contiguous().view(-1)).view(shp)
+        ## change order to (B,C,H,W)
+        #xo = x.permute(0,3,1,2)
+        #x_v, x_h = (xo,xo)
+
+        # spatial conditioning input for mnist looks like [128,40,7,7]
+        #embed()
+        #if spatial_cond is not None:
             # coming in, spatial_cond is (batch_size,  frames, 6, 6)
-            sshp = spatial_cond.size()+(-1,)
-            sxo = self.spatial_cond_embedding(spatial_cond.contiguous().view(-1)).view(sshp)
+            #sshp = spatial_cond.size()+(-1,)
+            #sxo = self.spatial_cond_embedding(spatial_cond.contiguous().view(-1)).view(sshp)
             # now it is  (batch_size, frames_hist, 6, 6, 256)
-            spatial_cond = sxo.permute(0,2,3,1,4).contiguous()
-            sc_shp = spatial_cond.shape
-            spatial_cond = spatial_cond.reshape(sc_shp[:-2]+(-1,))
-            spatial_cond = spatial_cond.permute(0,3,1,2)
+            #spatial_cond = sxo.permute(0,2,3,1,4).contiguous()
+            #sc_shp = spatial_cond.shape
+            #spatial_cond = spatial_cond.reshape(sc_shp[:-2]+(-1,))
+            #spatial_cond = spatial_cond.permute(0,3,1,2)
 
         for i, layer in enumerate(self.layers):
-            x_v, x_h = layer(x_v, x_h, label, spatial_cond)
+            x_v, x_h = layer(x_v=x_v, x_h=x_h, class_condition=label,
+                             spatial_condition=spatial_cond, float_condition=float_condition)
         return self.output_conv(x_h)
 
     def generate(self, label=None, spatial_cond=None, shape=(8,8), batch_size=1):

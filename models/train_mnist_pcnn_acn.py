@@ -24,7 +24,7 @@ import config
 from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_losses
-from pixel_cnn import GatetPixelCNN
+from pixel_cnn import GatedPixelCNN
 torch.manual_seed(394)
 
 """
@@ -74,14 +74,6 @@ class ConvVAE(nn.Module):
         # set bias to 0.5 for sigmoid
         out_layer.bias.data.fill_(0.5)
 
-        DIM = 256
-        num_classes = 10
-        num_pcnn_layers = 12
-        self.pcnn_decoder = GatedPixelCNN(input_dim=code_len*2,
-                                          dim=possible_values,
-                                          n_layers=num_pcnn_layers,
-                                          n_classes=num_classes,
-                                          spatial_cond_size=1)
         #self.decoder = nn.Sequential(
         #       nn.ConvTranspose2d(in_channels=code_len*2,
         #              out_channels=32,
@@ -103,13 +95,14 @@ class ConvVAE(nn.Module):
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
         return self.fc21(ol), self.fc22(ol)
 
-    def decode(self, mu, logvar, conditioning):
-        c = self.reparameterize(mu,logvar)
-        co = F.relu(self.fc3(c))
-        col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
-        embed()
-        do = torch.sigmoid(self.pcnn_decoder(col, conditioning))
-        return do
+    #def decode(self, mu, logvar, y):
+    #    c = self.reparameterize(mu,logvar)
+    #    co = F.relu(self.fc3(c))
+    #    #col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
+    #    #embed()
+    #    #do = self.pcnn_decoder(y, float_condition=co)
+    #    #do = torch.sigmoid(do)
+    #    return co
 
     def reparameterize(self, mu, logvar):
         if self.training:
@@ -123,7 +116,8 @@ class ConvVAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        return self.decode(mu, logvar), mu, logvar
+        co = F.relu(self.fc3(z))
+        return  co, mu, logvar
 
 def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     ''' reconstruction loss + coding cost
@@ -232,6 +226,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         state = {
                  'vae_state_dict':vae_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
+                 'pcnn_state_dict':pcnn_decoder.state_dict(),
                  'optimizer':opt.state_dict(),
                  'info':info,
                  }
@@ -253,12 +248,16 @@ def train_acn(train_cnt):
     train_loss = 0
     init_cnt = train_cnt
     st = time.time()
-    for batch_idx, (data, _, data_index) in enumerate(train_loader):
+    for batch_idx, (data, label, data_index) in enumerate(train_loader):
         lst = time.time()
+        #for xx,i in enumerate(label):
+        #    label_size[xx] = i
         data = data.to(DEVICE)
         opt.zero_grad()
-        yhat_batch, u_q, s_q = vae_model(data)
+        z, u_q, s_q = vae_model(data)
+        #yhat_batch = vae_model.decode(u_q, s_q, data)
         # add the predicted codes to the input
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
         prior_model.codes[data_index] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
@@ -281,11 +280,13 @@ def test_acn(train_cnt, do_plot):
     st = time.time()
     print(len(test_loader))
     with torch.no_grad():
-        for i, (data, _, data_index) in enumerate(test_loader):
+        for i, (data, label, data_index) in enumerate(test_loader):
             lst = time.time()
-            #data = data.view(data.shape[0], -1).to(DEVICE)
             data = data.to(DEVICE)
-            yhat_batch, u_q, s_q = vae_model(data)
+            z, u_q, s_q = vae_model(data)
+            #yhat_batch = vae_model.decode(u_q, s_q, data)
+            # add the predicted codes to the input
+            yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
             u_p, s_p = prior_model(u_q)
             loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
             test_loss+= loss.item()
@@ -334,8 +335,8 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=200000, type=int)
-    parser.add_argument('-le', '--log_every', default=200000, type=int)
+    parser.add_argument('-pe', '--plot_every', default=20000, type=int)
+    parser.add_argument('-le', '--log_every', default=10000, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
@@ -350,7 +351,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn')
+    vae_base_filepath = os.path.join(config.model_savedir, 'pcnn_acn')
     train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())
@@ -374,8 +375,20 @@ if __name__ == '__main__':
     size_training_set = len(train_data)
 
     vae_model = ConvVAE(args.code_length, input_size=1).to(DEVICE)
-    prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
-    parameters = list(vae_model.parameters()) + list(prior_model.parameters())
+    prior_model = PriorNetwork(size_training_set=size_training_set,
+                               code_length=args.code_length, k=args.num_k).to(DEVICE)
+
+    possible_values = 1
+    num_classes = 10
+    num_pcnn_layers = 12
+    pcnn_decoder = GatedPixelCNN(input_dim=1,
+                                      dim=possible_values,
+                                      n_layers=num_pcnn_layers,
+                                      n_classes=num_classes,
+                                      float_condition_size=1960,
+                                      last_layer_bias=0.5).to(DEVICE)
+
+    parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     train_cnt = 0
     while train_cnt < args.num_examples_to_train:
