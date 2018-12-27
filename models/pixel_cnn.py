@@ -28,8 +28,8 @@ class GatedActivation(nn.Module):
 class GatedMaskedConv2d(nn.Module):
     def __init__(self, mask_type, dim, kernel, residual=True, n_classes=10, cond_size=None, float_condition_size=None):
         super(GatedMaskedConv2d, self).__init__()
+        # ("Kernel size must be odd")
         assert (kernel % 2 == 1 )
-        print("Kernel size must be odd")
         self.mask_type = mask_type
         self.residual = residual
         # unique for every layer of the pixelcnn - takes integer from 0-x and
@@ -169,7 +169,6 @@ class GatedPixelCNN(nn.Module):
         #xo = x.permute(0,3,1,2)
         #x_v, x_h = (xo,xo)
 
-        # spatial conditioning input for mnist looks like [128,40,7,7]
         #embed()
         #if spatial_cond is not None:
             # coming in, spatial_cond is (batch_size,  frames, 6, 6)
@@ -186,26 +185,40 @@ class GatedPixelCNN(nn.Module):
                              spatial_condition=spatial_cond, float_condition=float_condition)
         return self.output_conv(x_h)
 
-    def generate(self, label=None, spatial_cond=None, shape=(8,8), batch_size=1):
-
-        param = next(self.parameters())
-        x = torch.zeros(
-                (batch_size, shape[0], shape[1]),
-                dtype=torch.int64, device=param.device)
-
-        if spatial_cond is not None:
-            # batch size and spatial cond batch size must be the same
-            batch_size = spatial_cond.shape[0]
-
-        if batch_size != 1:
-            raise ValueError('generator needs 1 size now TODO - fix')
-
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                logits = self.forward(x, label=label, spatial_cond=spatial_cond)
-                #probs = F.softmax(logits[:,:,i,j], -1)
-                #x.data[:,i,j].copy_(probs.multinomial(1).squeeze().data)
-                x.data[:,i,j].copy_(torch.argmax(logits[:,:,i,j]))
-        return x
-
+# BADDDDDD
+#    def generate(self, label=None, spatial_cond=None, float_condition=None,
+#                 shape=(8,8), batch_size=1, true_output=None):
+#
+#        param = next(self.parameters())
+#        x = torch.zeros((batch_size, shape[0], shape[1]), dtype=torch.int64, device=param.device)
+#
+#        if spatial_cond is not None:
+#            # batch size and spatial cond batch size must be the same
+#            batch_size = spatial_cond.shape[0]
+#
+#        if float_condition is not None:
+#            # batch size and float cond batch size must be the same
+#            batch_size = float_condition.shape[0]
+#            x = torch.zeros((batch_size, self.dim, shape[0], shape[1]), dtype=torch.float32, device=param.device)
+#
+#        if true_output is not None:
+#            x = true_output
+#
+#        if batch_size != 1:
+#            raise ValueError('generator needs batch size of 1. TODO - fix')
+#
+#
+#        for ex in range(batch_size):
+#            for i in range(shape[0]):
+#                for j in range(shape[1]):
+#                    for dd in range(self.dim):
+#                        logits = self.forward(x, label=label, spatial_cond=spatial_cond, float_condition=float_condition)
+#                        #probs = F.softmax(logits[:,:,i,j], -1)
+#                        #x.data[:,i,j].copy_(probs.multinomial(1).squeeze().data)
+#                        #x.data[ex,dd,i,j].copy_(torch.argmax(logits[:,:,i,j]))
+#                        est = logits[ex,dd,i,j]
+#                        x.data[ex,dd,i,j].copy_(est)
+#                        #x.data[ex,dd,i,j].copy_(x[ex,dd,i,j])
+#        return x
+#
 

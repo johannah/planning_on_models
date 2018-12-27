@@ -11,7 +11,11 @@ https://github.com/pytorch/examples/blob/master/vae/main.py
 # TODO conv
 # TODO load function
 # daydream function
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import os
+import sys
 import time
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
@@ -25,6 +29,7 @@ from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_losses
 from pixel_cnn import GatedPixelCNN
+from imageio import imsave
 torch.manual_seed(394)
 
 """
@@ -331,31 +336,41 @@ def save_checkpoint(state, filename='model.pkl'):
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
-    parser = ArgumentParser(description='train vq-vae for freeway')
+    parser = ArgumentParser(description='sample acn pcnn for freeway')
+    parser.add_argument('-l', '--model_loadname', required=True, help='filename of pkl file to load models from')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=20000, type=int)
-    parser.add_argument('-le', '--log_every', default=10000, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
-    #parser.add_argument('-nc', '--number_condition', default=4, type=int)
-    #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
-    parser.add_argument('-cl', '--code_length', default=20, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-lr', '--learning_rate', default=1e-5)
-    parser.add_argument('-pv', '--possible_values', default=1)
-    parser.add_argument('-nc', '--num_classes', default=10)
-    parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
-
+    parser.add_argument('-n', '--num_to_sample', default=10, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
     else:
         DEVICE = 'cpu'
+#
+#    info = {'train_cnts':[],
+#            'train_losses':[],
+#            'test_cnts':[],
+#            'test_losses':[],
+#            'save_times':[],
+#            'args':[args],
+#            'last_save':0,
+#            'last_plot':0,
+#             }
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'pcnn_acn')
+    model_loadpath = os.path.abspath(os.path.join(config.model_savedir, args.model_loadname))
+    if not os.path.exists(model_loadpath):
+        print("Error: given model load path does not exist")
+        print(model_loadpath)
+        sys.exit()
+
+    output_savepath = model_loadpath.replace('.pkl', '')
+    if not os.path.exists(output_savepath):
+        os.makedirs(output_savepath)
+    model_dict = torch.load(model_loadpath, map_location=lambda storage, loc: storage)
+
+
     train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())
@@ -365,33 +380,75 @@ if __name__ == '__main__':
                                transform=transforms.ToTensor())
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
+    train_cnt = 0
 
-    info = {'train_cnts':[],
-            'train_losses':[],
-            'test_cnts':[],
-            'test_losses':[],
-            'save_times':[],
-            'args':[args],
-            'last_save':0,
-            'last_plot':0,
-             }
+    info = model_dict['info']
+    largs = info['args'][-1]
 
-    args.size_training_set = len(train_data)
+    # in future these are in largs
+    try:
+        size_training_set = largs.size_training_set
+        possible_values = largs.possible_values
+        num_classes = largs.num_classes
+        num_pcnn_layers = largs.num_pcnn_layers
+    except:
+        size_training_set = len(train_data)
+        possible_values = 1
+        num_classes = 10
+        num_pcnn_layers = 12
 
-    vae_model = ConvVAE(args.code_length, input_size=1).to(DEVICE)
+
+    encoder_model = ConvVAE(largs.code_length, input_size=1)
+    encoder_model.load_state_dict(model_dict['vae_state_dict'])
+
     prior_model = PriorNetwork(size_training_set=size_training_set,
-                               code_length=args.code_length, k=args.num_k).to(DEVICE)
+                               code_length=largs.code_length,
+                               k=largs.num_k)
+    prior_model.load_state_dict(model_dict['prior_state_dict'])
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
-                                      dim=args.possible_values,
-                                      n_layers=args.num_pcnn_layers,
-                                      n_classes=args.num_classes,
+                                      dim=possible_values,
+                                      n_layers=num_pcnn_layers,
+                                      n_classes=num_classes,
                                       float_condition_size=1960,
-                                      last_layer_bias=0.5).to(DEVICE)
+                                      last_layer_bias=0.5)
+    pcnn_decoder.load_state_dict(model_dict['pcnn_state_dict'])
 
-    parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
-    opt = optim.Adam(parameters, lr=args.learning_rate)
-    train_cnt = 0
-    while train_cnt < args.num_examples_to_train:
-        train_cnt = train_acn(train_cnt)
+    encoder_model.eval()
+    prior_model.eval()
+    pcnn_decoder.eval()
 
+
+    num_samples = 0
+    get_new_sample = True
+    while num_samples <= args.num_to_sample:
+        o = train_data[num_samples]
+        label = o[1]
+        data = o[0][None]
+        z, u_q, s_q = encoder_model(data)
+        # give one example at a time, because that is what our generator can
+        # handle
+        print('generating sample: %s' %num_samples)
+
+        canvas = 0.0*data
+        for i in range(canvas.shape[1]):
+            for j in range(canvas.shape[2]):
+                for k in range(canvas.shape[3]):
+                    output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                    canvas[:,i,j,k] = output[:,i,j,k]
+
+        f,ax = plt.subplots(1,2)
+        iname = os.path.join(output_savepath, 'train%04d.png'%(num_samples))
+        ax[0].imshow(data[0,0].numpy(), cmap=plt.cm.gray)
+        ax[0].set_title('true')
+        ax[1].imshow(canvas[0,0].detach().numpy(), cmap=plt.cm.gray)
+        ax[1].set_title('est')
+        plt.savefig(iname)
+        num_samples += 1
+
+
+    embed()
+
+#    while train_cnt < args.num_examples_to_train:
+#        train_cnt = train_acn(train_cnt)
+#
