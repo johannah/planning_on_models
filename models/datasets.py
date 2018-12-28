@@ -25,6 +25,43 @@ orig_xsize = 160
 extra_chicken = np.array([[77, 78, 78, 78, 79], [54, 52, 53, 54, 54]])
 base_chicken = np.array([[77, 78, 78, 78, 79], [20, 21, 21, 20, 20]])
 
+def prepare_img_small(obs):
+    # turn to gray
+    cropped = obs[oy:(orig_ysize-oy),ox:]
+    gimg = img_as_ubyte(rgb2gray(cropped))
+    gimg[stripes == gimg] = 0
+    gimg[road == gimg] = 0
+    gimg[staging == gimg] = 0
+    sgimg = img_as_ubyte(resize(gimg, (int(input_ysize/2), int(input_xsize/2)), order=0))
+    sgimg[(extra_chicken[0]/2).astype(np.int), (extra_chicken[1]/2).astype(np.int)] = 0
+    our_chicken = np.where(sgimg == chicken_color)
+    sgimg[our_chicken[0], our_chicken[1]] = 0
+    n,c = np.unique(sgimg, return_counts=True)
+    stray_chickens = n[n>240]
+    stray_chickens = stray_chickens[stray_chickens<250]
+    y,x = list(our_chicken[0]), list(our_chicken[1])
+
+    # remove spurious color from moving chicken
+    for sc in stray_chickens:
+        oc = np.where(sgimg == sc)
+        if not len(y):
+            y.extend(oc[0])
+            x.extend(oc[1])
+        sgimg[oc[0], oc[1]] = 0
+
+    if not len(y):
+        print("COULDNT FIND CHICKEN IN OBSERVED IMAGE")
+        y = (base_chicken[0]/2).astype(np.int)
+        x = (base_chicken[1]/2).astype(np.int)
+
+    our_chicken = (np.array(y), np.array(x))
+    # there are 14 more 252 color when chicken moves -
+    # there are 14 more 252 color when chicken moves -
+    #our_chicken2 = np.where(sgimg == chicken_color2)
+    #sgimg[our_chicken2[0], our_chicken2[1]] = 0
+    return our_chicken, sgimg
+
+
 def prepare_img(obs):
     # turn to gray
     cropped = obs[oy:(orig_ysize-oy),ox:]
@@ -200,14 +237,15 @@ class FreewayForwardDataset(Dataset):
 class DataLoader():
     def __init__(self, train_load_function, test_load_function,
                  batch_size, random_number=394):
-        self.last_batch_idx = 0
+
         self.done = False
-        self.last_test_batch_idx = 0
         self.test_done = False
 
         self.batch_size = batch_size
         self.test_loader = test_load_function
         self.train_loader = train_load_function
+        self.last_test_batch_idx = self.test_loader.index_array.min()+1
+        self.last_batch_idx = self.train_loader.index_array.min()+1
 
         self.train_rdn = np.random.RandomState(random_number)
         self.test_rdn = np.random.RandomState(random_number)
@@ -221,12 +259,14 @@ class DataLoader():
 
     def validation_ordered_batch(self):
         batch_choice = np.arange(self.last_test_batch_idx, self.last_test_batch_idx+self.batch_size)
+        print(batch_choice)
         self.last_test_batch_idx += self.batch_size
         batch_choice = batch_choice[batch_choice<max(self.test_loader.index_array)]
         batch_choice = batch_choice[batch_choice>min(self.test_loader.index_array)]
         if batch_choice.shape[0] <= 1:
             self.test_done = True
         x,y = self.test_loader[batch_choice]
+        print('end',batch_choice)
         return x,y,batch_choice
 
     def ordered_batch(self):

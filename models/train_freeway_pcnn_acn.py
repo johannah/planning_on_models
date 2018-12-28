@@ -26,180 +26,8 @@ from IPython import embed
 from lstm_utils import plot_losses
 from pixel_cnn import GatedPixelCNN
 from datasets import FreewayForwardDataset, DataLoader
+from acn import ConvVAE, PriorNetwork, acn_loss_function
 torch.manual_seed(394)
-
-"""
-\cite{acn} The ACN encoder was a convolutional
-network fashioned after a VGG-style classifier (Simonyan
-& Zisserman, 2014), and the encoding distribution q(z|x)
-was a unit variance Gaussian with mean specified by the
-output of the encoder network.
-size of z is 16 for mnist, 128 for others
-"""
-class ConvVAE(nn.Module):
-    def __init__(self, code_len, input_size=1):
-        super(ConvVAE, self).__init__()
-        self.code_len = code_len
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels=input_size,
-                      out_channels=16,
-                      kernel_size=4,
-                      stride=2, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels=16,
-                      out_channels=32,
-                      kernel_size=4,
-                      stride=2, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels=32,
-                      out_channels=64,
-                      kernel_size=4,
-                      stride=2, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels=64,
-                      out_channels=code_len*2,
-                      kernel_size=1,
-                      stride=1, padding=0),
-            nn.BatchNorm2d(code_len*2),
-            nn.ReLU(True),
-           )
-        # found via experimentation - 4 for mnist
-        # input_image == 28 -> eo=7
-        self.eo=eo=encode_output_size = 10
-        self.fc21 = nn.Linear(code_len*2*eo*eo, code_len)
-        self.fc22 = nn.Linear(code_len*2*eo*eo, code_len)
-        self.fc3 = nn.Linear(code_len, code_len*2*eo*eo)
-
-        out_layer = nn.ConvTranspose2d(in_channels=16,
-                        out_channels=input_size,
-                        kernel_size=4,
-                        stride=2, padding=1)
-
-        # set bias to 0.5 for sigmoid
-        out_layer.bias.data.fill_(0.5)
-
-        #self.decoder = nn.Sequential(
-        #       nn.ConvTranspose2d(in_channels=code_len*2,
-        #              out_channels=32,
-        #              kernel_size=1,
-        #              stride=1, padding=0),
-        #        nn.BatchNorm2d(32),
-        #        nn.ReLU(True),
-        #        nn.ConvTranspose2d(in_channels=32,
-        #              out_channels=16,
-        #              kernel_size=4,
-        #              stride=2, padding=1),
-        #        nn.BatchNorm2d(16),
-        #        nn.ReLU(True),
-        #        out_layer
-        #             )
-
-    def encode(self, x):
-        o = self.encoder(x)
-        ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
-        return self.fc21(ol), self.fc22(ol)
-
-    #def decode(self, mu, logvar, y):
-    #    c = self.reparameterize(mu,logvar)
-    #    co = F.relu(self.fc3(c))
-    #    #col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
-    #    #embed()
-    #    #do = self.pcnn_decoder(y, float_condition=co)
-    #    #do = torch.sigmoid(do)
-    #    return co
-
-    def reparameterize(self, mu, logvar):
-        if self.training:
-            std = torch.exp(0.5*logvar)
-            eps = torch.randn_like(std)
-            o = eps.mul(std).add_(mu)
-            return o
-        else:
-            return mu
-
-    def forward(self, x):
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        co = F.relu(self.fc3(z))
-        return  co, mu, logvar
-
-def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
-    ''' reconstruction loss + coding cost
-     coding cost is the KL divergence bt posterior and conditional prior
-     Args:
-         y_hat: reconstruction output
-         y: target
-         u_q: mean of model posterior
-         s_q: log std of model posterior
-         u_p: mean of conditional prior
-         s_p: log std of conditional prior
-
-     Returns: loss
-     '''
-    BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
-    acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
-    return BCE+acn_KLD
-
-
-"""
-/cite{acn} The prior network was an
-MLP with three hidden layers each containing 512 tanh
-units, and skip connections from the input to all hidden
-layers and all hiddens to the output layer
-"""
-class PriorNetwork(nn.Module):
-    def __init__(self, size_training_set, code_length, n_hidden=512, k=5, random_seed=4543):
-        super(PriorNetwork, self).__init__()
-        self.rdn = np.random.RandomState(random_seed)
-        self.k = k
-        self.size_training_set = size_training_set
-        self.code_length = code_length
-        self.fc1 = nn.Linear(self.code_length, n_hidden)
-        self.fc2_u = nn.Linear(n_hidden, self.code_length)
-        self.fc2_s = nn.Linear(n_hidden, self.code_length)
-
-        self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
-        # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
-        codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
-        self.fit_knn(codes)
-
-    def fit_knn(self, codes):
-        ''' will reset the knn  given an nd array
-        '''
-        st = time.time()
-        self.codes = codes
-        assert(len(self.codes)>1)
-        y = np.zeros((len(self.codes)))
-        self.knn.fit(self.codes, y)
-
-    def batch_pick_close_neighbor(self, codes):
-        '''
-        :code latent activation of training example as np
-        '''
-        neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
-        bsize = neighbor_indexes.shape[0]
-        if self.training:
-            # randomly choose neighbor index from top k
-            chosen_neighbor_index = self.rdn.randint(0,neighbor_indexes.shape[1],size=bsize)
-        else:
-            chosen_neighbor_index = np.zeros((bsize), dtype=np.int)
-        return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]]
-
-    def forward(self, codes):
-        st = time.time()
-        np_codes = codes.cpu().detach().numpy()
-        previous_codes = self.batch_pick_close_neighbor(np_codes)
-        previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
-        return self.encode(previous_codes)
-
-    def encode(self, prev_code):
-        h1 = F.relu(self.fc1(prev_code))
-        mu = self.fc2_u(h1)
-        logstd = self.fc2_s(h1)
-        return mu, logstd
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
     info['train_losses'].append(avg_train_loss)
@@ -263,12 +91,12 @@ def train_acn(train_cnt):
         #for xx,i in enumerate(label):
         #    label_size[xx] = i
         data = data.to(DEVICE)
+        label = label.to(DEVICE)
         opt.zero_grad()
         z, u_q, s_q = encoder_model(data)
-        #yhat_batch = encoder_model.decode(u_q, s_q, data)
         # add the predicted codes to the input
         yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
-        prior_model.codes[data_index] = u_q.detach().cpu().numpy()
+        prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
         loss = acn_loss_function(yhat_batch, label, u_q, s_q, u_p, s_p)
@@ -280,8 +108,8 @@ def train_acn(train_cnt):
         handle_checkpointing(train_cnt, avg_train_loss)
         train_cnt+=len(data)
         batches+=1
-        if not batches%100:
-            print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
+        if not batches%1000:
+            print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
     return train_cnt
 
 def test_acn(train_cnt, do_plot):
@@ -290,12 +118,14 @@ def test_acn(train_cnt, do_plot):
     test_loss = 0
     print('starting test', train_cnt)
     st = time.time()
+    test_cnt = 0
     with torch.no_grad():
         i = 0
         #for i, (data, label, data_index) in enumerate(test_loader):
         data, label, data_index = data_loader.validation_data()
         lst = time.time()
         data = data.to(DEVICE)
+        label = label.to(DEVICE)
         z, u_q, s_q = encoder_model(data)
         #yhat_batch = encoder_model.decode(u_q, s_q, data)
         # add the predicted codes to the input
@@ -303,6 +133,7 @@ def test_acn(train_cnt, do_plot):
         u_p, s_p = prior_model(u_q)
         loss = acn_loss_function(yhat_batch, label, u_q, s_q, u_p, s_p)
         test_loss+= loss.item()
+        test_cnt += data.shape[0]
         if i == 0 and do_plot:
             print('writing img')
             n = min(data.size(0), 8)
@@ -314,26 +145,10 @@ def test_acn(train_cnt, do_plot):
             print('finished writing img', img_name)
         #print('loop test', i, time.time()-lst)
 
-    test_loss /= len(test_loader.dataset)
+    test_loss /= float(test_cnt)
     print('====> Test set loss: {:.4f}'.format(test_loss))
     print('finished test', time.time()-st)
     return test_loss
-
-#class IndexedDataset(Dataset):
-#    def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
-#        """ class to provide indexes into the data
-#        """
-#        self.indexed_dataset = dataset_function(path,
-#                             download=download,
-#                             train=train,
-#                             transform=transform)
-#
-#    def __getitem__(self, index):
-#        data, target = self.indexed_dataset[index]
-#        return data, target, index
-#
-#    def __len__(self):
-#        return len(self.indexed_dataset)
 
 def save_checkpoint(state, filename='model.pkl'):
     print("starting save of model %s" %filename)
@@ -346,13 +161,15 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='train acn for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
+    parser.add_argument('--savename', default='fpcnn_acn')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
-    parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=20000, type=int)
-    parser.add_argument('-le', '--log_every', default=10000, type=int)
+    parser.add_argument('-se', '--save_every', default=100000*3, type=int)
+    parser.add_argument('-pe', '--plot_every', default=100000, type=int)
+    parser.add_argument('-le', '--log_every', default=100000, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
+    parser.add_argument('-eos', '--encoder_output_size', default=1000, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=20, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
@@ -370,10 +187,10 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'pcnn_acn')
+    vae_base_filepath = os.path.join(config.model_savedir, args.savename)
 
-    train_data_file = os.path.join(config.base_datadir, 'freeway_train_00500.npz')
-    test_data_file = os.path.join(config.base_datadir, 'freeway_test_00150.npz')
+    train_data_file = os.path.join(config.base_datadir, 'freeway_train_01000_40x40.npz')
+    test_data_file = os.path.join(config.base_datadir, 'freeway_test_00300_40x40.npz')
 
     if args.data_augmented:
         # model that was used to create the forward predictions dataset
@@ -407,16 +224,6 @@ if __name__ == '__main__':
                                    batch_size=args.batch_size)
 
 
-#    train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-#                                train=True, download=True,
-#                                transform=transforms.ToTensor())
-#    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-#    test_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-#                               train=False, download=True,
-#                               transform=transforms.ToTensor())
-#    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
-
-
     info = {'train_cnts':[],
             'train_losses':[],
             'test_cnts':[],
@@ -431,15 +238,17 @@ if __name__ == '__main__':
     hsize = data_loader.train_loader.data.shape[1]
     wsize = data_loader.train_loader.data.shape[2]
 
-    encoder_model = ConvVAE(args.code_length, input_size=args.number_condition).to(DEVICE)
+    encoder_model = ConvVAE(args.code_length, input_size=args.number_condition,
+                            encoder_output_size=args.encoder_output_size).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=args.size_training_set,
-                               code_length=args.code_length, k=args.num_k).to(DEVICE)
+                               code_length=args.code_length, DEVICE=DEVICE,
+                               k=args.num_k).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
                                  dim=args.possible_values,
                                  n_layers=args.num_pcnn_layers,
                                  n_classes=args.num_classes,
-                                 float_condition_size=4000,
+                                 float_condition_size=args.encoder_output_size,
                                  last_layer_bias=0.5,
                                  hsize=hsize, wsize=wsize).to(DEVICE)
 

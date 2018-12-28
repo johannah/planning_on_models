@@ -26,7 +26,8 @@ class GatedActivation(nn.Module):
         return torch.tanh(x)*torch.sigmoid(y)
 
 class GatedMaskedConv2d(nn.Module):
-    def __init__(self, mask_type, dim, kernel, residual=True, n_classes=10, cond_size=None, float_condition_size=None):
+    def __init__(self, mask_type, dim, kernel, residual=True, n_classes=10,
+                 cond_size=None, float_condition_size=None, hsize=28, wsize=28):
         super(GatedMaskedConv2d, self).__init__()
         # ("Kernel size must be odd")
         assert (kernel % 2 == 1 )
@@ -37,8 +38,8 @@ class GatedMaskedConv2d(nn.Module):
         # "word" embedding
         self.dim = dim
 
-        self.hsize = 28
-        self.wsize = 28
+        self.hsize = hsize
+        self.wsize = wsize
 
         self.class_cond_embedding = nn.Embedding(n_classes, 2*dim)
         vkernel_shape = (kernel//2 + 1, kernel)
@@ -113,8 +114,12 @@ class GatedMaskedConv2d(nn.Module):
         return out_v, out_h
 
 class GatedPixelCNN(nn.Module):
-    def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=10, spatial_cond_size=None, float_condition_size=None, last_layer_bias=0.0):
+    def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=10,
+                 spatial_cond_size=None, float_condition_size=None,
+                 last_layer_bias=0.0, hsize=28, wsize=28):
         super(GatedPixelCNN, self).__init__()
+        self.hsize = hsize
+        self.wsize = wsize
         if spatial_cond_size is None:
             scond_size = 'na'
         else:
@@ -136,11 +141,16 @@ class GatedPixelCNN(nn.Module):
         self.layers.append(GatedMaskedConv2d(mask_type='A', dim=self.dim,
                            kernel=7, residual=False, n_classes=n_classes,
                                              cond_size=spatial_cond_size,
-                                             float_condition_size=float_condition_size))
+                                             float_condition_size=float_condition_size,
+                                             hsize=self.hsize, wsize=self.wsize))
         for i in range(1,n_layers):
             self.layers.append(GatedMaskedConv2d(mask_type='B', dim=self.dim,
-                           kernel=3, residual=True, n_classes=n_classes, cond_size=spatial_cond_size,
-                                                 float_condition_size=float_condition_size))
+                                                 kernel=3, residual=True,
+                                                 n_classes=n_classes,
+                                                 cond_size=spatial_cond_size,
+                                                 float_condition_size=float_condition_size,
+                                                hsize=self.hsize, wsize=self.wsize
+                                                 ))
 
         self.output_conv = nn.Sequential(
                                          nn.Conv2d(self.dim, 512, 1),

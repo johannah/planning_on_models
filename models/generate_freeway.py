@@ -6,7 +6,7 @@ import config
 import numpy as np
 from IPython import embed
 from config import freeway_gt_dir, freeway_test_frames_dir, freeway_train_frames_dir
-from datasets import prepare_img
+from datasets import prepare_img, prepare_img_small
 import imageio
 # it seems like with only 500 examples at 4-frame-skip,
 # the model doesn't generalize well -test performs poorly
@@ -23,7 +23,7 @@ env = gym.make('FreewayNoFrameskip-v4')
 last_o = env.reset()
 cnt =  0
 test_cnt = 0
-h, w = 80,80
+h, w = 40,40
 frame_skip = 4
 
 
@@ -42,7 +42,7 @@ def get_data(env, num_frames, last_o):
         env, last_o = take_null_steps(env, frame_skip, last_o)
         o, r, done, info = env.step(0)
         max_o = np.maximum(last_o, o)
-        chicken,out = prepare_img(max_o)
+        chicken,out = prepare_img_small(max_o)
         data_array[idx] = out
         if done:
             last_o = env.reset()
@@ -56,8 +56,8 @@ last_o=env.reset()
 
 env, last_o = take_null_steps(env, 14, last_o)
 env,test_data =  get_data(env, num_test, last_o)
-train_name = os.path.join(config.base_datadir,'freeway_train_%05d.npz'%num_train)
-test_name =  os.path.join(config.base_datadir,'freeway_test_%05d.npz'%num_test)
+train_name = os.path.join(config.base_datadir,'freeway_train_%05d_%02dx%02d.npz'%(num_train,h,w))
+test_name =  os.path.join(config.base_datadir,'freeway_test_%05d_%02dx%02d.npz'%(num_test,h,w))
 np.savez(train_name, train_data)
 np.savez(test_name, test_data)
 

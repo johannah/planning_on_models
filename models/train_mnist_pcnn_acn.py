@@ -379,7 +379,7 @@ if __name__ == '__main__':
     args.size_training_set = len(train_data)
 
     vae_model = ConvVAE(args.code_length, input_size=1).to(DEVICE)
-    prior_model = PriorNetwork(size_training_set=size_training_set,
+    prior_model = PriorNetwork(size_training_set=args.size_training_set,
                                code_length=args.code_length, k=args.num_k).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,

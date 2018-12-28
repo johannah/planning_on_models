@@ -426,8 +426,6 @@ if __name__ == '__main__':
         label = o[1]
         data = o[0][None]
         z, u_q, s_q = encoder_model(data)
-        # give one example at a time, because that is what our generator can
-        # handle
         print('generating sample: %s' %num_samples)
 
         canvas = 0.0*data

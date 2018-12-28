@@ -205,6 +205,10 @@ if __name__ == '__main__':
             if not os.path.exists(i):
                 print('augmented data file', i, 'does not exist')
                 embed()
+    else:
+        aug_train_data_file = "None"
+        aug_test_data_file = "None"
+
 
     train_data_function = FreewayForwardDataset(
                                    train_data_file,
