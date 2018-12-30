@@ -56,10 +56,10 @@ class ConvVAE(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU(True),
             nn.Conv2d(in_channels=64,
-                      out_channels=code_len*2,
+                      out_channels=code_len,
                       kernel_size=1,
                       stride=1, padding=0),
-            nn.BatchNorm2d(code_len*2),
+            nn.BatchNorm2d(code_len),
             nn.ReLU(True),
            )
         # found via experimentation - 4 for mnist
@@ -67,21 +67,11 @@ class ConvVAE(nn.Module):
         # encoder_output_size will vary based on input
         self.eo = encoder_output_size
         self.fc21 = nn.Linear(self.eo, code_len)
-        self.fc22 = nn.Linear(self.eo, code_len)
-        self.fc3 = nn.Linear(code_len, self.eo)
-
-        out_layer = nn.ConvTranspose2d(in_channels=16,
-                        out_channels=input_size,
-                        kernel_size=4,
-                        stride=2, padding=1)
-
-        # set bias to 0.5 for sigmoid
-        out_layer.bias.data.fill_(0.5)
 
     def encode(self, x):
         o = self.encoder(x)
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
-        return self.fc21(ol), softplus_fn(self.fc22(ol))+1e-4
+        return self.fc21(ol)
 
     def reparameterize(self, mu):
         if self.training:
@@ -92,12 +82,11 @@ class ConvVAE(nn.Module):
             return mu
 
     def forward(self, x):
-        mu, std = self.encode(x)
-        z = self.reparameterize(mu, std)
-        co = F.relu(self.fc3(z))
-        return  co, mu, std
+        mu = self.encode(x)
+        z = self.reparameterize(mu)
+        return z, mu
 
-def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
+def acn_loss_function(y_hat, y, u_q, u_p, s_p):
     ''' reconstruction loss + coding cost
      coding cost is the KL divergence bt posterior and conditional prior
      Args:
@@ -118,8 +107,10 @@ def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
     #acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
 
+    # our implementation of full loss
+    s_q = torch.ones_like(s_p)
     acn_KLD = torch.sum(torch.log(s_p)-torch.log(s_q) + 0.5*((s_q**2)/(s_p**2) + (((u_q-u_p)**2)/(s_p**2)) - 1.0))
-    #acn_KLD = torch.sum(torch.log(s_p)+((u_q-u_p)**2)/(2*(s_p**2)) -0.5 + 1.0/(2*s_p**2)
+
     return BCE+acn_KLD
 
 

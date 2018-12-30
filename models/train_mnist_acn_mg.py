@@ -20,6 +20,7 @@ import torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
+from datasets import IndexedDataset
 from acn_mg import ConvVAE, PriorNetwork, acn_loss_function
 import config
 from torchvision.utils import save_image
@@ -58,7 +59,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
         filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
         state = {
-                 'vae_state_dict':vae_model.state_dict(),
+                 'vae_state_dict':encoder_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
                  'pcnn_state_dict':pcnn_decoder.state_dict(),
                  'optimizer':opt.state_dict(),
@@ -77,7 +78,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
             handle_plot_ckpt(False, train_cnt, avg_train_loss)
 
 def train_acn(train_cnt):
-    vae_model.train()
+    encoder_model.train()
     prior_model.train()
     train_loss = 0
     init_cnt = train_cnt
@@ -88,14 +89,14 @@ def train_acn(train_cnt):
         #    label_size[xx] = i
         data = data.to(DEVICE)
         opt.zero_grad()
-        z, u_q, s_q = vae_model(data)
-        #yhat_batch = vae_model.decode(u_q, s_q, data)
+        z, u_q = encoder_model(data)
+        #yhat_batch = encoder_model.decode(u_q, s_q, data)
         # add the predicted codes to the input
         yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
         prior_model.codes[data_index] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
-        loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+        loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
         loss.backward()
         train_loss+= loss.item()
         opt.step()
@@ -107,7 +108,7 @@ def train_acn(train_cnt):
     return train_cnt
 
 def test_acn(train_cnt, do_plot):
-    vae_model.eval()
+    encoder_model.eval()
     prior_model.eval()
     test_loss = 0
     print('starting test', train_cnt)
@@ -117,12 +118,12 @@ def test_acn(train_cnt, do_plot):
         for i, (data, label, data_index) in enumerate(test_loader):
             lst = time.time()
             data = data.to(DEVICE)
-            z, u_q, s_q = vae_model(data)
-            #yhat_batch = vae_model.decode(u_q, s_q, data)
+            z, u_q = encoder_model(data)
+            #yhat_batch = encoder_model.decode(u_q, s_q, data)
             # add the predicted codes to the input
             yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
             u_p, s_p = prior_model(u_q)
-            loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+            loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
             test_loss+= loss.item()
             if i == 0 and do_plot:
                 print('writing img')
@@ -140,22 +141,6 @@ def test_acn(train_cnt, do_plot):
     print('finished test', time.time()-st)
     return test_loss
 
-class IndexedDataset(Dataset):
-    def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
-        """ class to provide indexes into the data
-        """
-        self.indexed_dataset = dataset_function(path,
-                             download=download,
-                             train=train,
-                             transform=transform)
-
-    def __getitem__(self, index):
-        data, target = self.indexed_dataset[index]
-        return data, target, index
-
-    def __len__(self):
-        return len(self.indexed_dataset)
-
 def save_checkpoint(state, filename='model.pkl'):
     print("starting save of model %s" %filename)
     torch.save(state, filename)
@@ -168,19 +153,19 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=20000, type=int)
-    parser.add_argument('-le', '--log_every', default=10000, type=int)
+    parser.add_argument('-pe', '--plot_every', default=60000*10, type=int)
+    parser.add_argument('-le', '--log_every', default=60000*5, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
-    parser.add_argument('-cl', '--code_length', default=20, type=int)
+    parser.add_argument('-cl', '--code_length', default=128, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-5)
     parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-nc', '--num_classes', default=10)
-    parser.add_argument('-eos', '--encoder_output_size', default=360)
+    parser.add_argument('-eos', '--encoder_output_size', default=1152)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
 
     args = parser.parse_args()
@@ -189,7 +174,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'acn_mp')
+    vae_base_filepath = os.path.join(config.model_savedir, 'ns_mp')
     train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())
@@ -213,7 +198,7 @@ if __name__ == '__main__':
 
     args.size_training_set = len(train_data)
     nchans,hsize,wsize = test_loader.dataset[0][0].shape
-    vae_model = ConvVAE(args.code_length, input_size=1,
+    encoder_model = ConvVAE(args.code_length, input_size=1,
                         encoder_output_size=args.encoder_output_size).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=args.size_training_set,
                                code_length=args.code_length, DEVICE=DEVICE,
@@ -223,10 +208,10 @@ if __name__ == '__main__':
                                       dim=args.possible_values,
                                       n_layers=args.num_pcnn_layers,
                                       n_classes=args.num_classes,
-                                      float_condition_size=args.encoder_output_size,
+                                      float_condition_size=args.code_length,
                                       last_layer_bias=0.5, hsize=hsize, wsize=wsize).to(DEVICE)
 
-    parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+    parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     train_cnt = 0
     while train_cnt < args.num_examples_to_train:
