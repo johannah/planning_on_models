@@ -9,6 +9,8 @@ from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
 import matplotlib.pyplot as plt
+from torchvision import datasets, transforms
+
 oy = 15
 # height - oyb
 ox = 9
@@ -259,14 +261,12 @@ class DataLoader():
 
     def validation_ordered_batch(self):
         batch_choice = np.arange(self.last_test_batch_idx, self.last_test_batch_idx+self.batch_size)
-        print(batch_choice)
         self.last_test_batch_idx += self.batch_size
         batch_choice = batch_choice[batch_choice<max(self.test_loader.index_array)]
         batch_choice = batch_choice[batch_choice>min(self.test_loader.index_array)]
         if batch_choice.shape[0] <= 1:
             self.test_done = True
         x,y = self.test_loader[batch_choice]
-        print('end',batch_choice)
         return x,y,batch_choice
 
     def ordered_batch(self):
@@ -283,6 +283,29 @@ class DataLoader():
         batch_choice = self.train_rdn.choice(self.train_loader.index_array, self.batch_size, replace=False)
         x,y = self.train_loader[batch_choice]
         return x,y,batch_choice
+
+class IndexedDataset(Dataset):
+    def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
+        """ class to provide indexes into the data
+        """
+        self.indexed_dataset = dataset_function(path,
+                             download=download,
+                             train=train,
+                             transform=transform)
+
+    def __getitem__(self, index):
+        data, target = self.indexed_dataset[index]
+        return data, target, index
+
+    def __len__(self):
+        return len(self.indexed_dataset)
+
+def save_checkpoint(state, filename='model.pkl'):
+    print("starting save of model %s" %filename)
+    torch.save(state, filename)
+    print("finished save of model %s" %filename)
+
+
 
 
 #

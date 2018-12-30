@@ -23,7 +23,7 @@ import config
 from torchvision.utils import save_image
 from IPython import embed
 torch.manual_seed(394)
-
+softplus_fn = torch.nn.Softplus()
 """
 \cite{acn} The ACN encoder was a convolutional
 network fashioned after a VGG-style classifier (Simonyan
@@ -81,22 +81,21 @@ class ConvVAE(nn.Module):
     def encode(self, x):
         o = self.encoder(x)
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
-        return self.fc21(ol), self.fc22(ol)
+        return self.fc21(ol), softplus_fn(self.fc22(ol))+1e-4
 
-    def reparameterize(self, mu, logvar):
+    def reparameterize(self, mu):
         if self.training:
-            std = torch.exp(0.5*logvar)
-            eps = torch.randn_like(std)
-            o = eps.mul(std).add_(mu)
+            eps = torch.randn_like(mu)
+            o = eps.add_(mu)
             return o
         else:
             return mu
 
     def forward(self, x):
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
+        mu, std = self.encode(x)
+        z = self.reparameterize(mu, std)
         co = F.relu(self.fc3(z))
-        return  co, mu, logvar
+        return  co, mu, std
 
 def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     ''' reconstruction loss + coding cost
@@ -105,14 +104,22 @@ def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
          y_hat: reconstruction output
          y: target
          u_q: mean of model posterior
-         s_q: log std of model posterior
+         s_q: std deviation
          u_p: mean of conditional prior
-         s_p: log std of conditional prior
+         s_p: std of conditional prior
 
      Returns: loss
      '''
+    # s_p, s_q used to be logvar, but we did softplus on them - now strictly
+    # positive
+
+    #BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
+    #acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
     BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
-    acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
+    #acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
+
+    acn_KLD = torch.sum(torch.log(s_p)-torch.log(s_q) + 0.5*((s_q**2)/(s_p**2) + (((u_q-u_p)**2)/(s_p**2)) - 1.0))
+    #acn_KLD = torch.sum(torch.log(s_p)+((u_q-u_p)**2)/(2*(s_p**2)) -0.5 + 1.0/(2*s_p**2)
     return BCE+acn_KLD
 
 
@@ -171,6 +178,7 @@ class PriorNetwork(nn.Module):
     def encode(self, prev_code):
         h1 = F.relu(self.fc1(prev_code))
         mu = self.fc2_u(h1)
-        logstd = self.fc2_s(h1)
-        return mu, logstd
+        std = self.fc2_s(h1)
+        return mu, softplus_fn(std)+1e-4
+
 

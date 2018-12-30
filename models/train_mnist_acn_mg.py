@@ -20,180 +20,13 @@ import torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
-#from acn import ConvVAE, PriorNetwork
+from acn_mg import ConvVAE, PriorNetwork, acn_loss_function
 import config
 from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_losses
 from pixel_cnn import GatedPixelCNN
 torch.manual_seed(394)
-
-"""
-\cite{acn} The ACN encoder was a convolutional
-network fashioned after a VGG-style classifier (Simonyan
-& Zisserman, 2014), and the encoding distribution q(z|x)
-was a unit variance Gaussian with mean specified by the
-output of the encoder network.
-size of z is 16 for mnist, 128 for others
-"""
-class ConvVAE(nn.Module):
-    def __init__(self, code_len, input_size=1, encoder_output_size=1000):
-        super(ConvVAE, self).__init__()
-        self.code_len = code_len
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels=input_size,
-                      out_channels=16,
-                      kernel_size=4,
-                      stride=2, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels=16,
-                      out_channels=32,
-                      kernel_size=4,
-                      stride=2, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels=32,
-                      out_channels=code_len*2,
-                      kernel_size=1,
-                      stride=1, padding=0),
-            nn.BatchNorm2d(code_len*2),
-            nn.ReLU(True),
-           )
-        # found via experimentation - 3 for mnist
-        # input_image == 28 -> eo=7
-        self.eo = eo = encoder_output_size
-        self.fc21 = nn.Linear(eo, code_len)
-        self.fc22 = nn.Linear(eo, code_len)
-        self.fc3 = nn.Linear(code_len, eo)
-
-        out_layer = nn.ConvTranspose2d(in_channels=16,
-                        out_channels=input_size,
-                        kernel_size=4,
-                        stride=2, padding=1)
-
-        # set bias to 0.5 for sigmoid
-        out_layer.bias.data.fill_(0.5)
-
-        #self.decoder = nn.Sequential(
-        #       nn.ConvTranspose2d(in_channels=code_len*2,
-        #              out_channels=32,
-        #              kernel_size=1,
-        #              stride=1, padding=0),
-        #        nn.BatchNorm2d(32),
-        #        nn.ReLU(True),
-        #        nn.ConvTranspose2d(in_channels=32,
-        #              out_channels=16,
-        #              kernel_size=4,
-        #              stride=2, padding=1),
-        #        nn.BatchNorm2d(16),
-        #        nn.ReLU(True),
-        #        out_layer
-        #             )
-
-    def encode(self, x):
-        o = self.encoder(x)
-        ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
-        return self.fc21(ol), self.fc22(ol)
-
-    #def decode(self, mu, logvar, y):
-    #    c = self.reparameterize(mu,logvar)
-    #    co = F.relu(self.fc3(c))
-    #    #col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
-    #    #embed()
-    #    #do = self.pcnn_decoder(y, float_condition=co)
-    #    #do = torch.sigmoid(do)
-    #    return co
-
-    def reparameterize(self, mu, logvar):
-        if self.training:
-            std = torch.exp(0.5*logvar)
-            eps = torch.randn_like(std)
-            o = eps.mul(std).add_(mu)
-            return o
-        else:
-            return mu
-
-    def forward(self, x):
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        co = F.relu(self.fc3(z))
-        return  co, mu, logvar
-
-def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
-    ''' reconstruction loss + coding cost
-     coding cost is the KL divergence bt posterior and conditional prior
-     Args:
-         y_hat: reconstruction output
-         y: target
-         u_q: mean of model posterior
-         s_q: log std of model posterior
-         u_p: mean of conditional prior
-         s_p: log std of conditional prior
-
-     Returns: loss
-     '''
-    BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
-    acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
-    return BCE+acn_KLD
-
-
-"""
-/cite{acn} The prior network was an
-MLP with three hidden layers each containing 512 tanh
-units, and skip connections from the input to all hidden
-layers and all hiddens to the output layer
-"""
-class PriorNetwork(nn.Module):
-    def __init__(self, size_training_set, code_length, n_hidden=512, k=5, random_seed=4543):
-        super(PriorNetwork, self).__init__()
-        self.rdn = np.random.RandomState(random_seed)
-        self.k = k
-        self.size_training_set = size_training_set
-        self.code_length = code_length
-        self.fc1 = nn.Linear(self.code_length, n_hidden)
-        self.fc2_u = nn.Linear(n_hidden, self.code_length)
-        self.fc2_s = nn.Linear(n_hidden, self.code_length)
-
-        self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
-        # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
-        codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
-        self.fit_knn(codes)
-
-    def fit_knn(self, codes):
-        ''' will reset the knn  given an nd array
-        '''
-        st = time.time()
-        self.codes = codes
-        assert(len(self.codes)>1)
-        y = np.zeros((len(self.codes)))
-        self.knn.fit(self.codes, y)
-
-    def batch_pick_close_neighbor(self, codes):
-        '''
-        :code latent activation of training example as np
-        '''
-        neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
-        bsize = neighbor_indexes.shape[0]
-        if self.training:
-            # randomly choose neighbor index from top k
-            chosen_neighbor_index = self.rdn.randint(0,neighbor_indexes.shape[1],size=bsize)
-        else:
-            chosen_neighbor_index = np.zeros((bsize), dtype=np.int)
-        return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]]
-
-    def forward(self, codes):
-        st = time.time()
-        np_codes = codes.cpu().detach().numpy()
-        previous_codes = self.batch_pick_close_neighbor(np_codes)
-        previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
-        return self.encode(previous_codes)
-
-    def encode(self, prev_code):
-        h1 = F.relu(self.fc1(prev_code))
-        mu = self.fc2_u(h1)
-        logstd = self.fc2_s(h1)
-        return mu, logstd
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
     info['train_losses'].append(avg_train_loss)
@@ -347,7 +180,7 @@ if __name__ == '__main__':
     parser.add_argument('-lr', '--learning_rate', default=1e-5)
     parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-nc', '--num_classes', default=10)
-    parser.add_argument('-eos', '--encoder_output_size', default=1960)
+    parser.add_argument('-eos', '--encoder_output_size', default=360)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
 
     args = parser.parse_args()
@@ -356,7 +189,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'pcnn_acn')
+    vae_base_filepath = os.path.join(config.model_savedir, 'acn_mp')
     train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())
@@ -379,17 +212,19 @@ if __name__ == '__main__':
              }
 
     args.size_training_set = len(train_data)
-
-    vae_model = ConvVAE(args.code_length, input_size=1).to(DEVICE)
+    nchans,hsize,wsize = test_loader.dataset[0][0].shape
+    vae_model = ConvVAE(args.code_length, input_size=1,
+                        encoder_output_size=args.encoder_output_size).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=args.size_training_set,
-                               code_length=args.code_length, k=args.num_k).to(DEVICE)
+                               code_length=args.code_length, DEVICE=DEVICE,
+                               k=args.num_k).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
                                       dim=args.possible_values,
                                       n_layers=args.num_pcnn_layers,
                                       n_classes=args.num_classes,
-                                      float_condition_size=1960,
-                                      last_layer_bias=0.5).to(DEVICE)
+                                      float_condition_size=args.encoder_output_size,
+                                      last_layer_bias=0.5, hsize=hsize, wsize=wsize).to(DEVICE)
 
     parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)

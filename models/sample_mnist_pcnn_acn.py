@@ -24,6 +24,7 @@ import torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
+from datasets import IndexedDataset
 import config
 from torchvision.utils import save_image
 from IPython import embed
@@ -148,56 +149,56 @@ MLP with three hidden layers each containing 512 tanh
 units, and skip connections from the input to all hidden
 layers and all hiddens to the output layer
 """
-class PriorNetwork(nn.Module):
-    def __init__(self, size_training_set, code_length, n_hidden=512, k=5, random_seed=4543):
-        super(PriorNetwork, self).__init__()
-        self.rdn = np.random.RandomState(random_seed)
-        self.k = k
-        self.size_training_set = size_training_set
-        self.code_length = code_length
-        self.fc1 = nn.Linear(self.code_length, n_hidden)
-        self.fc2_u = nn.Linear(n_hidden, self.code_length)
-        self.fc2_s = nn.Linear(n_hidden, self.code_length)
-
-        self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
-        # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
-        codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
-        self.fit_knn(codes)
-
-    def fit_knn(self, codes):
-        ''' will reset the knn  given an nd array
-        '''
-        st = time.time()
-        self.codes = codes
-        assert(len(self.codes)>1)
-        y = np.zeros((len(self.codes)))
-        self.knn.fit(self.codes, y)
-
-    def batch_pick_close_neighbor(self, codes):
-        '''
-        :code latent activation of training example as np
-        '''
-        neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
-        bsize = neighbor_indexes.shape[0]
-        if self.training:
-            # randomly choose neighbor index from top k
-            chosen_neighbor_index = self.rdn.randint(0,neighbor_indexes.shape[1],size=bsize)
-        else:
-            chosen_neighbor_index = np.zeros((bsize), dtype=np.int)
-        return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]]
-
-    def forward(self, codes):
-        st = time.time()
-        np_codes = codes.cpu().detach().numpy()
-        previous_codes = self.batch_pick_close_neighbor(np_codes)
-        previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
-        return self.encode(previous_codes)
-
-    def encode(self, prev_code):
-        h1 = F.relu(self.fc1(prev_code))
-        mu = self.fc2_u(h1)
-        logstd = self.fc2_s(h1)
-        return mu, logstd
+#class PriorNetwork(nn.Module):
+#    def __init__(self, size_training_set, code_length, n_hidden=512, k=5, random_seed=4543):
+#        super(PriorNetwork, self).__init__()
+#        self.rdn = np.random.RandomState(random_seed)
+#        self.k = k
+#        self.size_training_set = size_training_set
+#        self.code_length = code_length
+#        self.fc1 = nn.Linear(self.code_length, n_hidden)
+#        self.fc2_u = nn.Linear(n_hidden, self.code_length)
+#        self.fc2_s = nn.Linear(n_hidden, self.code_length)
+#
+#        self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
+#        # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
+#        codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
+#        self.fit_knn(codes)
+#
+#    def fit_knn(self, codes):
+#        ''' will reset the knn  given an nd array
+#        '''
+#        st = time.time()
+#        self.codes = codes
+#        assert(len(self.codes)>1)
+#        y = np.zeros((len(self.codes)))
+#        self.knn.fit(self.codes, y)
+#
+#    def batch_pick_close_neighbor(self, codes):
+#        '''
+#        :code latent activation of training example as np
+#        '''
+#        neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
+#        bsize = neighbor_indexes.shape[0]
+#        if self.training:
+#            # randomly choose neighbor index from top k
+#            chosen_neighbor_index = self.rdn.randint(0,neighbor_indexes.shape[1],size=bsize)
+#        else:
+#            chosen_neighbor_index = np.zeros((bsize), dtype=np.int)
+#        return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]]
+#
+#    def forward(self, codes):
+#        st = time.time()
+#        np_codes = codes.cpu().detach().numpy()
+#        previous_codes = self.batch_pick_close_neighbor(np_codes)
+#        previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
+#        return self.encode(previous_codes)
+#
+#    def encode(self, prev_code):
+#        h1 = F.relu(self.fc1(prev_code))
+#        mu = self.fc2_u(h1)
+#        logstd = self.fc2_s(h1)
+#        return mu, logstd
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
     info['train_losses'].append(avg_train_loss)
@@ -253,7 +254,7 @@ def train_acn(train_cnt):
     train_loss = 0
     init_cnt = train_cnt
     st = time.time()
-    for batch_idx, (data, label, data_index) in enumerate(train_loader):
+    for idx, (data, label, data_index) in enumerate(train_loader):
         lst = time.time()
         #for xx,i in enumerate(label):
         #    label_size[xx] = i
@@ -310,28 +311,6 @@ def test_acn(train_cnt, do_plot):
     print('====> Test set loss: {:.4f}'.format(test_loss))
     print('finished test', time.time()-st)
     return test_loss
-
-class IndexedDataset(Dataset):
-    def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
-        """ class to provide indexes into the data
-        """
-        self.indexed_dataset = dataset_function(path,
-                             download=download,
-                             train=train,
-                             transform=transform)
-
-    def __getitem__(self, index):
-        data, target = self.indexed_dataset[index]
-        return data, target, index
-
-    def __len__(self):
-        return len(self.indexed_dataset)
-
-def save_checkpoint(state, filename='model.pkl'):
-    print("starting save of model %s" %filename)
-    torch.save(state, filename)
-    print("finished save of model %s" %filename)
-
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
