@@ -80,6 +80,29 @@ def gau_kl3(pm, pv, qm, qv):
     return 0.5 * (p1 + p2 + p3 - p4)
 
 
+def log_gau_kl3(pm, lpv, qm, lqv):
+    """
+    Kullback-Liebler divergence from Gaussians pm,pv to Gaussians qm,qv.
+    Diagonal covariances are assumed.  Divergence is expressed in nats.
+    returns KL of each G in pm, pv to all qm, qv
+    """
+    axis1 = 2
+    axis2 = 3
+    # Determinants of diagonal covariances pv, qv
+    dpv = lpv.sum(axis1)
+    dqv = lqv.sum(axis1)
+
+    # Inverse of diagonal covariance qv
+    iqv = -lqv
+    # Difference between means pm, qm
+    diff = qm[:, None] - pm[:, :, None]
+    p1 = dqv[:, None] - dpv[:, :, None]
+    p2 = torch.exp(torch.logsumexp(iqv[:, None] + lpv[:, :, None], dim=axis2))
+    p3 = (diff * torch.exp(iqv[:, None]) * diff).sum(axis2)
+    p4 = pm.shape[2]
+    return 0.5 * (p1 + p2 + p3 - p4)
+
+
 def create_mixture(n_dim, n_mixtures):
     this_mixture = []
     ws = []
@@ -172,9 +195,8 @@ for cnt, (a, b) in enumerate(itertools.product(mixtures, repeat=2)):
         kl = torch.sum(a_pis[bs] * torch.log(nums / dens))
         batch_kl.append(float(kl))
     # broadcast sum
-    nums = torch.sum(a_pis[:, None] * torch.exp(-gau_kl3(a_mus, a_vars, a_mus, a_vars)), dim=2)
-    print('nums', nums)
-    dens = torch.sum(b_pis[:, None] * torch.exp(-gau_kl3(a_mus, a_vars, b_mus, b_vars)), dim=2)
+    nums = torch.sum(a_pis[:, None] * torch.exp(-log_gau_kl3(a_mus, torch.log(a_vars), a_mus, torch.log(a_vars))), dim=2)
+    dens = torch.sum(b_pis[:, None] * torch.exp(-log_gau_kl3(a_mus, torch.log(a_vars), b_mus, torch.log(b_vars))), dim=2)
     kl = torch.sum(a_pis * torch.log(nums / dens), dim=1)
     key = "{}||{}".format(idx1, idx2)
     #klds[key] = kl

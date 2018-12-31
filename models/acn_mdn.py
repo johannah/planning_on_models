@@ -110,6 +110,28 @@ def gau_kl3(pm, pv, qm, qv):
     p4 = pm.shape[2]
     return 0.5 * (p1 + p2 + p3 - p4)
 
+def log_gau_kl3(pm, lpv, qm, lqv):
+    """
+    Kullback-Liebler divergence from Gaussians pm,pv to Gaussians qm,qv.
+    Diagonal covariances are assumed.  Divergence is expressed in nats.
+    returns KL of each G in pm, pv to all qm, qv
+    """
+    axis1 = 2
+    axis2 = 3
+    # Determinants of diagonal covariances pv, qv
+    dpv = lpv.sum(axis1)
+    dqv = lqv.sum(axis1)
+
+    # Inverse of diagonal covariance qv
+    iqv = -lqv
+    # Difference between means pm, qm
+    diff = qm[:, None] - pm[:, :, None]
+    p1 = dqv[:, None] - dpv[:, :, None]
+    p2 = torch.exp(torch.logsumexp(iqv[:, None] + lpv[:, :, None], dim=axis2))
+    p3 = (diff * torch.exp(iqv[:, None]) * diff).sum(axis2)
+    p4 = pm.shape[2]
+    return 0.5 * (p1 + p2 + p3 - p4)
+
 def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     ''' compare mdn with k=1 (u_q) to a true mdn
 
@@ -118,11 +140,12 @@ def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     pi_q = torch.ones_like(u_q[:,:1])
     # add channel for "1 mixture"
     u_q = u_q[:,None]
-    s_q = torch.ones_like(u_q)
+    # expect logstd of 1.0 which is 0.0
+    s_q = torch.zeros_like(u_q)
 
     # expects variance
-    kl3_num = torch.exp(-gau_kl3(u_q, s_q**2, u_q, s_q**2))
-    kl3_den = torch.exp(-gau_kl3(u_q, s_q**2, u_ps, s_ps**2))
+    kl3_num = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_q, 2*s_q))
+    kl3_den = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_ps, 2*s_ps))
     # Todo make sure this is the correct direction -
     # are there shortcuts since a is one mixture?
     nums = torch.sum(pi_q[:, None] * kl3_num, dim=2)
@@ -189,7 +212,7 @@ class PriorNetwork(nn.Module):
         # outputs
         # mean linear
         self.fc4_u = nn.Linear(n_hidden, self.n_mixtures*self.code_length)
-        # variance softplus
+        # log variance
         self.fc4_s = nn.Linear(n_hidden, self.n_mixtures*self.code_length)
         # m mixture softmax
         self.fc4_mix = nn.Linear(n_hidden, self.n_mixtures)
@@ -204,7 +227,8 @@ class PriorNetwork(nn.Module):
         h2 = torch.tanh(self.fc2(h1)) + self.s2(prev_code)
         h3 = torch.tanh(self.fc3(h2)) + self.s3(prev_code) + self.sf1(h1) + self.sf2(h2)
         means = self.fc4_u(h3)
-        sigmas = softplus(self.fc4_s(h3))
+        # todo change name - sigma is logvar
+        sigmas = self.fc4_s(h3)
         mixes = torch.softmax(self.fc4_mix(h3), dim=1)
         return mixes, means, sigmas
 

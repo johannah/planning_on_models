@@ -79,6 +79,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
             handle_plot_ckpt(False, train_cnt, avg_train_loss)
 
 def train_acn(train_cnt):
+    loss = 0
     encoder_model.train()
     prior_model.train()
     train_loss = 0
@@ -98,7 +99,11 @@ def train_acn(train_cnt):
         # add the predicted codes to the input
         yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
         prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
-        prior_model.fit_knn(prior_model.codes)
+        print(train_cnt, loss)
+        try:
+            prior_model.fit_knn(prior_model.codes)
+        except:
+            embed()
         mixtures, u_ps, s_ps = prior_model(u_q)
         loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures, u_ps, s_ps)
         loss.backward()
@@ -109,7 +114,7 @@ def train_acn(train_cnt):
         handle_checkpointing(train_cnt, avg_train_loss)
         train_cnt+=len(data)
         batches+=1
-        if not batches%1000:
+        if not batches%100:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
     return train_cnt
 
@@ -164,13 +169,13 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='train acn for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='fpcnn_acn')
+    parser.add_argument('--savename', default='flmdn')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
-    parser.add_argument('-se', '--save_every', default=100000*3, type=int)
-    parser.add_argument('-pe', '--plot_every', default=100000, type=int)
-    parser.add_argument('-le', '--log_every', default=100000, type=int)
+    parser.add_argument('-se', '--save_every', default=1000*30, type=int)
+    parser.add_argument('-pe', '--plot_every', default=1000*30, type=int)
+    parser.add_argument('-le', '--log_every', default=1000*10, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-eos', '--encoder_output_size', default=500, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
@@ -192,6 +197,7 @@ if __name__ == '__main__':
 
     vae_base_filepath = os.path.join(config.model_savedir, args.savename)
 
+    # TODO - change loss
     train_data_file = os.path.join(config.base_datadir, 'freeway_train_01000_40x40.npz')
     test_data_file = os.path.join(config.base_datadir, 'freeway_test_00300_40x40.npz')
 
