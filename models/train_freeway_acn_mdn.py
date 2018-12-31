@@ -19,6 +19,7 @@ from torch import nn, optim
 import torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
+from torch.nn.utils.clip_grad import clip_grad_value_
 #from torch.utils.data import Dataset, DataLoader
 import config
 from torchvision.utils import save_image
@@ -88,18 +89,18 @@ def train_acn(train_cnt):
     #for batch_idx, (data, label, data_index) in enumerate(train_loader):
     batches = 0
     while train_cnt < args.num_examples_to_train:
+        opt.zero_grad()
         lst = time.time()
         data, label, data_index = data_loader.next_batch()
         #for xx,i in enumerate(label):
         #    label_size[xx] = i
         data = data.to(DEVICE)
         label = label.to(DEVICE)
-        opt.zero_grad()
         z, u_q = encoder_model(data)
         # add the predicted codes to the input
         yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
         prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
-        print(train_cnt, loss)
+        #print(train_cnt, loss)
         try:
             prior_model.fit_knn(prior_model.codes)
         except:
@@ -107,6 +108,8 @@ def train_acn(train_cnt):
         mixtures, u_ps, s_ps = prior_model(u_q)
         loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures, u_ps, s_ps)
         loss.backward()
+        parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+        clip_grad_value_(parameters, 10)
         train_loss+= loss.item()
         opt.step()
         # add batch size because it hasn't been added to train cnt yet
@@ -169,7 +172,7 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='train acn for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='flmdn')
+    parser.add_argument('--savename', default='flgmdn')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
@@ -177,14 +180,14 @@ if __name__ == '__main__':
     parser.add_argument('-pe', '--plot_every', default=1000*30, type=int)
     parser.add_argument('-le', '--log_every', default=1000*10, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
-    parser.add_argument('-eos', '--encoder_output_size', default=500, type=int)
+    parser.add_argument('-eos', '--encoder_output_size', default=3000, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
-    parser.add_argument('-cl', '--code_length', default=20, type=int)
+    parser.add_argument('-cl', '--code_length', default=120, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-lr', '--learning_rate', default=1e-5)
+    parser.add_argument('-lr', '--learning_rate', default=1e-3)
     parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-nc', '--num_classes', default=10)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
