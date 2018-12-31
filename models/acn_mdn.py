@@ -23,7 +23,8 @@ import config
 from torchvision.utils import save_image
 from IPython import embed
 torch.manual_seed(394)
-softplus_fn = torch.nn.Softplus()
+softplus = torch.nn.Softplus()
+
 """
 \cite{acn} The ACN encoder was a convolutional
 network fashioned after a VGG-style classifier (Simonyan
@@ -71,6 +72,7 @@ class ConvVAE(nn.Module):
     def encode(self, x):
         o = self.encoder(x)
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
+        #print(o.shape, ol.shape)
         return self.fc21(ol)
 
     def reparameterize(self, mu):
@@ -86,6 +88,51 @@ class ConvVAE(nn.Module):
         z = self.reparameterize(mu)
         return z, mu
 
+def gau_kl3(pm, pv, qm, qv):
+    """
+    Kullback-Liebler divergence from Gaussians pm,pv to Gaussians qm,qv.
+    Diagonal covariances are assumed.  Divergence is expressed in nats.
+    returns KL of each G in pm, pv to all qm, qv
+    """
+    axis1 = 2
+    axis2 = 3
+    eps = 1E-3
+    # Determinants of diagonal covariances pv, qv
+    dpv = pv.prod(axis1)
+    dqv = qv.prod(axis1)
+    # Inverse of diagonal covariance qv
+    iqv = 1. / qv
+    # Difference between means pm, qm
+    diff = qm[:, None] - pm[:, :, None]
+    p1 = torch.log(dqv[:, None] / dpv[:, :, None])
+    p2 = (iqv[:, None] * pv[:, :, None]).sum(axis2)
+    p3 = (diff * iqv[:, None] * diff).sum(axis2)
+    p4 = pm.shape[2]
+    return 0.5 * (p1 + p2 + p3 - p4)
+
+def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
+    ''' compare mdn with k=1 (u_q) to a true mdn
+
+    '''
+    # create pi of 1.0 for every sample in minibatch
+    pi_q = torch.ones_like(u_q[:,:1])
+    # add channel for "1 mixture"
+    u_q = u_q[:,None]
+    s_q = torch.ones_like(u_q)
+
+    # expects variance
+    kl3_num = torch.exp(-gau_kl3(u_q, s_q**2, u_q, s_q**2))
+    kl3_den = torch.exp(-gau_kl3(u_q, s_q**2, u_ps, s_ps**2))
+    # Todo make sure this is the correct direction -
+    # are there shortcuts since a is one mixture?
+    nums = torch.sum(pi_q[:, None] * kl3_num, dim=2)
+    dens = torch.sum(pi_ps[:, None] * kl3_den, dim=2)
+    kl = torch.sum(pi_q * torch.log(nums / dens), dim=1)
+    sum_kl = kl.sum()
+    rec_loss = F.binary_cross_entropy(y_hat, y, reduction='sum')
+    return sum_kl+rec_loss
+
+
 def acn_loss_function(y_hat, y, u_q, u_p, s_p):
     ''' reconstruction loss + coding cost
      coding cost is the KL divergence bt posterior and conditional prior
@@ -99,7 +146,13 @@ def acn_loss_function(y_hat, y, u_q, u_p, s_p):
 
      Returns: loss
      '''
+    # s_p, s_q used to be logvar, but we did softplus on them - now strictly
+    # positive
+
+    #BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
+    #acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
     BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
+    #acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
 
     # our implementation of full loss
     s_q = torch.ones_like(s_p)
@@ -115,21 +168,45 @@ units, and skip connections from the input to all hidden
 layers and all hiddens to the output layer
 """
 class PriorNetwork(nn.Module):
-    def __init__(self, size_training_set, code_length, DEVICE, n_hidden=512, k=5, random_seed=4543):
+    def __init__(self, size_training_set, code_length, n_hidden=512, k=5, n_mixtures=8, random_seed=4543):
         super(PriorNetwork, self).__init__()
-        self.DEVICE = DEVICE
         self.rdn = np.random.RandomState(random_seed)
+        self.n_mixtures = n_mixtures
         self.k = k
         self.size_training_set = size_training_set
         self.code_length = code_length
         self.fc1 = nn.Linear(self.code_length, n_hidden)
-        self.fc2_u = nn.Linear(n_hidden, self.code_length)
-        self.fc2_s = nn.Linear(n_hidden, self.code_length)
+        self.fc2 = nn.Linear(n_hidden, n_hidden)
+        self.fc3 = nn.Linear(n_hidden, n_hidden)
+        # skip connections from input to all hidden layers
+        self.s1 = nn.Linear(self.code_length, n_hidden)
+        self.s2 = nn.Linear(self.code_length, n_hidden)
+        self.s3 = nn.Linear(self.code_length, n_hidden)
+        # skip connections from all hidden layers to output layer
+        self.sf1 = nn.Linear(n_hidden, n_hidden)
+        self.sf2 = nn.Linear(n_hidden, n_hidden)
+
+        # outputs
+        # mean linear
+        self.fc4_u = nn.Linear(n_hidden, self.n_mixtures*self.code_length)
+        # variance softplus
+        self.fc4_s = nn.Linear(n_hidden, self.n_mixtures*self.code_length)
+        # m mixture softmax
+        self.fc4_mix = nn.Linear(n_hidden, self.n_mixtures)
 
         self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
         # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
         codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
         self.fit_knn(codes)
+
+    def encode(self, prev_code):
+        h1 = torch.tanh(self.fc1(prev_code)) + self.s1(prev_code)
+        h2 = torch.tanh(self.fc2(h1)) + self.s2(prev_code)
+        h3 = torch.tanh(self.fc3(h2)) + self.s3(prev_code) + self.sf1(h1) + self.sf2(h2)
+        means = self.fc4_u(h3)
+        sigmas = softplus(self.fc4_s(h3))
+        mixes = torch.softmax(self.fc4_mix(h3), dim=1)
+        return mixes, means, sigmas
 
     def fit_knn(self, codes):
         ''' will reset the knn  given an nd array
@@ -144,6 +221,7 @@ class PriorNetwork(nn.Module):
         '''
         :code latent activation of training example as np
         '''
+        # TODO - force used neighbors out of codebook
         neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
         bsize = neighbor_indexes.shape[0]
         if self.training:
@@ -155,15 +233,14 @@ class PriorNetwork(nn.Module):
 
     def forward(self, codes):
         st = time.time()
+        DEVICE = codes.device
         np_codes = codes.cpu().detach().numpy()
         previous_codes, neighbor_indexes = self.batch_pick_close_neighbor(np_codes)
-        previous_codes = torch.FloatTensor(previous_codes).to(self.DEVICE)
-        return self.encode(previous_codes)
-
-    def encode(self, prev_code):
-        h1 = F.relu(self.fc1(prev_code))
-        mu = self.fc2_u(h1)
-        std = self.fc2_s(h1)
-        return mu, softplus_fn(std)+1e-4
+        previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
+        mixtures, mus, sigmas =  self.encode(previous_codes)
+        # output should be of shape (num_k, code_len) embed()
+        mus = mus.view(mus.shape[0], self.n_mixtures, self.code_length)
+        sigmas = sigmas.view(sigmas.shape[0], self.n_mixtures, self.code_length)
+        return mixtures, mus, sigmas
 
 
