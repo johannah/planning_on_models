@@ -150,9 +150,16 @@ def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     # are there shortcuts since a is one mixture?
     nums = torch.sum(pi_q[:, None] * kl3_num, dim=2)
     dens = torch.sum(pi_ps[:, None] * kl3_den, dim=2)
-    kl = torch.sum(pi_q * torch.log(nums / dens), dim=1)
-    sum_kl = kl.sum()
+    kl = pi_q * torch.log(nums / dens)
+    sum_kl = torch.clamp(kl, 1./float(u_ps.shape[0]), 100).sum()
     rec_loss = F.binary_cross_entropy(y_hat, y, reduction='sum')
+    if np.isinf(sum_kl.cpu().detach().numpy()) or np.isnan(sum_kl.cpu().detach().numpy()):
+        print('sum_kl', sum_kl, 'rec', rec_loss)
+        embed()
+    if np.isinf(rec_loss.cpu().detach().numpy()) or np.isnan(rec_loss.cpu().detach().numpy()):
+        print('sum_kl', sum_kl, 'rec', rec_loss)
+        embed()
+    # inf before train_cnt cnt 1574400
     return sum_kl+rec_loss
 
 

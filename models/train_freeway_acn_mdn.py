@@ -100,6 +100,7 @@ def train_acn(train_cnt):
         # add the predicted codes to the input
         yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
         prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
+        #  inf happens sometime after 0001,680,896
         #print(train_cnt, loss)
         try:
             prior_model.fit_knn(prior_model.codes)
@@ -117,7 +118,7 @@ def train_acn(train_cnt):
         handle_checkpointing(train_cnt, avg_train_loss)
         train_cnt+=len(data)
         batches+=1
-        if not batches%100:
+        if not batches%10:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
     return train_cnt
 
@@ -172,12 +173,12 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='train acn for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='flgmdn')
+    parser.add_argument('--savename', default='f2mdn')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
-    parser.add_argument('-se', '--save_every', default=1000*30, type=int)
-    parser.add_argument('-pe', '--plot_every', default=1000*30, type=int)
+    parser.add_argument('-se', '--save_every', default=1000*20, type=int)
+    parser.add_argument('-pe', '--plot_every', default=1000*20, type=int)
     parser.add_argument('-le', '--log_every', default=1000*10, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-eos', '--encoder_output_size', default=3000, type=int)
@@ -191,7 +192,7 @@ if __name__ == '__main__':
     parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-nc', '--num_classes', default=10)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
-    parser.add_argument('-nm', '--num_mixtures', default=16, type=int)
+    parser.add_argument('-nm', '--num_mixtures', default=2, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
