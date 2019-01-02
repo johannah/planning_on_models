@@ -152,6 +152,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train vq-vae for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
+    parser.add_argument('-uniq', '--require_unique_codes', default=False, type=bool)
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=60000*10, type=int)
     parser.add_argument('-le', '--log_every', default=60000*5, type=int)
@@ -202,7 +203,8 @@ if __name__ == '__main__':
                         encoder_output_size=args.encoder_output_size).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=args.size_training_set,
                                code_length=args.code_length, DEVICE=DEVICE,
-                               k=args.num_k).to(DEVICE)
+                               k=args.num_k,
+                               require_unique_codes=args.require_unique_codes).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
                                       dim=args.possible_values,
