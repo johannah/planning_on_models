@@ -146,7 +146,7 @@ def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
 
     # expects variance
     #kl3_num = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_q, 2*s_q))
-    kl3_num = torch.ones((batch_size, 1, 1), torch.float)
+    kl3_num=torch.ones((batch_size, 1, 1), dtype=torch.float, device=s_ps.device)
     kl3_den = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_ps, 2*s_ps))
     # Todo make sure this is the correct direction -
     # are there shortcuts since a is one mixture?
@@ -340,7 +340,7 @@ class PriorNetwork(nn.Module):
         st = time.time()
         DEVICE = codes.device
         np_codes = codes.cpu().detach().numpy()
-        previous_codes, neighbor_indexes = self.batch_pick_unique_close_neighbor(np_codes)
+        previous_codes, neighbor_indexes = self.batch_pick_close_neighbor(np_codes)
         previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
         mixtures, mus, sigmas =  self.encode(previous_codes)
         # output should be of shape (num_k, code_len) embed()
