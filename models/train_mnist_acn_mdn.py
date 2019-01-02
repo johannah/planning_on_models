@@ -176,6 +176,7 @@ if __name__ == '__main__':
     parser.add_argument('-le', '--log_every', default=60000*1, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-nm', '--num_mixtures', default=8, type=int)
+    parser.add_argument('-uniq', '--require_unique_codes', default=False, type=bool)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=48, type=int)
@@ -230,7 +231,8 @@ if __name__ == '__main__':
     prior_model = PriorNetwork(size_training_set=args.size_training_set,
                                code_length=args.code_length,
                                n_mixtures=args.num_mixtures,
-                               k=args.num_k).to(DEVICE)
+                               k=args.num_k,
+                               require_unique_codes=args.require_unique_codes).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
                                       dim=args.possible_values,
