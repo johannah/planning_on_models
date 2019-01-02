@@ -34,7 +34,7 @@ torch.manual_seed(394)
 torch.set_num_threads(1)
 
 def sample_batch(data, label, batch_idx, name):
-    z, u_q, s_q = encoder_model(data)
+    z, u_q = encoder_model(data)
     print('generating %s images' %(data.shape[0]))
     print(batch_idx)
     if args.teacher_force:

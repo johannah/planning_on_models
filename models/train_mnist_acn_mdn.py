@@ -170,7 +170,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train vq-vae for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-sn', '--savename', default='meanloggau')
+    parser.add_argument('-sn', '--savename', default='meannologgau')
     parser.add_argument('-se', '--save_every', default=60000*3, type=int)
     parser.add_argument('-pe', '--plot_every', default=60000*1, type=int)
     parser.add_argument('-le', '--log_every', default=60000*1, type=int)

@@ -74,10 +74,10 @@ def pca_batch(loader, name):
     for data, label, idx in loader:
         z, u_q = encoder_model(data)
         if not total:
-            X = z.detach().numpy()
+            X = u_q.detach().numpy()
             y = label.detach().numpy()
         else:
-            X = np.vstack((X, z.detach().numpy()))
+            X = np.vstack((X, u_q.detach().numpy()))
             y = np.hstack((y, label.detach().numpy()))
         total+=data.shape[0]
         if total > args.max_plot:
