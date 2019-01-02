@@ -209,6 +209,10 @@ class PriorNetwork(nn.Module):
         super(PriorNetwork, self).__init__()
         self.rdn = np.random.RandomState(random_seed)
         self.require_unique_codes = require_unique_codes
+        if self.require_unique_codes:
+            self.pick_neighbor = self.batch_pick_unique_close_neighbor
+        else:
+            self.pick_neighbor = self.batch_pick_close_neighbor
         self.n_mixtures = n_mixtures
         self.k = k
         self.size_training_set = size_training_set
@@ -327,20 +331,16 @@ class PriorNetwork(nn.Module):
                 self.add_used(cc)
             return np.array(chosen_codes), np.array(all_neighbor_indexes)
         else:
-            # TODO - force used neighbors out of codebook
             neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
             bsize = neighbor_indexes.shape[0]
             chosen_neighbor_index = np.zeros((bsize), dtype=np.int)
             return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]], neighbor_indexes
 
-
-        #return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]], neighbor_indexes
-
     def forward(self, codes):
         st = time.time()
         DEVICE = codes.device
         np_codes = codes.cpu().detach().numpy()
-        previous_codes, neighbor_indexes = self.batch_pick_close_neighbor(np_codes)
+        previous_codes, neighbor_indexes = self.pick_neighbor(np_codes)
         previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
         mixtures, mus, sigmas =  self.encode(previous_codes)
         # output should be of shape (num_k, code_len) embed()

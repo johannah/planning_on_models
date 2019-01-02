@@ -63,6 +63,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
                  'prior_state_dict':prior_model.state_dict(),
                  'pcnn_state_dict':pcnn_decoder.state_dict(),
                  'optimizer':opt.state_dict(),
+                 'codes':prior_model.codes,
                  'info':info,
                  }
         save_checkpoint(state, filename=filename)
