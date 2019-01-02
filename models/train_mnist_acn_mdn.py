@@ -20,6 +20,7 @@ import torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.clip_grad import clip_grad_value_
 from datasets import IndexedDataset
 from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
 import config
@@ -44,7 +45,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
         if len(info['train_losses'])<rolling*3:
             rolling = 1
         print('adding last loss plot', train_cnt)
-        plot_name = vae_base_filepath + "_%010dloss.png"%train_cnt
+        plot_name = model_base_filepath + "_%010dloss.png"%train_cnt
         print('plotting loss: %s with %s points'%(plot_name, len(info['train_cnts'])))
         plot_losses(info['train_cnts'],
                     info['train_losses'],
@@ -57,7 +58,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
+        filename = model_base_filepath + "_%010dex.pkl"%train_cnt
         state = {
                  'vae_state_dict':encoder_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
@@ -79,33 +80,42 @@ def handle_checkpointing(train_cnt, avg_train_loss):
             handle_plot_ckpt(False, train_cnt, avg_train_loss)
 
 def train_acn(train_cnt):
-    encoder_model.train()
-    prior_model.train()
     train_loss = 0
     init_cnt = train_cnt
     st = time.time()
     for batch_idx, (data, label, data_index) in enumerate(train_loader):
+        encoder_model.train()
+        prior_model.train()
+        pcnn_decoder.train()
         lst = time.time()
-        #for xx,i in enumerate(label):
-        #    label_size[xx] = i
         data = data.to(DEVICE)
         opt.zero_grad()
         z, u_q = encoder_model(data)
         #yhat_batch = encoder_model.decode(u_q, s_q, data)
         # add the predicted codes to the input
         yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
-        prior_model.codes[data_index] = u_q.detach().cpu().numpy()
-        prior_model.fit_knn(prior_model.codes)
+
+        np_uq = u_q.detach().cpu().numpy()
+        if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
+            print('train bad')
+            embed()
+        prior_model.codes[data_index] = np_uq
+        #prior_model.fit_knn(prior_model.codes)
         # output is mdn
         mixtures, u_ps, s_ps = prior_model(u_q)
         loss = acn_mdn_loss_function(yhat_batch, data, u_q, mixtures, u_ps, s_ps)
         loss.backward()
+        parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+        clip_grad_value_(parameters, 10)
         train_loss+= loss.item()
         opt.step()
+        print(loss)
         # add batch size because it hasn't been added to train cnt yet
         avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
+        print('batch',train_cnt, avg_train_loss)
         handle_checkpointing(train_cnt, avg_train_loss)
         train_cnt+=len(data)
+    print(train_loss)
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
 
@@ -117,28 +127,32 @@ def test_acn(train_cnt, do_plot):
     print('starting test', train_cnt)
     st = time.time()
     print(len(test_loader))
-    with torch.no_grad():
-        for i, (data, label, data_index) in enumerate(test_loader):
-            lst = time.time()
-            data = data.to(DEVICE)
-            z, u_q = encoder_model(data)
-            #yhat_batch = encoder_model.decode(u_q, s_q, data)
-            # add the predicted codes to the input
-            yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
-            mixtures, u_ps, s_ps = prior_model(u_q)
-            loss = acn_mdn_loss_function(yhat_batch, data, u_q, mixtures, u_ps, s_ps)
-            #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
-            test_loss+= loss.item()
-            if i == 0 and do_plot:
-                print('writing img')
-                n = min(data.size(0), 8)
-                bs = data.shape[0]
-                comparison = torch.cat([data.view(bs, 1, 28, 28)[:n],
-                                      yhat_batch.view(bs, 1, 28, 28)[:n]])
-                img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
-                save_image(comparison.cpu(), img_name, nrow=n)
-                print('finished writing img', img_name)
-            #print('loop test', i, time.time()-lst)
+    #with torch.no_grad():
+    for i, (data, label, data_index) in enumerate(test_loader):
+        lst = time.time()
+        data = data.to(DEVICE)
+        z, u_q = encoder_model(data)
+        np_uq = u_q.detach().cpu().numpy()
+        #yhat_batch = encoder_model.decode(u_q, s_q, data)
+        # add the predicted codes to the input
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
+        if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
+            print('baad')
+            embed()
+        mixtures, u_ps, s_ps = prior_model(u_q)
+        loss = acn_mdn_loss_function(yhat_batch, data, u_q, mixtures, u_ps, s_ps)
+        #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
+        test_loss+= loss.item()
+        if i == 0 and do_plot:
+            print('writing img')
+            n = min(data.size(0), 8)
+            bs = data.shape[0]
+            comparison = torch.cat([data.view(bs, 1, 28, 28)[:n],
+                                  yhat_batch.view(bs, 1, 28, 28)[:n]])
+            img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
+            save_image(comparison.cpu(), img_name, nrow=n)
+            print('finished writing img', img_name)
+        #print('loop test', i, time.time()-lst)
 
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
@@ -156,9 +170,10 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train vq-vae for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=60000*5, type=int)
-    parser.add_argument('-le', '--log_every', default=60000*5, type=int)
+    parser.add_argument('-sn', '--savename', default='muniq_meanloggau3')
+    parser.add_argument('-se', '--save_every', default=60000*3, type=int)
+    parser.add_argument('-pe', '--plot_every', default=60000*1, type=int)
+    parser.add_argument('-le', '--log_every', default=60000*1, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-nm', '--num_mixtures', default=8, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
@@ -179,7 +194,14 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'ns_mdni')
+    run_num = 0
+    model_base_filedir = os.path.join(config.model_savedir, args.savename + '%02d'%run_num)
+    while os.path.exists(model_base_filedir):
+        run_num +=1
+        model_base_filedir = os.path.join(config.model_savedir, args.savename + '%02d'%run_num)
+    os.makedirs(model_base_filedir)
+    model_base_filepath = os.path.join(model_base_filedir, args.savename)
+
     train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())

@@ -136,6 +136,7 @@ def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     ''' compare mdn with k=1 (u_q) to a true mdn
 
     '''
+    batch_size = y_hat.shape[0]
     # create pi of 1.0 for every sample in minibatch
     pi_q = torch.ones_like(u_q[:,:1])
     # add channel for "1 mixture"
@@ -144,19 +145,24 @@ def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     s_q = torch.zeros_like(u_q)
 
     # expects variance
-    kl3_num = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_q, 2*s_q))
+    #kl3_num = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_q, 2*s_q))
+    kl3_num = torch.ones((batch_size, 1, 1), torch.float)
     kl3_den = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_ps, 2*s_ps))
     # Todo make sure this is the correct direction -
     # are there shortcuts since a is one mixture?
-    nums = torch.sum(pi_q[:, None] * kl3_num, dim=2)
+    nums = torch.sum(pi_q[:, None] *  kl3_num, dim=2)
     dens = torch.sum(pi_ps[:, None] * kl3_den, dim=2)
     kl = pi_q * torch.log(nums / dens)
-    sum_kl = torch.clamp(kl, 1./float(u_ps.shape[0]), 100).sum()
-    rec_loss = F.binary_cross_entropy(y_hat, y, reduction='sum')
-    if np.isinf(sum_kl.cpu().detach().numpy()) or np.isnan(sum_kl.cpu().detach().numpy()):
+    sum_kl = kl.mean()
+    #sum_kl = torch.clamp(kl, 1./float(u_ps.shape[0]), 100).sum()
+    rec_loss = F.binary_cross_entropy(y_hat, y, reduction= 'elementwise_mean')
+    np_rec_loss = rec_loss.cpu().detach().numpy()
+    np_sum_kl = sum_kl.cpu().detach().numpy()
+    print('sum_kl', np_sum_kl, 'rec', np_rec_loss)
+    if np.isinf(np_sum_kl) or np.isnan(np_sum_kl):
         print('sum_kl', sum_kl, 'rec', rec_loss)
         embed()
-    if np.isinf(rec_loss.cpu().detach().numpy()) or np.isnan(rec_loss.cpu().detach().numpy()):
+    if np.isinf(np_rec_loss) or np.isnan(np_rec_loss):
         print('sum_kl', sum_kl, 'rec', rec_loss)
         embed()
     # inf before train_cnt cnt 1574400
@@ -198,9 +204,11 @@ units, and skip connections from the input to all hidden
 layers and all hiddens to the output layer
 """
 class PriorNetwork(nn.Module):
-    def __init__(self, size_training_set, code_length, n_hidden=512, k=5, n_mixtures=8, random_seed=4543):
+    def __init__(self, size_training_set, code_length, n_hidden=512,
+                 k=5, n_mixtures=8, random_seed=4543, require_unique_codes=False):
         super(PriorNetwork, self).__init__()
         self.rdn = np.random.RandomState(random_seed)
+        self.require_unique_codes = require_unique_codes
         self.n_mixtures = n_mixtures
         self.k = k
         self.size_training_set = size_training_set
@@ -226,8 +234,9 @@ class PriorNetwork(nn.Module):
 
         self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
         # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
-        codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
-        self.fit_knn(codes)
+        self.codes = self.rdn.standard_normal((self.size_training_set, self.code_length))
+        self.new_epoch()
+        self.fit_knn(self.codes)
 
     def encode(self, prev_code):
         h1 = torch.tanh(self.fc1(prev_code)) + self.s1(prev_code)
@@ -243,10 +252,9 @@ class PriorNetwork(nn.Module):
         ''' will reset the knn  given an nd array
         '''
         st = time.time()
-        self.codes = codes
-        assert(len(self.codes)>1)
-        y = np.zeros((len(self.codes)))
-        self.knn.fit(self.codes, y)
+        assert(len(codes)>1)
+        y = np.zeros((len(codes)))
+        self.knn.fit(codes, y)
 
     def batch_pick_close_neighbor(self, codes):
         '''
@@ -262,11 +270,77 @@ class PriorNetwork(nn.Module):
             chosen_neighbor_index = np.zeros((bsize), dtype=np.int)
         return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]], neighbor_indexes
 
+    def new_epoch(self):
+        self.code_used = np.zeros((self.codes.shape[0]), dtype=np.bool)
+        self.available_indexes = np.arange(self.codes.shape[0], dtype=np.int)
+
+    def add_used(self, used_code_index):
+        self.code_used[used_code_index] = True
+        w = np.where(self.available_indexes != used_code_index)[0]
+        self.available_indexes = self.available_indexes[w]
+
+    def batch_pick_unique_close_neighbor(self, codes):
+        '''
+        :code latent activation of training example as np
+        '''
+
+        if self.training:
+            self.fit_knn(self.codes[self.available_indexes])
+            uneighbor_distances, uneighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
+            used_code_indexes = []
+            chosen_codes, chosen_code_indexes, all_neighbor_indexes = [], [], []
+            for bi, code in enumerate(codes):
+                # randomly choose unique neighbor index from top k
+                uneighbor_chosen = self.rdn.choice(uneighbor_indexes[bi])
+                # need to take the unique index and figure out which real index it is
+                chosen_code_index = self.available_indexes[uneighbor_chosen]
+                #print(uneighbor_chosen, chosen_code_index)
+                # code has already been used
+                if chosen_code_index in used_code_indexes:
+                    # add in the code - then remove them from possibilities and
+                    # retrain knn
+                    for cc in used_code_indexes:
+                        self.add_used(cc)
+                    print(chosen_code_index, "retrained knn. used-", len(used_code_indexes), 'fit shape', self.available_indexes.shape[0])
+                    #print(used_code_indexes)
+                    # redo all of our input codes for simplicity
+                    if self.available_indexes.shape[0]<=self.k:
+                        print('----------------------------------------------')
+                        print('new epoch')
+                        self.new_epoch()
+                    self.fit_knn(self.codes[self.available_indexes])
+                    uneighbor_distances, uneighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
+                    used_code_indexes = []
+                    # redo this code with the new knn
+                    uneighbor_chosen = self.rdn.choice(uneighbor_indexes[bi])
+                    # need to take the unique index and figure out which real index it is
+                    chosen_code_index = self.available_indexes[uneighbor_chosen]
+                    #print('reset indexes',self.available_indexes.shape)
+                    #print('new',uneighbor_chosen, chosen_code_index)
+
+                used_code_indexes.append(chosen_code_index)
+                chosen_code = self.codes[chosen_code_index]
+                chosen_codes.append(chosen_code)
+                chosen_code_indexes.append(chosen_code_index)
+                all_neighbor_indexes.append(self.available_indexes[uneighbor_indexes[bi]])
+            for cc in used_code_indexes:
+                self.add_used(cc)
+            return np.array(chosen_codes), np.array(all_neighbor_indexes)
+        else:
+            # TODO - force used neighbors out of codebook
+            neighbor_distances, neighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
+            bsize = neighbor_indexes.shape[0]
+            chosen_neighbor_index = np.zeros((bsize), dtype=np.int)
+            return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]], neighbor_indexes
+
+
+        #return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]], neighbor_indexes
+
     def forward(self, codes):
         st = time.time()
         DEVICE = codes.device
         np_codes = codes.cpu().detach().numpy()
-        previous_codes, neighbor_indexes = self.batch_pick_close_neighbor(np_codes)
+        previous_codes, neighbor_indexes = self.batch_pick_unique_close_neighbor(np_codes)
         previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
         mixtures, mus, sigmas =  self.encode(previous_codes)
         # output should be of shape (num_k, code_len) embed()

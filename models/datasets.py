@@ -10,6 +10,7 @@ from imageio import imread, imwrite, mimwrite
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
+from copy import deepcopy
 import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 
@@ -254,7 +255,11 @@ class DataLoader():
         self.train_rdn = np.random.RandomState(random_number)
         self.test_rdn = np.random.RandomState(random_number)
 
+        self.reset_batch()
         self.num_batches = len(self.train_loader)/self.batch_size
+
+    def reset_batch(self):
+        self.unique_index_array = np.arange(self.train_loader.index_array.shape[0], dtype=np.int)
 
     def validation_data(self):
         batch_choice = self.test_rdn.choice(self.test_loader.index_array, self.batch_size, replace=False)
@@ -285,6 +290,21 @@ class DataLoader():
         batch_choice = self.train_rdn.choice(self.train_loader.index_array, self.batch_size, replace=False)
         x,y = self.train_loader[batch_choice]
         return x,y,batch_choice
+
+    def next_unique_batch(self):
+        reset = False
+        batch_indexes = self.train_rdn.choice(self.unique_index_array, self.batch_size, replace=False)
+        # absolute indexes are different than the indexing indexes
+        batch_choices = self.train_loader.index_array[batch_indexes]
+        x,y = self.train_loader[batch_choices]
+        # remove used indexes
+        not_in = np.logical_not(np.isin(self.unique_index_array, batch_indexes))
+        self.unique_index_array = self.unique_index_array[not_in]
+        if len(self.unique_index_array) < self.batch_size:
+            self.reset_batch()
+            reset = True
+        return x,y,batch_choices,reset
+
 
 class IndexedDataset(Dataset):
     def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):

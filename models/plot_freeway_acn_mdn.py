@@ -22,31 +22,38 @@ from sklearn.neighbors import KNeighborsClassifier
 from torch import nn, optim
 import torch
 from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
-from datasets import IndexedDataset
+from datasets import FreewayForwardDataset, DataLoader
 import config
 from torchvision.utils import save_image
 from IPython import embed
 from pixel_cnn import GatedPixelCNN
 from imageio import imsave
-from acn_mdn import  PriorNetwork, ConvVAE
+from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
 torch.manual_seed(394)
 torch.set_num_threads(1)
+from sklearn import datasets
 from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 def plot_neighbors(data, label, data_idx, nearby_indexes, name):
+
     for i in range(data.shape[0]):
-         f,ax=plt.subplots(1,nearby_indexes.shape[1]+1)
-         ax[0].imshow(data[i,-1].detach().numpy())
-         ax[0].set_title('true')
-         ax[0].axis('off')
-         #ax[1,0].axis('off')
-         for xx in range(nearby_indexes.shape[1]):
-             nearby_x, nearby_y, nearby_index = train_data[nearby_indexes[i,xx]]
-             ax[xx+1].imshow(nearby_x[0].detach().numpy())
-             ax[xx+1].set_title('%s-%s'%(int(nearby_y), nearby_index))
-             ax[xx+1].axis('off')
+         f,ax=plt.subplots(2,nearby_indexes.shape[1]+1, figsize=(4*nearby_indexes.shape[1]+1,4))
+         ax[0,0].imshow(data[i,-1].detach().numpy())
+         ax[0,0].set_title('tx %s'%data_idx[i])
+         ax[1,0].imshow(label[i,0].detach().numpy())
+         ax[1,0].set_title('ty %s'%(data_idx[i]+int(largs.steps_ahead)))
+         ax[0,0].axis('off')
+         ax[1,0].axis('off')
+         nearby_x, nearby_y = data_loader.train_loader[nearby_indexes[i]]
+         for xx in range(nearby_x.shape[0]):
+             ax[0,xx+1].imshow(nearby_x[xx,-1].detach().numpy())
+             ax[0,xx+1].set_title('x %s'%(nearby_indexes[i,xx]))
+             ax[1,xx+1].imshow(nearby_y[xx,0].detach().numpy())
+             ax[1,xx+1].set_title('y %s'%(nearby_indexes[i,xx]+int(largs.steps_ahead)))
+             ax[0,xx+1].axis('off')
+             ax[1,xx+1].axis('off')
 
          ipath = os.path.join(output_savepath, 'nn_%s_%04d.png'%(name,data_idx[i]))
          print('plotting %s' %ipath)
@@ -55,45 +62,42 @@ def plot_neighbors(data, label, data_idx, nearby_indexes, name):
 
 
 def nearest_neighbor_batch():
-    print("getting training neighbors")
-    for data, label, data_idx in train_loader:
-        z, u_q = encoder_model(data)
-        break
     prior_model.fit_knn(prior_model.codes)
-    # use last
+
+    data, label, data_idx = data_loader.next_batch()
+    z, u_q = encoder_model(data)
     nearby_codes, nearby_indexes = prior_model.batch_pick_close_neighbor(u_q.cpu().detach().numpy())
     plot_neighbors(data, label, data_idx, nearby_indexes, name='train')
-    for test_data, test_label, test_data_idx in test_loader:
-        test_z, test_u_q = encoder_model(test_data)
-        break
+
+    test_data, test_label, test_data_idx = data_loader.validation_data()
+    test_z, test_u_q = encoder_model(test_data)
     test_nearby_codes, test_nearby_indexes = prior_model.batch_pick_close_neighbor(test_u_q.cpu().detach().numpy())
     plot_neighbors(test_data, test_label, test_data_idx, test_nearby_indexes, name='test')
 
+
 def pca_batch(loader, name):
     total = 0
-    for data, label, idx in loader:
-        z, u_q = encoder_model(data)
-        if not total:
-            X = z.detach().numpy()
-            y = label.detach().numpy()
+    keep_going = True
+    while keep_going:
+        data, label, data_idx = loader()
+        if not data.shape[0]:
+            keep_going = False
+        elif total > args.max_plot:
+            keep_going = False
         else:
-            X = np.vstack((X, z.detach().numpy()))
-            y = np.hstack((y, label.detach().numpy()))
-        total+=data.shape[0]
-        if total > args.max_plot:
-            break
-        print('total', total)
+            z, u_q = encoder_model(data)
+            if not total:
+                X = z.detach().numpy()
+            else:
+                X = np.vstack((X, z.detach().numpy()))
+            total+=data.shape[0]
 
     pca = PCA(n_components=2)
     X_r = pca.fit(X).transform(X)
     plt.figure()
-    for i in range(10):
-        plt.scatter(X_r[y == i, 0], X_r[y == i, 1],
-                    alpha=.8,
-                    label='%s'%i)
-    plt.legend()
+    plt.scatter(X_r[:,0], X_r[:,1], c=np.arange(X.shape[0]))
+    plt.colorbar()
     ipath = os.path.join(output_savepath, 'pca_%s.png'%name)
-    print('plotting', ipath)
     plt.savefig(ipath)
     plt.close()
 
@@ -108,7 +112,6 @@ if __name__ == '__main__':
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-n', '--num_to_sample', default=15, type=int)
     parser.add_argument('-mp', '--max_plot', default=500, type=int)
-    parser.add_argument('-bs', '--batch_size', default=64, type=int)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
     args = parser.parse_args()
@@ -116,7 +119,9 @@ if __name__ == '__main__':
         DEVICE = 'cuda'
     else:
         DEVICE = 'cpu'
-    model_loadpath = os.path.abspath(os.path.join(config.model_savedir, args.model_loadname))
+
+    bname = args.model_loadname.split('_')[0]
+    model_loadpath = os.path.abspath(os.path.join(config.model_savedir, bname, args.model_loadname))
     if not os.path.exists(model_loadpath):
         print("Error: given model load path does not exist")
         print(model_loadpath)
@@ -129,50 +134,61 @@ if __name__ == '__main__':
     info = model_dict['info']
     largs = info['args'][-1]
 
-    train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-                                train=True, download=True,
-                                transform=transforms.ToTensor())
-    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    test_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-                               train=False, download=True,
-                               transform=transforms.ToTensor())
-    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
+    train_data_file = os.path.join(config.base_datadir, 'freeway_train_01000_40x40.npz')
+    test_data_file = os.path.join(config.base_datadir, 'freeway_test_00300_40x40.npz')
 
-    nchans,hsize,wsize = test_loader.dataset[0][0].shape
+    if args.data_augmented:
+        # model that was used to create the forward predictions dataset
+        aug_train_data_file = train_data_file[:-4] + args.data_augmented_by_model + '.npz'
+        aug_test_data_file = test_data_file[:-4] + args.data_augmented_by_model + '.npz'
+        for i in [aug_train_data_file, aug_test_data_file]:
+            if not os.path.exists(i):
+                print('augmented data file', i, 'does not exist')
+                embed()
+    else:
+        aug_train_data_file = "None"
+        aug_test_data_file = "None"
 
-    largs.size_training_set = len(train_data)
+
+    train_data_function = FreewayForwardDataset(
+                                   train_data_file,
+                                   number_condition=largs.number_condition,
+                                   steps_ahead=largs.steps_ahead,
+                                   max_pixel_used=config.freeway_max_pixel,
+                                   min_pixel_used=config.freeway_min_pixel,
+                                   augment_file=aug_train_data_file)
+    test_data_function = FreewayForwardDataset(
+                                   test_data_file,
+                                   number_condition=largs.number_condition,
+                                   steps_ahead=largs.steps_ahead,
+                                   max_pixel_used=config.freeway_max_pixel,
+                                   min_pixel_used=config.freeway_min_pixel,
+                                   augment_file=aug_test_data_file)
+
+    data_loader = DataLoader(train_data_function, test_data_function,
+                                   batch_size=args.num_to_sample)
+
+
+    args.size_training_set = len(train_data_function)
+    hsize = data_loader.train_loader.data.shape[1]
+    wsize = data_loader.train_loader.data.shape[2]
+
     info = model_dict['info']
     largs = info['args'][-1]
 
-    #try:
-    #    print(largs.encoder_output_size)
-    #except:
-    #    largs.encoder_output_size = 1960
-    #try:
-    #    print(largs.possible_values)
-    #except:
-    #    largs.possible_values = 1
-    #try:
-    #    print(largs.num_pcnn_layers)
-    #except:
-    #    largs.num_pcnn_layers = 12
-    #try:
-    #    print(largs.num_classes)
-    #except:
-    #    largs.num_classes = 10
-
-
-    size_training_set = len(train_data)
+    try:
+        print(largs.encoder_output_size)
+    except:
+        largs.encoder_output_size = 1000
 
     encoder_model = ConvVAE(largs.code_length,
-                            input_size=1,
+                            input_size=largs.number_condition,
                             encoder_output_size=largs.encoder_output_size)
     encoder_model.load_state_dict(model_dict['vae_state_dict'])
 
-
     prior_model = PriorNetwork(size_training_set=largs.size_training_set,
                                 code_length=largs.code_length,
-                                k=largs.num_k).to(DEVICE)
+                                k=largs.num_k)
     prior_model.codes = model_dict['codes']
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
@@ -190,11 +206,14 @@ if __name__ == '__main__':
 
     if not args.nearest_neighbor_only:
         print("finding pca")
-        pca_batch(test_loader, 'test')
-        pca_batch(train_loader, 'train')
+        pca_batch(data_loader.validation_ordered_batch, 'test')
+        pca_batch(data_loader.ordered_batch, 'train')
 
     if not args.pca_only:
         print("finding neighbors")
         nearest_neighbor_batch()
 
 
+#    while train_cnt < args.num_examples_to_train:
+#        train_cnt = train_acn(train_cnt)
+#

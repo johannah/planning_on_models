@@ -45,7 +45,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
         if len(info['train_losses'])<rolling*3:
             rolling = 1
         print('adding last loss plot', train_cnt)
-        plot_name = vae_base_filepath + "_%010dloss.png"%train_cnt
+        plot_name = model_base_filepath + "_%010dloss.png"%train_cnt
         print('plotting loss: %s with %s points'%(plot_name, len(info['train_cnts'])))
         plot_losses(info['train_cnts'],
                     info['train_losses'],
@@ -58,7 +58,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
+        filename = model_base_filepath + "_%010dex.pkl"%train_cnt
         state = {
                  'vae_state_dict':encoder_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
@@ -81,33 +81,35 @@ def handle_checkpointing(train_cnt, avg_train_loss):
 
 def train_acn(train_cnt):
     loss = 0
-    encoder_model.train()
-    prior_model.train()
     train_loss = 0
     init_cnt = train_cnt
     st = time.time()
     #for batch_idx, (data, label, data_index) in enumerate(train_loader):
     batches = 0
     while train_cnt < args.num_examples_to_train:
+        encoder_model.train()
+        prior_model.train()
+        pcnn_decoder.train()
         opt.zero_grad()
         lst = time.time()
-        data, label, data_index = data_loader.next_batch()
-        #for xx,i in enumerate(label):
-        #    label_size[xx] = i
+        data, label, data_index, is_new_epoch = data_loader.next_unique_batch()
+        if is_new_epoch:
+        #    prior_model.new_epoch()
+            print(train_cnt, 'train, is new epoch', prior_model.available_indexes.shape)
         data = data.to(DEVICE)
         label = label.to(DEVICE)
+        #  inf happens sometime after 0001,680,896
         z, u_q = encoder_model(data)
         # add the predicted codes to the input
         yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
+        #print(train_cnt)
         prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
-        #  inf happens sometime after 0001,680,896
-        #print(train_cnt, loss)
-        try:
-            prior_model.fit_knn(prior_model.codes)
-        except:
-            embed()
         mixtures, u_ps, s_ps = prior_model(u_q)
         loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures, u_ps, s_ps)
+        np_uq = u_q.detach().cpu().numpy()
+        if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
+            print('train bad')
+            embed()
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
         clip_grad_value_(parameters, 10)
@@ -118,44 +120,42 @@ def train_acn(train_cnt):
         handle_checkpointing(train_cnt, avg_train_loss)
         train_cnt+=len(data)
         batches+=1
-        if not batches%10:
+        if not batches%1000:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
     return train_cnt
 
 def test_acn(train_cnt, do_plot):
-    encoder_model.eval()
-    prior_model.eval()
-    pcnn_decoder.eval()
-
     test_loss = 0
     print('starting test', train_cnt)
     st = time.time()
     test_cnt = 0
-    with torch.no_grad():
-        i = 0
-        #for i, (data, label, data_index) in enumerate(test_loader):
-        data, label, data_index = data_loader.validation_data()
-        lst = time.time()
-        data = data.to(DEVICE)
-        label = label.to(DEVICE)
-        z, u_q = encoder_model(data)
-        #yhat_batch = encoder_model.decode(u_q, s_q, data)
-        # add the predicted codes to the input
-        yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
-        mixtures, u_ps, s_ps = prior_model(u_q)
-        loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures,  u_ps, s_ps)
-        test_loss+= loss.item()
-        test_cnt += data.shape[0]
-        if i == 0 and do_plot:
-            print('writing img')
-            n = min(data.size(0), 8)
-            bs = data.shape[0]
-            comparison = torch.cat([label.view(bs, 1, hsize, wsize)[:n],
-                                  yhat_batch.view(bs, 1, hsize, wsize)[:n]])
-            img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
-            save_image(comparison.cpu(), img_name, nrow=n)
-            print('finished writing img', img_name)
-        #print('loop test', i, time.time()-lst)
+    encoder_model.eval()
+    prior_model.eval()
+    pcnn_decoder.eval()
+    opt.zero_grad()
+    i = 0
+    data, label, data_index = data_loader.validation_data()
+    lst = time.time()
+    data = data.to(DEVICE)
+    label = label.to(DEVICE)
+    z, u_q = encoder_model(data)
+    #yhat_batch = encoder_model.decode(u_q, s_q, data)
+    # add the predicted codes to the input
+    yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
+    mixtures, u_ps, s_ps = prior_model(u_q)
+    loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures,  u_ps, s_ps)
+    test_loss+= loss.item()
+    test_cnt += data.shape[0]
+    if i == 0 and do_plot:
+        print('writing img')
+        n = min(data.size(0), 8)
+        bs = data.shape[0]
+        comparison = torch.cat([label.view(bs, 1, hsize, wsize)[:n],
+                              yhat_batch.view(bs, 1, hsize, wsize)[:n]])
+        img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
+        save_image(comparison.cpu(), img_name, nrow=n)
+        print('finished writing img', img_name)
+    #print('loop test', i, time.time()-lst)
 
     test_loss /= float(test_cnt)
     print('====> Test set loss: {:.4f}'.format(test_loss))
@@ -173,13 +173,13 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='train acn for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='f2mdn')
+    parser.add_argument('--savename', default='fmuniq_meanloggau3')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
-    parser.add_argument('-se', '--save_every', default=1000*20, type=int)
-    parser.add_argument('-pe', '--plot_every', default=1000*20, type=int)
-    parser.add_argument('-le', '--log_every', default=1000*10, type=int)
+    parser.add_argument('-se', '--save_every', default=1000*4, type=int)
+    parser.add_argument('-pe', '--plot_every', default=1000*4, type=int)
+    parser.add_argument('-le', '--log_every', default=1000*1, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-eos', '--encoder_output_size', default=3000, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
@@ -192,14 +192,20 @@ if __name__ == '__main__':
     parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-nc', '--num_classes', default=10)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
-    parser.add_argument('-nm', '--num_mixtures', default=2, type=int)
+    parser.add_argument('-nm', '--num_mixtures', default=16, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, args.savename)
+    run_num = 0
+    model_base_filedir = os.path.join(config.model_savedir, args.savename + '%02d'%run_num)
+    while os.path.exists(model_base_filedir):
+        run_num +=1
+        model_base_filedir = os.path.join(config.model_savedir, args.savename + '%02d'%run_num)
+    os.makedirs(model_base_filedir)
+    model_base_filepath = os.path.join(model_base_filedir, args.savename)
 
     # TODO - change loss
     train_data_file = os.path.join(config.base_datadir, 'freeway_train_01000_40x40.npz')
