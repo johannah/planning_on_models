@@ -143,11 +143,11 @@ def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     u_q = u_q[:,None]
     # expect logstd of 1.0 which is 0.0
     s_q = torch.zeros_like(u_q)
-
+    eps = 1e-4
     # expects variance
     #kl3_num = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_q, 2*s_q))
     kl3_num=torch.ones((batch_size, 1, 1), dtype=torch.float, device=s_ps.device)
-    kl3_den = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_ps, 2*s_ps))
+    kl3_den = torch.exp(-gau_kl3(u_q, (F.softplus(s_q)+eps)**2, u_ps, (F.softplus(s_ps)+eps)**2))
     # Todo make sure this is the correct direction -
     # are there shortcuts since a is one mixture?
     nums = torch.sum(pi_q[:, None] *  kl3_num, dim=2)
