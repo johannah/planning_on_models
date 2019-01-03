@@ -25,6 +25,16 @@ def rolling_average(a, n=5) :
     ret[n:] = ret[n:] - ret[:-n]
     return ret[n - 1:] / n
 
+
+def plot_dict_losses(plot_dict, name='loss_example.png', rolling_length=4):
+    f,ax=plt.subplots(1,1,figsize=(3,3))
+    for n in plot_dict.keys():
+        ax.plot(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), lw=1)
+        ax.scatter(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), label=n, s=3)
+    ax.legend()
+    plt.savefig(name)
+    plt.close()
+
 def plot_losses(train_cnts, train_losses, test_cnts, test_losses, name='loss_example.png', rolling_length=4):
     f,ax=plt.subplots(1,1,figsize=(3,3))
     ax.plot(rolling_average(train_cnts, rolling_length), rolling_average(train_losses, rolling_length), label='train loss', lw=1, c='orangered')
