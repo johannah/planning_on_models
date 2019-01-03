@@ -120,8 +120,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    bname = args.model_loadname.split('_')[0]
-    model_loadpath = os.path.abspath(os.path.join(config.model_savedir, bname, args.model_loadname))
+    model_loadpath = os.path.abspath(os.path.join(config.model_savedir, args.model_loadname))
     if not os.path.exists(model_loadpath):
         print("Error: given model load path does not exist")
         print(model_loadpath)

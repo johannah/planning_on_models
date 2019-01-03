@@ -44,7 +44,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
         if len(info['train_losses'])<rolling*3:
             rolling = 1
         print('adding last loss plot', train_cnt)
-        plot_name = vae_base_filepath + "_%010dloss.png"%train_cnt
+        plot_name = model_base_filepath + "_%010dloss.png"%train_cnt
         print('plotting loss: %s with %s points'%(plot_name, len(info['train_cnts'])))
         plot_losses(info['train_cnts'],
                     info['train_losses'],
@@ -57,7 +57,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
+        filename = model_base_filepath + "_%010dex.pkl"%train_cnt
         state = {
                  'vae_state_dict':encoder_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
@@ -132,7 +132,7 @@ def test_acn(train_cnt, do_plot):
                 bs = data.shape[0]
                 comparison = torch.cat([data.view(bs, 1, 28, 28)[:n],
                                       yhat_batch.view(bs, 1, 28, 28)[:n]])
-                img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
+                img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
                 save_image(comparison.cpu(), img_name, nrow=n)
                 print('finished writing img', img_name)
             #print('loop test', i, time.time()-lst)
@@ -150,12 +150,12 @@ def save_checkpoint(state, filename='model.pkl'):
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
-    parser = ArgumentParser(description='train vq-vae for freeway')
+    parser = ArgumentParser(description='train')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-uniq', '--require_unique_codes', default=False, type=bool)
-    parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=60000*10, type=int)
+    parser.add_argument('-se', '--save_every', default=60000*5, type=int)
+    parser.add_argument('-pe', '--plot_every', default=60000*5, type=int)
     parser.add_argument('-le', '--log_every', default=60000*5, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
@@ -169,6 +169,7 @@ if __name__ == '__main__':
     parser.add_argument('-nc', '--num_classes', default=10)
     parser.add_argument('-eos', '--encoder_output_size', default=1152)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
+    parser.add_argument('-sn', '--savename', default='mgtry2')
 
     args = parser.parse_args()
     if args.cuda:
@@ -176,7 +177,15 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'ns_mp')
+    run_num = 0
+    model_base_filedir = os.path.join(config.model_savedir, args.savename + '%02d'%run_num)
+    while os.path.exists(model_base_filedir):
+        run_num +=1
+        model_base_filedir = os.path.join(config.model_savedir, args.savename + '%02d'%run_num)
+    os.makedirs(model_base_filedir)
+    model_base_filepath = os.path.join(model_base_filedir, args.savename)
+
+
     train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())

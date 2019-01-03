@@ -57,11 +57,17 @@ def plot_neighbors(data, label, data_idx, nearby_indexes, name):
 def nearest_neighbor_batch():
     seen = 0
     print("getting training neighbors")
-    for data, label, data_idx in train_loader:
-        z, u_q = encoder_model(data)
-        prior_model.codes[data_idx] = u_q.detach().cpu().numpy()
-        seen += z.shape[0]
-    print("seen", seen)
+    try:
+        prior_model.codes = largs['codes']
+        for data, label, data_idx in train_loader:
+            z, u_q = encoder_model(data)
+            break
+    except:
+        for data, label, data_idx in train_loader:
+            z, u_q = encoder_model(data)
+            prior_model.codes[data_idx] = u_q.detach().cpu().numpy()
+            seen += z.shape[0]
+        print("seen", seen)
     prior_model.fit_knn(prior_model.codes)
     # use last
     nearby_codes, nearby_indexes = prior_model.batch_pick_close_neighbor(u_q.cpu().detach().numpy())
@@ -95,7 +101,7 @@ def pca_batch(loader, name):
                     alpha=.8,
                     label='%s'%i)
     plt.legend()
-    ipath = os.path.join(output_savepath, 'pca_%s.png'%name)
+    ipath = os.path.join(output_savepath, '_pca_%s.png'%name)
     print('plotting', ipath)
     plt.savefig(ipath)
     plt.close()
@@ -110,8 +116,8 @@ if __name__ == '__main__':
     parser.add_argument('-pca', '--pca_only', action='store_true', default=False)
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-n', '--num_to_sample', default=15, type=int)
-    parser.add_argument('-mp', '--max_plot', default=500, type=int)
-    parser.add_argument('-bs', '--batch_size', default=64, type=int)
+    parser.add_argument('-mp', '--max_plot', default=300, type=int)
+    parser.add_argument('-bs', '--batch_size', default=10, type=int)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
     args = parser.parse_args()
