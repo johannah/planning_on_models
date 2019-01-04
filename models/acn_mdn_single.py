@@ -100,7 +100,6 @@ class PriorNetwork(nn.Module):
                  k=5, n_mixtures=1, random_seed=4543, require_unique_codes=False):
         super(PriorNetwork, self).__init__()
         # Hardcoding to work with one only
-        assert(n_mixtures == 1)
         self.rdn = np.random.RandomState(random_seed)
         self.require_unique_codes = require_unique_codes
         if self.require_unique_codes:
@@ -128,7 +127,7 @@ class PriorNetwork(nn.Module):
         # log variance
         self.fc4_s = nn.Linear(n_hidden, self.n_mixtures*self.code_length)
         # m mixture softmax
-        #self.fc4_mix = nn.Linear(n_hidden, self.n_mixtures)
+        self.fc4_mix = nn.Linear(n_hidden, self.n_mixtures)
 
         self.knn = KNeighborsClassifier(n_neighbors=self.k, n_jobs=-1)
         # codes are initialized randomly - Alg 1: initialize C: c(x)~N(0,1)
@@ -227,8 +226,8 @@ class PriorNetwork(nn.Module):
         means = self.fc4_u(h3)
         # todo change name - sigma is logvar
         sigmas = self.fc4_s(h3)
-        #mixes = torch.softmax(self.fc4_mix(h3), dim=1)
-        return means, softplus_fn(sigmas)+1e-4
+        mixes = torch.softmax(self.fc4_mix(h3), dim=1)
+        return mixes,means, softplus_fn(sigmas)+1e-4
 
 
     def forward(self, codes):
@@ -237,11 +236,11 @@ class PriorNetwork(nn.Module):
         np_codes = codes.cpu().detach().numpy()
         previous_codes, neighbor_indexes = self.pick_neighbor(np_codes)
         previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
-        mus, sigmas =  self.encode(previous_codes)
+        mixtures, mus, sigmas =  self.encode(previous_codes)
         # output should be of shape (num_k, code_len) embed()
         mus = mus.view(mus.shape[0], self.n_mixtures, self.code_length)
         sigmas = sigmas.view(sigmas.shape[0], self.n_mixtures, self.code_length)
-        return mus, sigmas
+        return mixtures, mus, sigmas
 
 
 
@@ -291,31 +290,34 @@ def log_gau_kl3(pm, lpv, qm, lqv):
     p4 = pm.shape[2]
     return 0.5 * (p1 + p2 + p3 - p4)
 
-def acn_mdn_loss_function(y_hat, y, u_q, u_ps, s_ps):
+def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     ''' compare mdn with k=1 (u_q) to a true mdn
-
     '''
     batch_size = y_hat.shape[0]
     # create pi of 1.0 for every sample in minibatch
-    pi_q = torch.ones_like(u_q[:,:1])
-    # fake 1.0 pi for p
-    pi_ps = torch.ones_like(u_q[:,:1])
+    #pi_q = torch.ones_like(u_q[:,:1])
+    # fake for p
+    #pi_ps = torch.ones_like(u_q[:,:1])/float(u_q.shape[0])
     # add channel for "1 mixture"
     u_q = u_q[:,None]
-    # expect logstd of 1.0 which is 0.0
-    s_q = torch.zeros_like(u_q)
+    s_q = torch.ones_like(u_q)
     eps = 1e-4
     # expects variance
-    #kl3_num = torch.exp(-log_gau_kl3(u_q, 2*s_q, u_q, 2*s_q))
-    kl3_num=torch.ones((batch_size, 1, 1), dtype=torch.float, device=s_ps.device)
-    kl3_den = torch.exp(-gau_kl3(u_q, (F.softplus(s_q)+eps)**2, u_ps, (F.softplus(s_ps)+eps)**2))
+    #kl3_num = torch.exp(-log_gau_kl3(u_q, torch.log(s_q), u_q, torch.log(s_q)))
+    # kl3_num is always 1.0 for log_gau_kl3, gau_kl3 w/ single s=1.0
+    kl3_den = torch.exp(-log_gau_kl3(u_q, torch.log(s_q), u_ps, torch.log(s_ps)))
     # Todo make sure this is the correct direction -
     # are there shortcuts since a is one mixture?
-    nums = torch.sum(pi_q[:, None] *  kl3_num, dim=2)
-    dens = torch.sum(pi_ps[:, None] * kl3_den, dim=2)
-    kl = pi_q * torch.log(nums / dens)
+    #nums = torch.sum(pi_q[:, None] *  kl3_num, dim=2)
+    # because pi_q is always 1.0 and kl3_num is always 1.0, num=batch_size
+    num = float(pi_ps.shape[0])
+    dens = torch.sum(pi_ps[:, None] * kl3_den, dim=2)+eps
+    # pi_q = 1.0
+    pi_q = 1.0
+    kl = pi_q * torch.log(num / dens)
     kl_loss = kl.sum()
     #kl_loss = torch.clamp(kl, 1./float(u_ps.shape[0]), 100).sum()
+    #rec_loss = F.binary_cross_entropy(y_hat, y, reduction= 'elementwise_mean')
     rec_loss = F.binary_cross_entropy(y_hat, y, reduction= 'sum')
     np_rec_loss = rec_loss.cpu().detach().numpy()
     np_kl_loss = kl_loss.cpu().detach().numpy()

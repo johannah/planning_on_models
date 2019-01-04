@@ -121,9 +121,9 @@ def train_acn(train_cnt):
         prior_model.codes[data_index] = np_uq
         #prior_model.fit_knn(prior_model.codes)
         # output is mdn
-        u_ps, s_ps = prior_model(u_q)
+        mix,u_ps, s_ps = prior_model(u_q)
         #kl_loss, rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
-        kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
+        kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, mix,  u_ps, s_ps)
         loss = kl_loss + rec_loss
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
@@ -160,9 +160,9 @@ def test_acn(train_cnt, do_plot):
         if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
             print('baad')
             embed()
-        u_ps, s_ps = prior_model(u_q)
+        mix,u_ps, s_ps = prior_model(u_q)
         #kl_loss,rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
-        kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
+        kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, mix, u_ps, s_ps)
         #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
         test_kl_loss+= kl_loss.item()
         test_rec_loss+= rec_loss.item()
@@ -195,7 +195,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train vq-vae for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-sn', '--savename', default='mdn1logkl3')
+    parser.add_argument('-sn', '--savename', default='mdnlkl32mix')
     parser.add_argument('-se', '--save_every', default=60000*6, type=int)
     parser.add_argument('-pe', '--plot_every', default=60000*2, type=int)
     parser.add_argument('-le', '--log_every', default=60000*2, type=int)
