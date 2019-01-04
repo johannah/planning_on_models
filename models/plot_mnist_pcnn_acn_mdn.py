@@ -108,7 +108,7 @@ if __name__ == '__main__':
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-n', '--num_to_sample', default=15, type=int)
     parser.add_argument('-mp', '--max_plot', default=500, type=int)
-    parser.add_argument('-bs', '--batch_size', default=64, type=int)
+    parser.add_argument('-bs', '--batch_size', default=12, type=int)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
     args = parser.parse_args()

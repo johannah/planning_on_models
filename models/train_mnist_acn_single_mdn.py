@@ -22,7 +22,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.clip_grad import clip_grad_value_
 from datasets import IndexedDataset
-from acn_mdn_single import ConvVAE, PriorNetwork, acn_loss_function
+from acn_mdn_single import ConvVAE, PriorNetwork, acn_loss_function, acn_mdn_loss_function
 import config
 from torchvision.utils import save_image
 from IPython import embed
@@ -36,7 +36,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_kl_loss, avg_train_rec_loss):
     info['train_losses'].append(avg_train_rec_loss + avg_train_kl_loss)
     info['train_cnts'].append(train_cnt)
     test_kl_loss, test_rec_loss = test_acn(train_cnt,do_plot)
-    info['test_kl_losses'].append(test_rec_loss)
+    info['test_kl_losses'].append(test_kl_loss)
     info['test_rec_losses'].append(test_rec_loss)
     info['test_losses'].append(test_rec_loss + test_kl_loss)
     info['test_cnts'].append(train_cnt)
@@ -122,7 +122,8 @@ def train_acn(train_cnt):
         #prior_model.fit_knn(prior_model.codes)
         # output is mdn
         u_ps, s_ps = prior_model(u_q)
-        kl_loss, rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
+        #kl_loss, rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
+        kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
         loss = kl_loss + rec_loss
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
@@ -160,7 +161,8 @@ def test_acn(train_cnt, do_plot):
             print('baad')
             embed()
         u_ps, s_ps = prior_model(u_q)
-        kl_loss,rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
+        #kl_loss,rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
+        kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
         #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
         test_kl_loss+= kl_loss.item()
         test_rec_loss+= rec_loss.item()
@@ -193,7 +195,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train vq-vae for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-sn', '--savename', default='mdn1simkl')
+    parser.add_argument('-sn', '--savename', default='mdn1logkl3')
     parser.add_argument('-se', '--save_every', default=60000*6, type=int)
     parser.add_argument('-pe', '--plot_every', default=60000*2, type=int)
     parser.add_argument('-le', '--log_every', default=60000*2, type=int)

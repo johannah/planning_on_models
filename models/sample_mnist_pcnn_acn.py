@@ -72,10 +72,9 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='sample acn pcnn for freeway')
     parser.add_argument('-l', '--model_loadname', required=True, help='filename of pkl file to load models from')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('-bs', '--batch_size', default=10, type=int)
+    parser.add_argument('-bs', '--batch_size', default=5, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
-    parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-n', '--num_to_sample', default=10, type=int)
+    parser.add_argument('-n', '--num_to_sample', default=5, type=int)
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     args = parser.parse_args()
     if args.cuda:

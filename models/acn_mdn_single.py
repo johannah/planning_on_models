@@ -291,13 +291,15 @@ def log_gau_kl3(pm, lpv, qm, lqv):
     p4 = pm.shape[2]
     return 0.5 * (p1 + p2 + p3 - p4)
 
-def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
+def acn_mdn_loss_function(y_hat, y, u_q, u_ps, s_ps):
     ''' compare mdn with k=1 (u_q) to a true mdn
 
     '''
     batch_size = y_hat.shape[0]
     # create pi of 1.0 for every sample in minibatch
     pi_q = torch.ones_like(u_q[:,:1])
+    # fake 1.0 pi for p
+    pi_ps = torch.ones_like(u_q[:,:1])
     # add channel for "1 mixture"
     u_q = u_q[:,None]
     # expect logstd of 1.0 which is 0.0
@@ -312,20 +314,20 @@ def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
     nums = torch.sum(pi_q[:, None] *  kl3_num, dim=2)
     dens = torch.sum(pi_ps[:, None] * kl3_den, dim=2)
     kl = pi_q * torch.log(nums / dens)
-    sum_kl = kl.mean()
-    #sum_kl = torch.clamp(kl, 1./float(u_ps.shape[0]), 100).sum()
-    rec_loss = F.binary_cross_entropy(y_hat, y, reduction= 'elementwise_mean')
+    kl_loss = kl.sum()
+    #kl_loss = torch.clamp(kl, 1./float(u_ps.shape[0]), 100).sum()
+    rec_loss = F.binary_cross_entropy(y_hat, y, reduction= 'sum')
     np_rec_loss = rec_loss.cpu().detach().numpy()
-    np_sum_kl = sum_kl.cpu().detach().numpy()
-    print('sum_kl', np_sum_kl, 'rec', np_rec_loss)
-    if np.isinf(np_sum_kl) or np.isnan(np_sum_kl):
-        print('sum_kl', sum_kl, 'rec', rec_loss)
+    np_kl_loss = kl_loss.cpu().detach().numpy()
+    #print('kl_loss', np_kl_loss, 'rec', np_rec_loss)
+    if np.isinf(np_kl_loss) or np.isnan(np_kl_loss):
+        print('kl_loss', kl_loss, 'rec', rec_loss)
         embed()
     if np.isinf(np_rec_loss) or np.isnan(np_rec_loss):
-        print('sum_kl', sum_kl, 'rec', rec_loss)
+        print('kl_loss', kl_loss, 'rec', rec_loss)
         embed()
     # inf before train_cnt cnt 1574400
-    return sum_kl+rec_loss
+    return kl_loss,rec_loss
 
 
 def acn_loss_function(y_hat, y, u_q, u_p, s_p):
