@@ -33,10 +33,12 @@ torch.manual_seed(394)
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_kl_loss, avg_train_rec_loss):
     info['train_kl_losses'].append(avg_train_kl_loss)
     info['train_rec_losses'].append(avg_train_rec_loss)
+    info['train_losses'].append(avg_train_rec_loss + avg_train_kl_loss)
     info['train_cnts'].append(train_cnt)
     test_kl_loss, test_rec_loss = test_acn(train_cnt,do_plot)
     info['test_kl_losses'].append(test_rec_loss)
     info['test_rec_losses'].append(test_rec_loss)
+    info['test_losses'].append(test_rec_loss + test_kl_loss)
     info['test_cnts'].append(train_cnt)
     print('examples %010d train kl loss %03.03f test kl loss %03.03f' %(train_cnt,
                               info['train_kl_losses'][-1], info['test_kl_losses'][-1]))
@@ -56,10 +58,14 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_kl_loss, avg_train_rec_loss):
                                 'val':info['test_kl_losses']},
                      'test rec':{'index':info['test_cnts'],
                                    'val':info['test_rec_losses']},
+                     'test loss':{'index':info['test_cnts'],
+                                   'val':info['test_losses']},
                      'train kl':{'index':info['train_cnts'],
                                    'val':info['train_kl_losses']},
                      'train rec':{'index':info['train_cnts'],
                                    'val':info['train_rec_losses']},
+                     'train loss':{'index':info['train_cnts'],
+                                   'val':info['train_losses']},
                     }
 
         plot_dict_losses(plot_dict, name=plot_name, rolling_length=rolling)
@@ -189,7 +195,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-sn', '--savename', default='mdn1simkl')
     parser.add_argument('-se', '--save_every', default=60000*6, type=int)
-    parser.add_argument('-pe', '--plot_every', default=60000*6, type=int)
+    parser.add_argument('-pe', '--plot_every', default=60000*2, type=int)
     parser.add_argument('-le', '--log_every', default=60000*2, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-nm', '--num_mixtures', default=1, type=int)
@@ -234,9 +240,11 @@ if __name__ == '__main__':
     info = {'train_cnts':[],
             'train_kl_losses':[],
             'train_rec_losses':[],
+            'train_losses':[],
             'test_cnts':[],
             'test_kl_losses':[],
             'test_rec_losses':[],
+            'test_losses':[],
             'save_times':[],
             'args':[args],
             'last_save':0,

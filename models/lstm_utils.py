@@ -27,8 +27,9 @@ def rolling_average(a, n=5) :
 
 
 def plot_dict_losses(plot_dict, name='loss_example.png', rolling_length=4):
-    f,ax=plt.subplots(1,1,figsize=(3,3))
+    f,ax=plt.subplots(1,1,figsize=(6,6))
     for n in plot_dict.keys():
+        print('plotting', n)
         ax.plot(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), lw=1)
         ax.scatter(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), label=n, s=3)
     ax.legend()

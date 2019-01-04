@@ -97,7 +97,7 @@ def pca_batch(loader, name):
                     alpha=.8,
                     label='%s'%i)
     plt.legend()
-    ipath = os.path.join(output_savepath, 'pca_%s.png'%name)
+    ipath = os.path.join(output_savepath, '_pca_%s.png'%name)
     print('plotting', ipath)
     plt.savefig(ipath)
     plt.close()
