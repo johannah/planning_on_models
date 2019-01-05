@@ -29,7 +29,7 @@ from torchvision.utils import save_image
 from IPython import embed
 from pixel_cnn import GatedPixelCNN
 from imageio import imsave
-from acn import ConvVAE, PriorNetwork
+from acn_mdn import ConvVAE, PriorNetwork
 torch.manual_seed(394)
 torch.set_num_threads(1)
 
@@ -135,11 +135,6 @@ if __name__ == '__main__':
     info = model_dict['info']
     largs = info['args'][-1]
 
-    try:
-        print(largs.encoder_output_size)
-    except:
-        largs.encoder_output_size = 1000
-
     encoder_model = ConvVAE(largs.code_length,
                             input_size=largs.number_condition,
                             encoder_output_size=largs.encoder_output_size)
@@ -149,7 +144,7 @@ if __name__ == '__main__':
                                  dim=largs.possible_values,
                                  n_layers=largs.num_pcnn_layers,
                                  n_classes=largs.num_classes,
-                                 float_condition_size=largs.encoder_output_size,
+                                 float_condition_size=largs.code_length,
                                  last_layer_bias=0.5, hsize=hsize, wsize=wsize)
 
     pcnn_decoder.load_state_dict(model_dict['pcnn_state_dict'])

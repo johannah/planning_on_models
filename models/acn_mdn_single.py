@@ -225,9 +225,9 @@ class PriorNetwork(nn.Module):
         h3 = torch.tanh(self.fc3(h2)) + self.s3(prev_code) + self.sf1(h1) + self.sf2(h2)
         means = self.fc4_u(h3)
         # todo change name - sigma is logvar
-        sigmas = self.fc4_s(h3)
+        sigmas = softplus_fn(self.fc4_s(h3))+1e-4
         mixes = torch.softmax(self.fc4_mix(h3), dim=1)
-        return mixes,means, softplus_fn(sigmas)+1e-4
+        return mixes, means, sigmas
 
 
     def forward(self, codes):

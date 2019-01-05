@@ -24,40 +24,58 @@ from torch.nn.utils.clip_grad import clip_grad_value_
 import config
 from torchvision.utils import save_image
 from IPython import embed
-from lstm_utils import plot_losses
+from lstm_utils import plot_dict_losses
 from pixel_cnn import GatedPixelCNN
 from datasets import FreewayForwardDataset, DataLoader
 from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
 torch.manual_seed(394)
 
-def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
-    info['train_losses'].append(avg_train_loss)
+def handle_plot_ckpt(do_plot, train_cnt, avg_train_kl_loss, avg_train_rec_loss):
+    info['train_kl_losses'].append(avg_train_kl_loss)
+    info['train_rec_losses'].append(avg_train_rec_loss)
+    info['train_losses'].append(avg_train_rec_loss + avg_train_kl_loss)
     info['train_cnts'].append(train_cnt)
-    test_loss = test_acn(train_cnt,do_plot)
-    info['test_losses'].append(test_loss)
+    test_kl_loss, test_rec_loss = test_acn(train_cnt,do_plot)
+    info['test_kl_losses'].append(test_kl_loss)
+    info['test_rec_losses'].append(test_rec_loss)
+    info['test_losses'].append(test_rec_loss + test_kl_loss)
     info['test_cnts'].append(train_cnt)
-    print('examples %010d train loss %03.03f test loss %03.03f' %(train_cnt,
-                              info['train_losses'][-1], info['test_losses'][-1]))
+    print('examples %010d train kl loss %03.03f test kl loss %03.03f' %(train_cnt,
+                              info['train_kl_losses'][-1], info['test_kl_losses'][-1]))
+    print('---------------train rec loss %03.03f test rec loss %03.03f' %(
+                              info['train_rec_losses'][-1], info['test_rec_losses'][-1]))
     # plot
     if do_plot:
         info['last_plot'] = train_cnt
         rolling = 3
-        if len(info['train_losses'])<rolling*3:
+        if len(info['train_kl_losses'])<rolling*3:
             rolling = 1
         print('adding last loss plot', train_cnt)
         plot_name = model_base_filepath + "_%010dloss.png"%train_cnt
         print('plotting loss: %s with %s points'%(plot_name, len(info['train_cnts'])))
-        plot_losses(info['train_cnts'],
-                    info['train_losses'],
-                    info['test_cnts'],
-                    info['test_losses'], name=plot_name, rolling_length=rolling)
+        plot_dict = {
+                     'test kl':{'index':info['test_cnts'],
+                                'val':info['test_kl_losses']},
+                     'test rec':{'index':info['test_cnts'],
+                                   'val':info['test_rec_losses']},
+                     'test loss':{'index':info['test_cnts'],
+                                   'val':info['test_losses']},
+                     'train kl':{'index':info['train_cnts'],
+                                   'val':info['train_kl_losses']},
+                     'train rec':{'index':info['train_cnts'],
+                                   'val':info['train_rec_losses']},
+                     'train loss':{'index':info['train_cnts'],
+                                   'val':info['train_losses']},
+                    }
 
-def handle_checkpointing(train_cnt, avg_train_loss):
+        plot_dict_losses(plot_dict, name=plot_name, rolling_length=rolling)
+
+def handle_checkpointing(train_cnt, avg_train_kl_loss, avg_train_rec_loss):
     if ((train_cnt-info['last_save'])>=args.save_every):
         print("Saving Model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['last_save']))
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
-        handle_plot_ckpt(True, train_cnt, avg_train_loss)
+        handle_plot_ckpt(True, train_cnt, avg_train_kl_loss, avg_train_rec_loss)
         filename = model_base_filepath + "_%010dex.pkl"%train_cnt
         state = {
                  'vae_state_dict':encoder_model.state_dict(),
@@ -70,18 +88,18 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         save_checkpoint(state, filename=filename)
     elif not len(info['train_cnts']):
         print("Logging model: %s no previous logs"%(train_cnt))
-        handle_plot_ckpt(False, train_cnt, avg_train_loss)
+        handle_plot_ckpt(False, train_cnt, avg_train_kl_loss, avg_train_rec_loss)
     elif (train_cnt-info['last_plot'])>=args.plot_every:
         print("Plotting Model at cnt:%s cnt since last plotted:%s"%(train_cnt, train_cnt-info['last_plot']))
-        handle_plot_ckpt(True, train_cnt, avg_train_loss)
+        handle_plot_ckpt(True, train_cnt, avg_train_kl_loss, avg_train_rec_loss)
     else:
         if (train_cnt-info['train_cnts'][-1])>=args.log_every:
             print("Logging Model at cnt:%s cnt since last logged:%s"%(train_cnt, train_cnt-info['train_cnts'][-1]))
-            handle_plot_ckpt(False, train_cnt, avg_train_loss)
+            handle_plot_ckpt(False, train_cnt, avg_train_kl_loss, avg_train_rec_loss)
 
 def train_acn(train_cnt):
-    loss = 0
-    train_loss = 0
+    train_kl_loss = 0.0
+    train_rec_loss = 0.0
     init_cnt = train_cnt
     st = time.time()
     #for batch_idx, (data, label, data_index) in enumerate(train_loader):
@@ -100,32 +118,52 @@ def train_acn(train_cnt):
         label = label.to(DEVICE)
         #  inf happens sometime after 0001,680,896
         z, u_q = encoder_model(data)
-        # add the predicted codes to the input
-        yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
-        #print(train_cnt)
-        prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
-        mixtures, u_ps, s_ps = prior_model(u_q)
-        loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures, u_ps, s_ps)
         np_uq = u_q.detach().cpu().numpy()
         if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
             print('train bad')
             embed()
+
+        # add the predicted codes to the input
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
+        #print(train_cnt)
+        prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
+        #mixtures, u_ps, s_ps = prior_model(u_q)
+        #loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures, u_ps, s_ps)
+        np_uq = u_q.detach().cpu().numpy()
+        if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
+            print('train bad')
+            embed()
+        #loss.backward()
+#        parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+#        clip_grad_value_(parameters, 10)
+#        train_loss+= loss.item()
+        mix,u_ps, s_ps = prior_model(u_q)
+        #kl_loss, rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
+        kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, label, u_q, mix,  u_ps, s_ps)
+        loss = kl_loss + rec_loss
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
         clip_grad_value_(parameters, 10)
-        train_loss+= loss.item()
+        train_kl_loss+= kl_loss.item()
+        train_rec_loss+= rec_loss.item()
         opt.step()
         # add batch size because it hasn't been added to train cnt yet
-        avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
-        handle_checkpointing(train_cnt, avg_train_loss)
+        avg_train_kl_loss = train_kl_loss/float((train_cnt+data.shape[0])-init_cnt)
+        avg_train_rec_loss = train_rec_loss/float((train_cnt+data.shape[0])-init_cnt)
+        handle_checkpointing(train_cnt, avg_train_kl_loss, avg_train_rec_loss)
         train_cnt+=len(data)
+
+        # add batch size because it hasn't been added to train cnt yet
+#        avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
         batches+=1
         if not batches%1000:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
     return train_cnt
 
 def test_acn(train_cnt, do_plot):
-    test_loss = 0
+    test_kl_loss = 0.0
+    test_rec_loss = 0.0
+
     print('starting test', train_cnt)
     st = time.time()
     test_cnt = 0
@@ -139,12 +177,22 @@ def test_acn(train_cnt, do_plot):
     data = data.to(DEVICE)
     label = label.to(DEVICE)
     z, u_q = encoder_model(data)
+
+    np_uq = u_q.detach().cpu().numpy()
+    if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
+        print('baad')
+        embed()
+
     #yhat_batch = encoder_model.decode(u_q, s_q, data)
     # add the predicted codes to the input
     yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
-    mixtures, u_ps, s_ps = prior_model(u_q)
-    loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures,  u_ps, s_ps)
-    test_loss+= loss.item()
+    mix, u_ps, s_ps = prior_model(u_q)
+    #loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures,  u_ps, s_ps)
+    kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, label, u_q, mix, u_ps, s_ps)
+    #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
+    test_kl_loss+= kl_loss.item()
+    test_rec_loss+= rec_loss.item()
+    #test_loss+= loss.item()
     test_cnt += data.shape[0]
     if i == 0 and do_plot:
         print('writing img')
@@ -157,10 +205,13 @@ def test_acn(train_cnt, do_plot):
         print('finished writing img', img_name)
     #print('loop test', i, time.time()-lst)
 
-    test_loss /= float(test_cnt)
-    print('====> Test set loss: {:.4f}'.format(test_loss))
+    #test_loss /= float(test_cnt)
+    test_kl_loss/=float(test_cnt)
+    test_rec_loss/=float(test_cnt)
+    print('====> Test kl loss: {:.4f}'.format(test_kl_loss))
+    print('====> Test rec loss: {:.4f}'.format(test_rec_loss))
     print('finished test', time.time()-st)
-    return test_loss
+    return test_kl_loss, test_rec_loss
 
 def save_checkpoint(state, filename='model.pkl'):
     print("starting save of model %s" %filename)
@@ -173,17 +224,18 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='train acn for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='fmuniq_meanloggau3')
+    parser.add_argument('--savename', default='fmdnlogkl3uniq')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
+    parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     parser.add_argument('-daf', '--data_augmented_by_model', default="None")
-    parser.add_argument('-se', '--save_every', default=1000*4, type=int)
-    parser.add_argument('-pe', '--plot_every', default=1000*4, type=int)
-    parser.add_argument('-le', '--log_every', default=1000*1, type=int)
+    parser.add_argument('-se', '--save_every', default=1000*100, type=int)
+    parser.add_argument('-pe', '--plot_every', default=1000*100, type=int)
+    parser.add_argument('-le', '--log_every', default=1000*20, type=int)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
-    parser.add_argument('-eos', '--encoder_output_size', default=3000, type=int)
+    parser.add_argument('-eos', '--encoder_output_size', default=1200, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
-    parser.add_argument('-cl', '--code_length', default=120, type=int)
+    parser.add_argument('-cl', '--code_length', default=48, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
@@ -192,7 +244,7 @@ if __name__ == '__main__':
     parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-nc', '--num_classes', default=10)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
-    parser.add_argument('-nm', '--num_mixtures', default=16, type=int)
+    parser.add_argument('-nm', '--num_mixtures', default=8, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
@@ -245,8 +297,12 @@ if __name__ == '__main__':
 
     info = {'train_cnts':[],
             'train_losses':[],
+            'train_kl_losses':[],
+            'train_rec_losses':[],
             'test_cnts':[],
             'test_losses':[],
+            'test_kl_losses':[],
+            'test_rec_losses':[],
             'save_times':[],
             'args':[args],
             'last_save':0,
@@ -263,7 +319,9 @@ if __name__ == '__main__':
     prior_model = PriorNetwork(size_training_set=args.size_training_set,
                                code_length=args.code_length,
                                n_mixtures=args.num_mixtures,
-                               k=args.num_k).to(DEVICE)
+                               k=args.num_k,
+                               require_unique_codes=args.require_unique_codes
+                               ).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
                                  dim=args.possible_values,
