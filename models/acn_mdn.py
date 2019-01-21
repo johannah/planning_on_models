@@ -169,6 +169,7 @@ class PriorNetwork(nn.Module):
         self.code_used[used_code_index] = True
         w = np.where(self.available_indexes != used_code_index)[0]
         self.available_indexes = self.available_indexes[w]
+        #print(used_code_index, self.available_indexes.shape[0])
         if self.available_indexes.shape[0]<=self.k:
             self.new_epoch()
 
@@ -178,6 +179,8 @@ class PriorNetwork(nn.Module):
         '''
 
         if self.training:
+            if self.available_indexes.shape[0] < 1.5*codes.shape[0]:
+                self.new_epoch()
             self.fit_knn(self.codes[self.available_indexes])
             uneighbor_distances, uneighbor_indexes = self.knn.kneighbors(codes, n_neighbors=self.k, return_distance=True)
             used_code_indexes = []
