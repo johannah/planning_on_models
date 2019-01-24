@@ -4,14 +4,16 @@ from skimage.color import rgb2gray
 from skimage import img_as_ubyte
 import numpy as np
 import gym
-
+import warnings
+from imageio import imwrite
+warnings.simplefilter('ignore', UserWarning)
 # per bootstrapped dqn paper
 NETWORK_INPUT_SIZE = (48,48)
 CLIP_REWARD_MIN = -1
 CLIP_REWARD_MAX = 1
 
 def prepare_frame(frame):
-    small_frame = img_as_ubyte(resize(rgb2gray(frame),NETWORK_INPUT_SIZE))
+    small_frame = resize(rgb2gray(frame),NETWORK_INPUT_SIZE)
     return small_frame
 
 # TODO - what happens when finished = True?
@@ -21,18 +23,20 @@ class DMAtariEnv():
         self.random_state = np.random.RandomState(random_seed)
         self.env = gym.make(self.gym_gamename)
         self.noop_action = self.env.env.get_action_meanings().index('NOOP')
+        self.num_true_steps = 0
+        self.num_episodes = 0
         self.reset()
 
     def reset(self):
         frame = self.env.reset()
         self.total_reward = 0
+        finished = False
         for i in range(self.random_state.randint(0,30)):
             # noop steps in beginning
             frame, r, finished, info = self.env.step(self.noop_action)
+            obs = prepare_frame(frame)
             self.total_reward += r
         obs = prepare_frame(frame)
-        self.num_true_steps = 0
-        self.num_episodes = 0
         if finished:
             print("received end in init routine")
             self.reset()
@@ -57,12 +61,24 @@ class DMAtariEnv():
         reward = r1+r2+r3+r4
         finished = min([finished1,finished2,finished3,finished4])
         # clip bt -1 and 1
-        reward_clipped = max(reward,CLIP_REWARD_MAX)
-        reward_clipped = min(reward_clipped,CLIP_REWARD_MIN)
+        reward_clipped = min(reward,CLIP_REWARD_MAX)
+        reward_clipped = max(reward_clipped,CLIP_REWARD_MIN)
         self.num_true_steps+=4
+        #if not self.num_true_steps%10:
+        #    print(self.num_true_steps,reward,reward_clipped)
+        imwrite('af%05d.png'%self.num_true_steps,img_as_ubyte(frame4))
+        imwrite('ao%05d.png'%self.num_true_steps,img_as_ubyte(obs4))
+        imwrite('am%05d.png'%self.num_true_steps,img_as_ubyte(obs_step4))
+        if finished:
+            self.num_true_steps+=1
+            blank = np.zeros((48,48))
+            imwrite('af%05de.png'%self.num_true_steps,blank)
+            imwrite('ao%05de.png'%self.num_true_steps,blank)
+            imwrite('am%05de.png'%self.num_true_steps,blank)
+            self.num_episodes +=1
         return obs_step4, reward_clipped, finished
 
 if __name__ == '__main__':
     env = DMAtariEnv(gamename='Breakout')
-    oo = env.step4(1)
-    embed()
+    while True:
+        env.step4(np.random.randint(2))

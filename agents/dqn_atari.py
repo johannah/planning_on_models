@@ -18,12 +18,12 @@ import torch.optim as optim
 from prepare_atari import NETWORK_INPUT_SIZE, DMAtariEnv
 from experience_handler import experience_replay
 from IPython import embed
-
+from imageio import imwrite
 DEVICE = 'cuda'
 # how many past frames to use for state input
 HISTORY_SIZE = 4
 # How often to check and evaluate
-EVALUATE_EVERY = 10
+EVALUATE_EVERY = 30
 # Save images of policy at each evaluation if True, otherwise only at the end if False
 SAVE_IMAGES = False
 # How often to print statistics
@@ -38,24 +38,26 @@ N_EVALUATIONS = 30
 # Number of heads for ensemble (1 falls back to DQN)
 N_ENSEMBLE = 3
 # Probability of experience to go to each head
-BERNOULLI_P = 1.
+BERNOULLI_P = 0.8
 # Weight for randomized prior, 0. disables
 PRIOR_SCALE = 1.
 # Number of episodes to run
 N_EPOCHS = 1000
 # Batch size to use for learning
-BATCH_SIZE = 16
+BATCH_SIZE = 2
 # Buffer size for experience replay
-BUFFER_SIZE = 1000
+BUFFER_SIZE = 1e5
+# How often to write data file
+WRITE_BUFFER_EVERY = 10000
 # Epsilon greedy exploration ~prob of random action, 0. disables
 EPSILON = .0
 # Gamma weight in Q update
-GAMMA = .8
+GAMMA = .99
 # Gradient clipping setting
 CLIP_GRAD = 1
 # Learning rate for Adam
 ADAM_LEARNING_RATE = 1E-3
-
+IMAGE_SAVE_LIMIT = 300
 random_state = np.random.RandomState(11)
 
 def seed_everything(seed=1234):
@@ -69,18 +71,21 @@ def seed_everything(seed=1234):
 seed_everything(22)
 
 def save_img(epoch):
-    if 'images_{}'.format(epoch) not in os.listdir('.'):
-        os.mkdir('images_{}'.format(epoch))
+    imagedir = 'images_%010d'%epoch
+    print("saving images to %s"%imagedir)
+    if imagedir not in os.listdir('.'):
+        os.mkdir(imagedir)
     frame = 0
     while True:
-        screen, reward = (yield)
-        plt.imshow(screen[0], interpolation='none')
-        plt.title("reward: {}".format(reward))
-        plt.savefig('images_{}/{}.png'.format(epoch, frame))
-        frame += 1
+        if frame < IMAGE_SAVE_LIMIT:
+            screen, reward = (yield)
+            plt.imshow(screen, interpolation='none')
+            plt.title("reward: {}".format(reward))
+            plt.savefig(os.path.join(imagedir, '%010d.png'%(frame)))
+            frame += 1
 
 class CoreNet(nn.Module):
-    def __init__(self, chans=4, n=16, network_output_size=48):
+    def __init__(self, chans=4, n=16, network_output_size=NETWORK_INPUT_SIZE[0]):
         super(CoreNet, self).__init__()
         self.network_output_size = network_output_size
         self.n = n
@@ -99,7 +104,7 @@ class CoreNet(nn.Module):
 
 
 class HeadNet(nn.Module):
-    def __init__(self, n=16, network_output_size=48, n_actions=4):
+    def __init__(self, n=16, network_output_size=NETWORK_INPUT_SIZE[0], n_actions=4):
         super(HeadNet, self).__init__()
         self.network_output_size = network_output_size
         self.n = n
@@ -165,7 +170,8 @@ target_net = NetWithPrior(target_net_ensemble, prior_net_ensemble, PRIOR_SCALE).
 opt = optim.Adam(policy_net.parameters(), lr=ADAM_LEARNING_RATE)
 
 # change minibatch setup to use masking...
-exp_replay = experience_replay(batch_size=BATCH_SIZE, max_size=N_ENSEMBLE * BUFFER_SIZE, history_size=HISTORY_SIZE)
+exp_replay = experience_replay(batch_size=BATCH_SIZE, max_size=N_ENSEMBLE * BUFFER_SIZE,
+                               history_size=HISTORY_SIZE, write_buffer_every=WRITE_BUFFER_EVERY)
 next(exp_replay) # Start experience-replay coroutines
 
 # Stores the total rewards from each evaluation, per head over all epochs
@@ -174,9 +180,11 @@ overall_time = 0.
 env = DMAtariEnv('Breakout',random_seed=34)
 eval_env = DMAtariEnv('Breakout',random_seed=55)
 action_space = np.arange(env.env.action_space.n)
+
 for i in range(N_EPOCHS):
     start = time.time()
     #ep = episode()
+    episodic_reward = 0
     S, action, reward, finished = env.reset()
     ongoing_flag = int(finished)
     exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
@@ -190,27 +198,29 @@ for i in range(N_EPOCHS):
     active_head = heads[0]
     finished = False
     policy_net.train()
+    cnt = 0
     while not finished:
-        action = random_state.choice(action_space)
         if (random_state.rand() < EPSILON) or (len(S_hist) < HISTORY_SIZE):
             action = random_state.choice(action_space)
+            print('random', action)
         else: # Get the index of the maximum q-value of the model.
-            # Subtract one because actions are either -1, 0, or 1
             with torch.no_grad():
                 policy_net_output = policy_net(torch.Tensor(S_hist)[None].to(DEVICE),active_head).detach().cpu().data.numpy()
+                print(policy_net_output)
                 action = np.argmax(policy_net_output, axis=-1)[0]
+                print('chose',action)
 
-        #S_prime, won = ep.send(action)
         S_prime, reward, finished = env.step4(action)
+        episodic_reward+=reward
         ongoing_flag = int(finished)
         exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
-        #experience = (S, action, reward, S_prime, ongoing_flag, exp_mask)
         experience =  [S_prime, action, reward, ongoing_flag, exp_mask]
-        S_hist.append(S_prime)
-        if len(S_hist) >= HISTORY_SIZE:
+        if len(S_hist) == HISTORY_SIZE:
             S_hist.pop(0)
+        S_hist.append(S_prime)
         S = S_prime
         batch = exp_replay.send(experience)
+        cnt+=1
         if batch:
             inputs = []
             actions = []
@@ -265,6 +275,11 @@ for i in range(N_EPOCHS):
                 full_loss = mask[:, k] * full_loss
                 #loss = torch.mean(full_loss)
                 loss = torch.sum(full_loss / torch.sum(mask[:, k]))
+                print('loss', loss)
+                loss_np = loss.cpu().detach().numpy()
+                if np.isinf(loss_np) or np.isnan(loss_np):
+                    print('nan')
+                    embed()
                 #loss = F.smooth_l1_loss(Qs, target_Qs[:, None])
 
                 loss.backward(retain_graph=True)
@@ -277,17 +292,11 @@ for i in range(N_EPOCHS):
             # After iterating all heads, do the update step
             torch.nn.utils.clip_grad_value_(policy_net.parameters(), CLIP_GRAD)
             opt.step()
-    #except StopIteration:
-    #    # add the end of episode experience
-    #    ongoing_flag = 0.
-    #    # just put in S, since it will get masked anyways
-    #    exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
-    #    experience = [S, action, won, S, ongoing_flag, exp_mask]
-    #    exp_replay.send(experience)
-
     stop = time.time()
-    overall_time += stop - start
-
+    embed()
+#    overall_time += stop - start
+#    print("EPISODIC_REWARD", episodic_reward)
+#    print("episode steps", cnt)
 #    if TARGET_UPDATE > 0 and i % TARGET_UPDATE == 0:
 #        print("Updating target network at {}".format(i))
 #        target_net.load_state_dict(policy_net.state_dict())
@@ -305,18 +314,26 @@ for i in range(N_EPOCHS):
 #            img_saver = save_img(i)
 #            next(img_saver)
 #        evaluation_rewards = []
-#        for _ in range(N_EVALUATIONS):
-#            #g = episode()
-#            S = eval_env.reset()
-#            finished = False
+#        for eval_epoch in range(N_EVALUATIONS):
+#            evaluate_episodic_reward = 0
+#            S, action, reward, finished = eval_env.reset()
+#            ongoing_flag = int(finished)
+#            exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
+#            experience =  [S, action, reward, ongoing_flag, exp_mask]
+#            batch = exp_replay.send(experience)
+#            S_hist = [S]
+#
 #            #S, reward = next(g)
-#            reward = 0
 #            reward_trace = [reward]
 #            if SAVE_IMAGES:
 #                img_saver.send((S, reward))
 #            policy_net.eval()
 #            while not finished:
-#                acts = [np.argmax(q.data.numpy(), axis=-1)[0] for q in policy_net(torch.Tensor(S[None]), None)]
+#                if len(S_hist) == HISTORY_SIZE:
+#                    S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(DEVICE)
+#                    acts = [np.argmax(q.data.numpy(), axis=-1)[0] for q in policy_net(S_hist_pt, None)]
+#                else:
+#                    acts = [random_state.choice(action_space) for h in range(N_ENSEMBLE)]
 #                act_counts = Counter(acts)
 #                max_count = max(act_counts.values())
 #                top_actions = [a for a in act_counts.keys() if act_counts[a] == max_count]
@@ -325,15 +342,19 @@ for i in range(N_EPOCHS):
 #                act = top_actions[0]
 #                #S, reward = g.send(act)
 #                S_prime, reward, finished = env.step4(act)
+#
+#                evaluate_episodic_reward += reward
 #                reward_trace.append(reward)
 #                if SAVE_IMAGES:
 #                    img_saver.send((S_prime, reward))
+#                if len(S_hist) == HISTORY_SIZE:
+#                    S_hist.pop(0)
+#                S_hist.append(S_prime)
 #                S = S_prime
-#            #except StopIteration:
-#            #    # sum should be either -1 or +1
-#            #    evaluation_rewards.append(np.sum(reward_trace))
-#            accumulation_rewards.append(np.mean(evaluation_rewards))
-#        print("Evaluation reward {}".format(accumulation_rewards[-1]))
+#            evaluation_rewards.append(np.sum(reward_trace))
+#            print("Evaluation Episode eval_epoch {} reward {}".format(eval_epoch, evaluation_rewards[-1]))
+#        accumulation_rewards.append(np.mean(evaluation_rewards))
+#        print("Mean evaluation reward all eval epochs {}".format(accumulation_rewards[-1]))
 #        if SAVE_IMAGES:
 #            img_saver.close()
 #
@@ -368,4 +389,4 @@ for i in range(N_EPOCHS):
 #        plt.xlabel(footnote_text)
 #        plt.tight_layout()
 #        plt.savefig("reward_traces.png")
-
+#
