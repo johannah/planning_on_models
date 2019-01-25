@@ -1,7 +1,10 @@
 import numpy as np
+import os, sys
+from models import config
 from IPython import embed
 
-def experience_replay(batch_size, max_size, history_size=4, write_buffer_every=10000, random_seed=4455):
+def experience_replay(batch_size, max_size, history_size=4,
+                      write_buffer_every=10000, random_seed=4455, name='buffer'):
     """
     indexes start at zero - end at len()-history_size
     """
@@ -17,7 +20,7 @@ def experience_replay(batch_size, max_size, history_size=4, write_buffer_every=1
     while True:
         inds = np.arange(len(rewards))
         # get experiences out - now need to update states
-        if len(rewards)-(history_size+1) <= batch_size:
+        if (len(rewards)-(history_size+1)) <= batch_size*5:
             yield_val = None
         else:
             # get observations from each
@@ -53,13 +56,22 @@ def experience_replay(batch_size, max_size, history_size=4, write_buffer_every=1
                 ongoing_flags.pop(0)
                 masks.pop(0)
                 heads.pop(0)
+            if not cnt%1000:
+                print(name,'buffer cnt %s' %cnt,'last write was %s ago' %(cnt-last_write),'will write at %s' %((last_write+write_buffer_every)-cnt))
             if (cnt-last_write)>=write_buffer_every:
                 last_write = cnt
-                bname = 'buffer_%010d.npz'%cnt
+                basename = '%s_%010d.npz'%(name,cnt)
+                bname = os.path.join(config.model_savedir,basename)
                 print("saving new experience buffer:%s"%bname)
                 np.savez(bname, states=np.array(states),
                                                  actions=np.array(actions),
                                                  rewards=np.array(rewards),
                                                  ongoing_flags=np.array(ongoing_flags),
-                                                 mask=np.array(masks), heads=np.array(heads))
+                                                 mask=np.array(masks), heads=np.array(heads),
+                                                 cnt=cnt)
+                # write file so we know there is a new file here
+                a=open(bname.replace('.npz', '_new.txt'), 'w')
+                a.write(str(cnt))
+                a.close()
+
 

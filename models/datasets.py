@@ -477,5 +477,82 @@ class EpisodicVqVaeFroggerDataset(Dataset):
 
 
 
+class AtariActionDataset(Dataset):
+    def __init__(self,  data_file, number_condition=4,
+                        steps_ahead=1, limit=None, batch_size=300,
+                        augment_file="None",
+                        rdn_num=3949):
+
+        self.rdn = np.random.RandomState(rdn_num)
+        if augment_file is not "None":
+            self.do_augment = True
+        else:
+            self.do_augment = False
+
+        # index right now is by the oldest observation needed to compute
+        # prediction
+        self.data_file = os.path.abspath(data_file)
+        self.augment_data_file = os.path.abspath(augment_file)
+        self.num_condition = int(number_condition)
+        assert(self.num_condition>0)
+        self.steps_ahead = int(steps_ahead)
+        assert(self.steps_ahead>=0)
+        self.data = np.load(self.data_file)
+        if self.do_augment:
+            self.augmented_data = np.load(self.augment_data_file)
+        num_examples,self.data_h,self.data_w = self.data['states'].shape
+        self.num_examples = self.num_examples-(self.steps_ahead+self.num_condition)
+        # index by observation number ( last sample of conditioning )
+        # if i ask for frame 3 - return w/ steps_ahead=1
+        # x = data[0,1,2,3], action
+        # y = data[1,2,3,4], reward
+        self.index_array = np.arange(self.num_condition-1, self.data.shape[0]-self.steps_ahead)
+
+    def __max__(self):
+        return max(self.index_array)
+
+    def __len__(self):
+        return self.num_examples
+
+    def __getitem__(self, idx):
+        try:
+            n = idx.shape[0]
+        except:
+            n = 1
+        dx = []
+        add_range = np.arange(-(self.num_condition-1), 1)
+        # old way which doesnt allow augmentation
+        #for i in add_range:
+        #    i_idx = idx+i
+        #    dx.append(self.data[i_idx])
+        #dx = np.array(dx).swapaxes(1,0)
+
+        if self.do_augment:
+            # choose the augmented data for the most recent observations some of
+            # the time
+            start_augment_idx = self.rdn.choice(add_range, n, replace=True)
+        else:
+            # always choose the real data
+            start_augment_idx = np.zeros((n))
+
+        for nidx, start in enumerate(idx):
+            this_sample = []
+            for i in add_range:
+                i_idx = start+i
+                if i > start_augment_idx[nidx]:
+                    pp = 'pred'
+                    this_sample.append(self.augmented_data[i_idx])
+                else:
+                    pp = 'real'
+                    this_sample.append(self.data[i_idx])
+                #print(start, i_idx, i,pp, start_augment_idx[nidx])
+            dx.append(this_sample)
+
+        dy = self.data[idx+self.steps_ahead][:,None]
+        x = (torch.FloatTensor(dx)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+        y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+        return x,y
+
+
 
 
