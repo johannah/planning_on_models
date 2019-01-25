@@ -4,11 +4,12 @@ from skimage.color import rgb2gray
 from skimage import img_as_ubyte
 import numpy as np
 import gym
+import os
 import warnings
 from imageio import imwrite
 warnings.simplefilter('ignore', UserWarning)
 # per bootstrapped dqn paper
-NETWORK_INPUT_SIZE = (48,48)
+NETWORK_INPUT_SIZE = (84,84)
 CLIP_REWARD_MIN = -1
 CLIP_REWARD_MAX = 1
 
@@ -25,6 +26,8 @@ class DMAtariEnv():
         self.noop_action = self.env.env.get_action_meanings().index('NOOP')
         self.num_true_steps = 0
         self.num_episodes = 0
+        if not os.path.exists('imgs'):
+            os.makedirs('imgs')
         self.reset()
 
     def reset(self):
@@ -66,15 +69,18 @@ class DMAtariEnv():
         self.num_true_steps+=4
         #if not self.num_true_steps%10:
         #    print(self.num_true_steps,reward,reward_clipped)
-        imwrite('af%05d.png'%self.num_true_steps,img_as_ubyte(frame4))
-        imwrite('ao%05d.png'%self.num_true_steps,img_as_ubyte(obs4))
-        imwrite('am%05d.png'%self.num_true_steps,img_as_ubyte(obs_step4))
+        #imwrite('imgs/af%05d.png'%self.num_true_steps,img_as_ubyte(frame4))
+        #imwrite('imgs/ao%05d.png'%self.num_true_steps,img_as_ubyte(obs4))
+        #imwrite('imgs/am%05d.png'%self.num_true_steps,img_as_ubyte(obs_step4))
         if finished:
             self.num_true_steps+=1
-            blank = np.zeros((48,48))
-            imwrite('af%05de.png'%self.num_true_steps,blank)
-            imwrite('ao%05de.png'%self.num_true_steps,blank)
-            imwrite('am%05de.png'%self.num_true_steps,blank)
+            #blank = np.zeros((48,48))
+            #imwrite('imgs/af%05de.png'%self.num_true_steps,blank)
+            #imwrite('imgs/ao%05de.png'%self.num_true_steps,blank)
+            #imwrite('imgs/am%05de.png'%self.num_true_steps,blank)
+            #os.system('convert imgs/af*.png imgs/af.gif')
+            #os.system('convert imgs/ao*.png imgs/ao.gif')
+            #os.system('convert imgs/am*.png imgs/am.gif')
             self.num_episodes +=1
         return obs_step4, reward_clipped, finished
 

@@ -13,6 +13,7 @@ def experience_replay(batch_size, max_size, history_size=4, write_buffer_every=1
     ongoing_flags = []
     masks = []
     actions = []
+    heads = []
     while True:
         inds = np.arange(len(rewards))
         # get experiences out - now need to update states
@@ -44,18 +45,21 @@ def experience_replay(batch_size, max_size, history_size=4, write_buffer_every=1
             rewards.append(experience[2])
             ongoing_flags.append(experience[3])
             masks.append(experience[4])
+            heads.append(experience[5])
             if len(rewards)>max_size:
                 states.pop(0)
                 rewards.pop(0)
                 actions.pop(0)
                 ongoing_flags.pop(0)
                 masks.pop(0)
-            if (cnt-last_write)>write_buffer_every:
+                heads.pop(0)
+            if (cnt-last_write)>=write_buffer_every:
                 last_write = cnt
-                print("saving new experience buffer")
-                np.savez('buffer_%010d.npz'%cnt, states=np.array(states),
+                bname = 'buffer_%010d.npz'%cnt
+                print("saving new experience buffer:%s"%bname)
+                np.savez(bname, states=np.array(states),
                                                  actions=np.array(actions),
                                                  rewards=np.array(rewards),
                                                  ongoing_flags=np.array(ongoing_flags),
-                                                 mask=np.array(masks))
+                                                 mask=np.array(masks), heads=np.array(heads))
 
