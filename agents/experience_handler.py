@@ -17,6 +17,7 @@ def experience_replay(batch_size, max_size, history_size=4,
     masks = []
     actions = []
     heads = []
+    acts = []
     while True:
         inds = np.arange(len(rewards))
         # get experiences out - now need to update states
@@ -49,6 +50,10 @@ def experience_replay(batch_size, max_size, history_size=4,
             ongoing_flags.append(experience[3])
             masks.append(experience[4])
             heads.append(experience[5])
+            acts.append(experience[6])
+            if rewards[-1] > 0:
+                print('------------------------------------')
+                print('adding positive reward',experience[1:])
             if len(rewards)>max_size:
                 states.pop(0)
                 rewards.pop(0)
@@ -56,22 +61,28 @@ def experience_replay(batch_size, max_size, history_size=4,
                 ongoing_flags.pop(0)
                 masks.pop(0)
                 heads.pop(0)
-            if not cnt%1000:
-                print(name,'buffer cnt %s' %cnt,'last write was %s ago' %(cnt-last_write),'will write at %s' %((last_write+write_buffer_every)-cnt))
+                acts.pop(0)
+            if not cnt%100:
+                print(name,'buffer cnt %s' %cnt,'last write was %s ago' %(cnt-last_write),'will write in %s' %((last_write+write_buffer_every)-cnt))
             if (cnt-last_write)>=write_buffer_every:
                 last_write = cnt
                 basename = '%s_%010d.npz'%(name,cnt)
                 bname = os.path.join(config.model_savedir,basename)
                 print("saving new experience buffer:%s"%bname)
-                np.savez(bname, states=np.array(states),
+                try:
+                    np.savez_compressed(bname, states=np.array(states),
                                                  actions=np.array(actions),
                                                  rewards=np.array(rewards),
                                                  ongoing_flags=np.array(ongoing_flags),
                                                  mask=np.array(masks), heads=np.array(heads),
-                                                 cnt=cnt)
+                                                 cnt=cnt, acts=acts)
+                except:
+                    print('bad save experience')
+                    embed()
                 # write file so we know there is a new file here
                 a=open(bname.replace('.npz', '_new.txt'), 'w')
                 a.write(str(cnt))
                 a.close()
 
+# eval 137000 - eval plus 1
 

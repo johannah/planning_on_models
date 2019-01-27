@@ -72,7 +72,7 @@ class DMAtariEnv():
             finished = True
         if finished:
             print('finished epoch')
-            print(finished,'action',action,'lives', lives, infos)
+            #print(finished,'action',action,'lives', lives, infos)
             self.num_episodes +=1
         # clip bt -1 and 1
         reward_clipped = min(reward,self.clip_reward_max)

@@ -20,48 +20,6 @@ from dqn_model import EnsembleNet, NetWithPrior
 from experience_handler import experience_replay
 from IPython import embed
 from imageio import imwrite
-NETWORK_INPUT_SIZE = (84,84)
-CLIP_REWARD_MAX = 1
-CLIP_REWARD_MAX = -1
-DEVICE = 'cuda'
-# how many past frames to use for state input
-HISTORY_SIZE = 4
-# How often to check and evaluate
-EVALUATE_EVERY = 100
-# Save images of policy at each evaluation if True, otherwise only at the end if False
-SAVE_IMAGES = False
-# How often to print statistics
-PRINT_EVERY = 1
-# Whether to use double DQN or regular DQN
-USE_DOUBLE_DQN = True
-# TARGET_UPDATE how often to use replica target
-TARGET_UPDATE = 30
-# Number of evaluation episodes to run
-N_EVALUATIONS = 10
-# Number of heads for ensemble (1 falls back to DQN)
-N_ENSEMBLE = 9
-# Probability of experience to go to each head
-BERNOULLI_P = 0.8
-# Weight for randomized prior, 0. disables
-PRIOR_SCALE = 0.0
-# Number of episodes to run
-N_EPOCHS = 10000
-# Batch size to use for learning
-BATCH_SIZE = 128
-# Buffer size for experience replay
-BUFFER_SIZE = 1e6
-# How often to write data file
-WRITE_BUFFER_EVERY = 5000
-# Epsilon greedy exploration ~prob of random action, 0. disables
-EPSILON = 0.0
-# Gamma weight in Q update
-GAMMA = .99
-# Gradient clipping setting
-CLIP_GRAD = 1
-# Learning rate for Adam
-ADAM_LEARNING_RATE = 1E-3
-IMAGE_SAVE_LIMIT = 300
-random_state = np.random.RandomState(11)
 
 def seed_everything(seed=1234):
     #random.seed(seed)
@@ -70,8 +28,6 @@ def seed_everything(seed=1234):
     np.random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     #torch.backends.cudnn.deterministic = True
-
-seed_everything(4)
 
 def save_img(epoch):
     imagedir = 'images_%010d'%epoch
@@ -120,7 +76,7 @@ def plot_evals(accumulation_rewards):
     plt.savefig("reward_traces.png")
 
 
-def train_batch(batch):
+def train_batch(batch, epoch_losses, epoch_steps):
     inputs = []
     actions = []
     rewards = []
@@ -191,155 +147,220 @@ def train_batch(batch):
     torch.nn.utils.clip_grad_value_(policy_net.parameters(), CLIP_GRAD)
     opt.step()
     et = time.time()
-    #print('batch step time', et-st)
+    return epoch_losses, epoch_steps
 
-# change minibatch setup to use masking...
-replay_size = int(N_ENSEMBLE * BUFFER_SIZE)
-eval_replay_size = int(replay_size*.1)
-exp_replay = experience_replay(batch_size=BATCH_SIZE, max_size=replay_size,
-                               history_size=HISTORY_SIZE, write_buffer_every=WRITE_BUFFER_EVERY, name='train_buffer')
-eval_exp_replay = experience_replay(batch_size=BATCH_SIZE, max_size=eval_replay_size,
-                               history_size=HISTORY_SIZE, write_buffer_every=WRITE_BUFFER_EVERY, name='test_buffer')
-next(exp_replay) # Start experience-replay coroutines
-next(eval_exp_replay)
-
-# Stores the total rewards from each evaluation, per head over all epochs
-accumulation_rewards = []
-overall_time = 0.
-env = DMAtariEnv('Breakout',random_seed=34)
-eval_env = DMAtariEnv('Breakout',random_seed=55)
-action_space = np.arange(env.env.action_space.n)
-heads = list(range(N_ENSEMBLE))
-total_steps = 0
-
-prior_net_ensemble = EnsembleNet(n_ensemble=N_ENSEMBLE, n_actions=env.env.action_space.n,
-                                 network_output_size=NETWORK_INPUT_SIZE[0], num_channels=HISTORY_SIZE)
-policy_net_ensemble = EnsembleNet(n_ensemble=N_ENSEMBLE, n_actions=env.env.action_space.n,
-                                  network_output_size=NETWORK_INPUT_SIZE[0], num_channels=HISTORY_SIZE)
-
-policy_net = NetWithPrior(policy_net_ensemble, prior_net_ensemble, PRIOR_SCALE).to(DEVICE)
-
-target_net_ensemble = EnsembleNet(n_ensemble=N_ENSEMBLE, n_actions=env.env.action_space.n,
-                                  network_output_size=NETWORK_INPUT_SIZE[0], num_channels=HISTORY_SIZE)
-target_net = NetWithPrior(target_net_ensemble, prior_net_ensemble, PRIOR_SCALE).to(DEVICE)
-
-opt = optim.Adam(policy_net.parameters(), lr=ADAM_LEARNING_RATE)
-
-
-for i in range(N_EPOCHS):
+def run_training_episode(epoch_num):
     start = time.time()
-    #ep = episode()
+    random_state.shuffle(heads)
+    active_head = heads[0]
     episodic_reward = 0
     S, action, reward, finished = env.reset()
     ongoing_flag = int(finished)
     exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
-    experience =  [S, action, reward, ongoing_flag, exp_mask, -1]
+    experience =  [S, action, reward, ongoing_flag, exp_mask, -1, fake_acts]
     batch = exp_replay.send(experience)
     S_hist = [S for _ in range(HISTORY_SIZE)]
     epoch_losses = [0. for k in range(N_ENSEMBLE)]
     epoch_steps = [1. for k in range(N_ENSEMBLE)]
-    random_state.shuffle(heads)
-    active_head = heads[0]
     policy_net.train()
     episode_actions = []
     cnt = 0
     while not finished:
+        with torch.no_grad():
+            # always do this calculation - as it is used for debugging
+            S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(DEVICE)
+            vals = [q.cpu().data.numpy() for q in policy_net(S_hist_pt, None)]
+            acts = [np.argmax(v, axis=-1)[0] for v in vals]
+
         if (random_state.rand() < EPSILON):
             action = random_state.choice(action_space)
             used = -1
-        else: # Get the index of the maximum q-value of the model.
-            with torch.no_grad():
-                used = active_head
-                policy_net_output = policy_net(torch.Tensor(S_hist)[None].to(DEVICE),active_head).detach().cpu().data.numpy()
-                action = np.argmax(policy_net_output, axis=-1)[0]
-
+        else:
+            action = acts[active_head]
+            used = active_head
         episode_actions.append(action)
         S_prime, reward, finished = env.step4(action)
         if finished:
             print("got finished epoch")
-        if not total_steps%100:
-            print('E%d'%i,'%05d'%cnt,action,used,reward)
         episodic_reward+=reward
         ongoing_flag = int(finished)
         exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
-        experience =  [S_prime, action, reward, ongoing_flag, exp_mask,used]
+        experience =  [S_prime, action, reward, ongoing_flag, exp_mask, used, acts]
         S_hist.pop(0)
         S_hist.append(S_prime)
         S = S_prime
         batch = exp_replay.send(experience)
         cnt+=1
-        total_steps+=1
         if batch:
-            train_batch(batch)
+            epoch_losses, epoch_steps = train_batch(batch, epoch_losses, epoch_steps)
     stop = time.time()
-    overall_time += stop - start
-    print("EPISODIC_REWARD", episodic_reward)
+    ep_time =  stop - start
+    print("EPISODIC_REWARD", epoch_num, episodic_reward)
     print("episode steps", cnt)
     print('actions',episode_actions)
+    print("Epoch {}, head {}, loss: {}".format(epoch_num + 1, active_head, [epoch_losses[k] / float(epoch_steps[k]) for k in range(N_ENSEMBLE)]))
+    return cnt, ep_time
 
-    if TARGET_UPDATE > 1 and i % TARGET_UPDATE == 0:
-        print("Updating target network at {}".format(i))
-        target_net.load_state_dict(policy_net.state_dict())
+def run_eval_episode(eval_epoch):
+    eval_cnt = 0
+    evaluate_episodic_reward = 0
+    S, eval_action, reward, finished = eval_env.reset()
+    print("starting new eval epoch", eval_epoch, finished)
+    ongoing_flag = int(finished)
+    exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
+    experience =  [S, eval_action, reward, ongoing_flag, exp_mask, -1, fake_acts]
+    _ = eval_exp_replay.send(experience)
 
-    if i % PRINT_EVERY == 0:
-        print("Epoch {}, head {}, loss: {}".format(i + 1, active_head, [epoch_losses[k] / float(epoch_steps[k]) for k in range(N_ENSEMBLE)]))
-
-    if (i % EVALUATE_EVERY == 0 or i == (N_EPOCHS - 1)) and i > 0:
-        #if i == (N_EPOCHS - 1):
-        #    # save images at the end for sure
-        #    SAVE_IMAGES = True
-        #    ORIG_N_EVALUATIONS = N_EVALUATIONS
-        #    N_EVALUATIONS = 5
-        #if SAVE_IMAGES:
-        #    img_saver = save_img(i)
-        #    next(img_saver)
-        evaluation_rewards = []
-        for eval_epoch in range(N_EVALUATIONS):
-            evaluate_episodic_reward = 0
-            S, action, reward, finished = eval_env.reset()
-            print("starting new eval epoch", eval_epoch, finished)
-            ongoing_flag = int(finished)
-            exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
-            experience =  [S, action, reward, ongoing_flag, exp_mask, -1]
-            _ = eval_exp_replay.send(experience)
-
-            S_hist = [S for _ in range(HISTORY_SIZE)]
-            reward_trace = [reward]
-            if SAVE_IMAGES:
-                img_saver.send((S, reward))
-            policy_net.eval()
-            actions = []
-            while not finished:
-                S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(DEVICE)
-                acts = [np.argmax(q.cpu().data.numpy(), axis=-1)[0] for q in policy_net(S_hist_pt, None)]
-                act_counts = Counter(acts)
-                max_count = max(act_counts.values())
-                top_actions = [a for a in act_counts.keys() if act_counts[a] == max_count]
-                #print('eval actions', acts, act_counts)
-                # break action ties with random choice
-                random_state.shuffle(top_actions)
-                act = top_actions[0]
-                actions.append(act)
-                S_prime, reward, finished = eval_env.step4(act)
-                ongoing_flag = int(finished)
-                exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
-                experience =  [S, action, reward, ongoing_flag, exp_mask, -1]
-                _ = eval_exp_replay.send(experience)
-                evaluate_episodic_reward += reward
-                reward_trace.append(reward)
-                if SAVE_IMAGES:
-                    img_saver.send((S_prime, reward))
-                S_hist.pop(0)
-                S_hist.append(S_prime)
-                S = S_prime
-            evaluation_rewards.append(np.sum(reward_trace))
-            print("Evaluation Episode eval_epoch {} reward {}".format(eval_epoch, evaluation_rewards[-1]))
-            print('num steps in epoch', len(actions), 'ep reward', evaluate_episodic_reward)
-            print('eval actions', actions)
-        accumulation_rewards.append(np.mean(evaluation_rewards))
-        print("Mean evaluation reward all eval epochs {}".format(accumulation_rewards[-1]))
-        plot_evals(accumulation_rewards)
+    S_hist = [S for _ in range(HISTORY_SIZE)]
+    reward_trace = [reward]
+    policy_net.eval()
+    eval_actions = []
+    while not finished:
+        S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(DEVICE)
+        vals = [q.cpu().data.numpy() for q in policy_net(S_hist_pt, None)]
+        acts = [np.argmax(v, axis=-1)[0] for v in vals]
+        #print('vals',vals,acts)
+        act_counts = Counter(acts)
+        max_count = max(act_counts.values())
+        top_actions = [a for a in act_counts.keys() if act_counts[a] == max_count]
+        # break action ties with random choice
+        random_state.shuffle(top_actions)
+        eval_action = top_actions[0]
+        eval_actions.append(eval_action)
+        S_prime, reward, finished = eval_env.step4(eval_action)
+        ongoing_flag = int(finished)
+        exp_mask = random_state.binomial(1, BERNOULLI_P, N_ENSEMBLE)
+        top_heads = [k for (k,a) in enumerate(acts) if a in top_actions]
+        # randomly choose which head to say was used in case there are
+        # multiple heads that chose same action
+        k_used = top_heads[random_state.randint(len(top_heads))]
+        experience =  [S, eval_action, reward, ongoing_flag, exp_mask, k_used, acts]
+        if not eval_cnt%10:
+            print(eval_cnt,'chose',eval_action,'k',k_used)
+            print('eval actions', acts)
+            print(np.sum(vals), np.sum(S_hist))
+        eval_cnt+=1
+        _ = eval_exp_replay.send(experience)
+        evaluate_episodic_reward += reward
+        reward_trace.append(reward)
         if SAVE_IMAGES:
-            img_saver.close()
-embed()
+            img_saver.send((S_prime, reward))
+        S_hist.pop(0)
+        S_hist.append(S_prime)
+        S = S_prime
+
+    print("Evaluation Episode eval_epoch {} reward {}".format(eval_epoch, evaluate_episodic_reward))
+    print('num steps in epoch', len(eval_actions), 'ep reward', evaluate_episodic_reward)
+    print('eval actions', eval_actions)
+    return eval_cnt, reward_trace
+
+if __name__ == '__main__':
+    # 3 is right
+    # 2 is left
+    # 1 is fire
+    # 0 is noop
+    NETWORK_INPUT_SIZE = (84,84)
+    CLIP_REWARD_MAX = 1
+    CLIP_REWARD_MAX = -1
+    DEVICE = 'cuda'
+    NAME = '_debug1H'
+    # how many past frames to use for state input
+    HISTORY_SIZE = 4
+    # How often to check and evaluate
+    EVALUATE_EVERY = 10
+    # Number of evaluation episodes to run
+    N_EVALUATIONS = 3
+    # Save images of policy at each evaluation if True, otherwise only at the end if False
+    SAVE_IMAGES = False
+    # How often to print statistics
+    PRINT_EVERY = 1
+    # Whether to use double DQN or regular DQN
+    USE_DOUBLE_DQN = True
+    # TARGET_UPDATE how often to use replica target
+    TARGET_UPDATE = 30
+    # Number of heads for ensemble (1 falls back to DQN)
+    N_ENSEMBLE = 1
+    # Probability of experience to go to each head
+    BERNOULLI_P = 1.0
+    # Weight for randomized prior, 0. disables
+    PRIOR_SCALE = 0.0
+    # Number of episodes to run
+    N_EPOCHS = 10000
+    # Batch size to use for learning
+    BATCH_SIZE = 128
+    # Buffer size for experience replay
+    BUFFER_SIZE = 1e6
+    # How often to write data file
+    WRITE_BUFFER_EVERY = 10000
+    # Epsilon greedy exploration ~prob of random action, 0. disables
+    EPSILON = 0.1
+    # Gamma weight in Q update
+    GAMMA = .99
+    # Gradient clipping setting
+    CLIP_GRAD = 1
+    # Learning rate for Adam
+    SEED = 18
+    seed_everything(SEED)
+    ADAM_LEARNING_RATE = 1E-4
+    IMAGE_SAVE_LIMIT = 300
+    random_state = np.random.RandomState(11)
+
+    # change minibatch setup to use masking...
+    replay_size = int(N_ENSEMBLE * BUFFER_SIZE)
+    eval_replay_size = 2000#int(replay_size*.1)
+    eval_write_every = 2000
+    exp_replay = experience_replay(batch_size=BATCH_SIZE, max_size=replay_size,
+                                   history_size=HISTORY_SIZE,
+                                   write_buffer_every=WRITE_BUFFER_EVERY,
+                                   name=NAME+'train')
+    eval_exp_replay = experience_replay(batch_size=BATCH_SIZE, max_size=eval_replay_size,
+                                   history_size=HISTORY_SIZE,
+                                   write_buffer_every=eval_write_every, name=NAME+'eval')
+    next(exp_replay) # Start experience-replay coroutines
+    next(eval_exp_replay)
+
+    # Stores the total rewards from each evaluation, per head over all epochs
+    accumulation_rewards = []
+    overall_time = 0.
+    env = DMAtariEnv('Breakout',random_seed=34)
+    eval_env = DMAtariEnv('Breakout',random_seed=55)
+    action_space = np.arange(env.env.action_space.n)
+    heads = list(range(N_ENSEMBLE))
+    total_steps = 0
+    eval_total_steps = 0
+    eval_cnt = 0
+    prior_net_ensemble = EnsembleNet(n_ensemble=N_ENSEMBLE, n_actions=env.env.action_space.n,
+                                     network_output_size=NETWORK_INPUT_SIZE[0], num_channels=HISTORY_SIZE)
+    policy_net_ensemble = EnsembleNet(n_ensemble=N_ENSEMBLE, n_actions=env.env.action_space.n,
+                                      network_output_size=NETWORK_INPUT_SIZE[0], num_channels=HISTORY_SIZE)
+
+    policy_net = NetWithPrior(policy_net_ensemble, prior_net_ensemble, PRIOR_SCALE).to(DEVICE)
+
+    target_net_ensemble = EnsembleNet(n_ensemble=N_ENSEMBLE, n_actions=env.env.action_space.n,
+                                      network_output_size=NETWORK_INPUT_SIZE[0], num_channels=HISTORY_SIZE)
+    target_net = NetWithPrior(target_net_ensemble, prior_net_ensemble, PRIOR_SCALE).to(DEVICE)
+
+    opt = optim.Adam(policy_net.parameters(), lr=ADAM_LEARNING_RATE)
+    fake_acts = [-1 for x in range(N_ENSEMBLE)]
+
+
+    for epoch_num in range(N_EPOCHS):
+        tcnt, ttime = run_training_episode(epoch_num)
+        total_steps += tcnt
+        overall_time += ttime
+
+        if TARGET_UPDATE > 1 and epoch_num % TARGET_UPDATE == 0:
+            print("Updating target network at {}".format(epoch_num))
+            target_net.load_state_dict(policy_net.state_dict())
+
+
+        if (epoch_num % EVALUATE_EVERY == 0 or epoch_num == (N_EPOCHS - 1)) and epoch_num > 0:
+            evaluation_rewards = []
+            for eval_epoch in range(N_EVALUATIONS):
+                ecnt, eval_reward_trace = run_eval_episode(eval_epoch)
+                eval_total_steps += ecnt
+                evaluation_rewards.append(np.sum(eval_reward_trace))
+            accumulation_rewards.append(np.mean(evaluation_rewards))
+            print("Mean evaluation reward all eval epochs {}".format(accumulation_rewards[-1]))
+            plot_evals(accumulation_rewards)
 
