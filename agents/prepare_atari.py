@@ -16,7 +16,7 @@ def prepare_frame(frame, network_input_size):
 # TODO - what happens when finished = True?
 class DMAtariEnv():
     def __init__(self, gamename='Breakout', network_input_size=(84,84),
-                 clip_reward_max=1, clip_reward_min=-1,random_seed=223):
+                 clip_reward_max=1, clip_reward_min=-1, random_seed=223):
         self.clip_reward_max = clip_reward_max
         self.clip_reward_min = clip_reward_min
         self.network_input_size = network_input_size
@@ -48,7 +48,7 @@ class DMAtariEnv():
     # expects single step atari - will repeat 4 times
     def step4(self, action):
         # min frame skips is two
-        reward = 0
+        reward = 0.0
         # frame 1
         frame1, r1, finished1, info1 = self.env.step(action)
         # frame 2

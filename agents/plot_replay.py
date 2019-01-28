@@ -49,6 +49,7 @@ def plot_cum_reward(data):
     plt.close()
 
 def plot_rae(data):
+    embed()
     rewards = data['rewards']
     actions = data['actions']
     ongoing = data['ongoing_flags']
@@ -76,14 +77,14 @@ def plot_head_actions(data):
 
 
     plt.figure()
-    plt.plot(data['mask'][r:],label='mask')
+    plt.plot(frames,data['mask'][r:],label='mask')
     plt.title('mask')
     plt.legend()
     plt.savefig(os.path.join(bdir, "mask.png"))
     plt.close()
 
     plt.figure()
-    plt.plot(heads,label='head used')
+    plt.plot(frames,heads[r:],label='head used')
     plt.title('head')
     plt.legend()
     plt.savefig(os.path.join(bdir, "heads.png"))
@@ -101,7 +102,7 @@ def plot_head_actions(data):
         plt.close()
 
 if __name__ == '__main__':
-    back = 50
+    back = 500
     f = sys.argv[1]#'buffer_0000001001.npz'
     bdir = f.replace(".npz","_states")
     if not os.path.exists(bdir):
