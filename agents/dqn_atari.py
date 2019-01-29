@@ -166,13 +166,13 @@ def run_training_episode(epoch_num, total_steps, last_save):
     active_head = heads[0]
     episodic_reward = 0.0
     S, action, reward, finished = env.reset()
+    episode_actions = [action]
     # init current state buffer with initial frame
     S_hist = [S for _ in range(info['HISTORY_SIZE'])]
     epoch_losses = [0. for k in range(info['N_ENSEMBLE'])]
     epoch_steps = [1. for k in range(info['N_ENSEMBLE'])]
     policy_net.train()
     total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
-    episode_actions = []
     print("start action while loop")
 
     # fake start
@@ -262,7 +262,7 @@ if __name__ == '__main__':
         "PRIOR_SCALE":0.0, # Weight for randomized prior, 0. disables
         "N_EPOCHS":10000,  # Number of episodes to run
         "BATCH_SIZE":128, # Batch size to use for learning
-        "BUFFER_SIZE":1e5, # Buffer size for experience replay
+        "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "EPSILON":0.05, # Epsilon greedy exploration ~prob of random action, 0. disables
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting

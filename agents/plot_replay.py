@@ -26,12 +26,14 @@ def plot_replay_buffer(data):
     epoch_cnt = np.sum(data['ongoing_flags'][:skip])
     r = 0
     cmd_list = []
+    ep_rewards = []
+    epochs = []
     for i in range(skip,n):
         fname = os.path.join(bdir, "ZE%06d_%05d.png"%(epoch_cnt,i))
+        r += rewards[i]
         if not os.path.exists(fname):
             f,ax = plt.subplots(1)
             ax.imshow(states[i], cmap='gray',interpolation="None")
-            r += rewards[i]
             ax.set_title("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
             ax.plot(np.cumsum(rewards[i:i+width]), label='rewards', c='orange')
             ax.plot(actions[i:i+width], label='actions', c='green')
@@ -40,11 +42,17 @@ def plot_replay_buffer(data):
             plt.savefig(fname)
             plt.close()
         if ongoing[i]:
+            ep_rewards.append(r)
+            epochs.append(epoch_cnt)
             if r > 3:
                 os.system("convert %s %s"%(os.path.join(bdir,"ZE%06d*.png"%epoch_cnt), os.path.join(bdir,"_%06d_R%04d.gif"%(epoch_cnt,r))))
             epoch_cnt +=1
             print('new epoch', epoch_cnt, r)
             r = 0
+    plt.figure()
+    plt.scatter(epochs, ep_rewards)
+    plt.savefig(os.path.join(bdir, 'epoch_rewards.png'))
+    plt.close()
     os.system("convert %s %s"%(os.path.join(bdir,"ZE*.png"), os.path.join(bdir,"o.gif")))
 
 def plot_cum_reward(data):
@@ -83,8 +91,8 @@ def plot_head_actions(data):
 
 
     plt.figure()
-    plt.plot(frames,data['mask'][r:],label='mask')
-    plt.title('mask')
+    plt.plot(frames,data['masks'][r:],label='masks')
+    plt.title('masks')
     plt.legend()
     plt.savefig(os.path.join(bdir, "mask.png"))
     plt.close()
@@ -110,7 +118,7 @@ def plot_head_actions(data):
 if __name__ == '__main__':
     back = 1100
     f = sys.argv[1]#'buffer_0000001001.npz'
-    fpath = os.path.join(config.model_savedir, f)
+    fpath = os.path.abspath(os.path.join(config.model_savedir, f))
     bdir = fpath.replace(".npz","_states")
     print('writing to', bdir)
     if not os.path.exists(bdir):
