@@ -23,9 +23,9 @@ def experience_replay(batch_size, max_size, history_size=4,
             masks = list(data['masks'])
         except:
             masks = list(data['mask'])
-
         acts = list(data['acts'])
         cnt = data['cnt']
+        del data
         print("loaded buffer from %s" %buffer_file)
     else:
         print("init empty buffer")
@@ -63,7 +63,6 @@ def experience_replay(batch_size, max_size, history_size=4,
 
         do_checkpoint, experience = yield yield_val
         if experience is not None:
-            save_model = False
             # add experience
             states.append(experience[0])
             actions.append(experience[1])
@@ -71,7 +70,7 @@ def experience_replay(batch_size, max_size, history_size=4,
             ongoing_flags.append(experience[3])
             masks.append(experience[4])
             heads.append(experience[5])
-            acts.append(experience[6])
+#            acts.append(experience[6])
             cnt = experience[7]
             if rewards[-1] > 0:
                 print('------------------------------------')
@@ -83,7 +82,7 @@ def experience_replay(batch_size, max_size, history_size=4,
                 ongoing_flags.pop(0)
                 masks.pop(0)
                 heads.pop(0)
-                acts.pop(0)
+#                acts.pop(0)
 
             if do_checkpoint is not '':
                 bname = do_checkpoint.replace('.pkl', '_%s.npz'%name)
