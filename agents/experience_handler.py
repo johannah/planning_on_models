@@ -12,6 +12,7 @@ def experience_replay(batch_size, max_size, history_size=4,
     indexes start at zero - end at len()-history_size
     """
     random_state = np.random.RandomState(random_seed)
+    est = time.time()
     if buffer_file != '':
         data = np.load(buffer_file)
         states = list(data['states'])
@@ -40,11 +41,11 @@ def experience_replay(batch_size, max_size, history_size=4,
         if (len(rewards)-(history_size+1)) < batch_size:
             yield_val = None
         else:
+            st = time.time()
             # start indexes that can be used to find states
             inds = np.arange(history_size,len(rewards)-1)
             # get observations from each
-            real_batch_indexes = random_state.choice(inds, size=batch_size, replace=False)
-            batch_indexes = inds
+            batch_indexes = random_state.choice(inds, size=batch_size, replace=False)
             # index refers to the true state observed by the agent
             # this index require history_size previous frames
             # it also requires one future frame
@@ -52,26 +53,34 @@ def experience_replay(batch_size, max_size, history_size=4,
             # observation S indexes [7,8,9,10] and
             # next observation s_prime indexes [8,9,10,11] and
             # experience = (S, S_prime, action, reward, ongoing, exp_mask)
-            ii = [[i-history_size]+[i]+[(i+1)-history_size-1]+[(i+1)] for i in batch_indexes]
             arr_states = np.array(states)
-            _S = np.array([arr_states[i-history_size:i] for i in batch_indexes])
-            _S_prime = np.array([arr_states[(i+1)-history_size:(i+1)] for i in batch_indexes])
+            S = np.array([arr_states[i-history_size:i+1] for i in batch_indexes]).astype(np.float32)/256.
+            #_S_prime = np.array([arr_states[(i+1)-history_size:(i+1)] for i in batch_indexes]).astype(np.float32)/256.
             # actions, rewards, finished
             _other = np.array([[actions[i], rewards[i], ongoing_flags[i], i] for i in batch_indexes])
             _masks = np.array([masks[i] for i in batch_indexes])
-            yield_val = [_S, _S_prime, _other, _masks]
+            yield_val = [S[:,:history_size], S[:,1:], _other, _masks]
+            et = time.time()
+            # on gpu/cpu - with small array - find indexes takes .02
+            # on gpu/cpu - with small array - add experience takes 1.66e-6
+            # on gpu with len(6000) array - add experience takes 9.53e-7
+            # on gpu with len(6000) array - find indexes takes 0.836
+            #print('buffer add',et-est)
 
         do_checkpoint, experience = yield yield_val
         if experience is not None:
+
+            est = time.time()
             # add experience
-            states.append(experience[0])
+            states.append((experience[0]*256).astype(np.uint8))
             actions.append(experience[1])
             rewards.append(experience[2])
             ongoing_flags.append(experience[3])
             masks.append(experience[4])
             heads.append(experience[5])
-#            acts.append(experience[6])
+            acts.append(experience[6])
             cnt = experience[7]
+            eet = time.time()
             if rewards[-1] > 0:
                 print('------------------------------------')
                 print('adding positive reward',experience[1:])
@@ -82,7 +91,7 @@ def experience_replay(batch_size, max_size, history_size=4,
                 ongoing_flags.pop(0)
                 masks.pop(0)
                 heads.pop(0)
-#                acts.pop(0)
+                acts.pop(0)
 
             if do_checkpoint is not '':
                 bname = do_checkpoint.replace('.pkl', '_%s.npz'%name)

@@ -10,7 +10,7 @@ from imageio import imwrite
 warnings.simplefilter('ignore', UserWarning)
 # per bootstrapped dqn paper
 def prepare_frame(frame, network_input_size):
-    small_frame = resize(rgb2gray(frame),network_input_size)
+    small_frame = resize(rgb2gray(frame),network_input_size).astype(np.float32)
     return small_frame
 
 # TODO - what happens when finished = True?

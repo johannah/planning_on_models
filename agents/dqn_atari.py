@@ -204,7 +204,9 @@ def run_training_episode(epoch_num, total_steps, last_save):
         if batch:
             epoch_losses, epoch_steps = train_batch(batch, epoch_losses, epoch_steps)
         eet = time.time()
-        if not total_steps % 50:
+        if not total_steps % 10:
+            # CPU 40 seconds to complete 1 action when buffer is 6000
+            # CPU .0008 seconds to complete 1 action when buffer is 0
             print('time', eet-est)
             print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
 
@@ -215,9 +217,9 @@ def run_training_episode(epoch_num, total_steps, last_save):
     print('actions',episode_actions)
     return total_steps, ep_time, last_save
 
-def write_info_file(model_loaded=''):
-    info_f = open(os.path.join(model_base_filedir, 'info%s.txt'%model_loaded), 'w')
-    info_f.write(datetime.date.today().ctime()+'\n')
+def write_info_file(cnt):
+    info_filename = model_base_filepath + "_%010d_info.txt"%cnt
+    info_f = open(info_filename, 'w')
     for (key,val) in info.items():
         info_f.write('%s=%s\n'%(key,val))
     info_f.close()
@@ -273,27 +275,33 @@ if __name__ == '__main__':
     info['args'] = args
     accumulation_rewards = []
     overall_time = 0.
+    info['load_time'] = datetime.date.today().ctime()
 
     if args.model_loadpath != '':
         model_dict = torch.load(args.model_loadpath)
         info = model_dict['info']
+        total_steps = model_dict['cnt']
+        info['DEVICE'] = device
         info["SEED"] = model_dict['cnt']
-        model_base_filedir = os.path.split(os.path.split(args.model_loadpath)[0])[1]
-        model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
+        model_base_filedir = os.path.split(args.model_loadpath)[0]
         last_save = model_dict['cnt']
+        info['loaded_from'] = args.model_loadpath
+        epoch_start = model_dict['epoch']
     else:
+        total_steps = 0
         last_save = 0
+        epoch_start = 0
         run_num = 0
         model_base_filedir = os.path.join(config.model_savedir, info['NAME'] + '%02d'%run_num)
         while os.path.exists(model_base_filedir):
             run_num +=1
-            model_base_filedir = os.path.join(args.model_loadpath, info['NAME'] + '%02d'%run_num)
+            model_base_filedir = os.path.join(config.model_savedir, info['NAME'] + '%02d'%run_num)
         os.makedirs(model_base_filedir)
-        model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
         print("----------------------------------------------")
         print("starting NEW project: %s"%model_base_filedir)
 
-
+    model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
+    write_info_file(total_steps)
     env = DMAtariEnv(info['GAME'],random_seed=info['SEED'])
     action_space = np.arange(env.env.action_space.n)
     heads = list(range(info['N_ENSEMBLE']))
@@ -323,19 +331,10 @@ if __name__ == '__main__':
         target_net.load_state_dict(model_dict['target_net_state_dict'])
         policy_net.load_state_dict(model_dict['policy_net_state_dict'])
         opt.load_state_dict(model_dict['optimizer'])
-        total_steps = model_dict['cnt']
         print("loaded model state_dicts")
         if args.buffer_loadpath == '':
             args.buffer_loadpath = glob(args.model_loadpath.replace('.pkl', '*.npz'))[0]
             print("auto loading buffer from:%s" %args.buffer_loadpath)
-        try:
-            epoch_start = info['epoch']
-        except:
-            epoch_start = 67
-
-    else:
-        epoch_start = 0
-        total_steps = 0
     exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
                                    max_size=info['BUFFER_SIZE'],
                                    history_size=info['HISTORY_SIZE'],
