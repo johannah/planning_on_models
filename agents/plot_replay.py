@@ -3,6 +3,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import os, sys
+sys.path.append('../models')
+import config
 from IPython import embed
 from imageio import mimsave
 
@@ -23,18 +25,23 @@ def plot_replay_buffer(data):
 
     epoch_cnt = np.sum(data['ongoing_flags'][:skip])
     r = 0
+    cmd_list = []
     for i in range(skip,n):
-        f,ax = plt.subplots(1)
-        ax.imshow(states[i], cmap='gray',interpolation="None")
-        r += rewards[i]
-        ax.set_title("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
-        ax.plot(np.cumsum(rewards[i:i+width]), label='rewards', c='orange')
-        ax.plot(actions[i:i+width], label='actions', c='green')
-        #ax.plot(ongoing[i:i+width], label='end')
-        ax.legend(loc='center left')
-        plt.savefig(os.path.join(bdir, "ZE%05d_%05d.png"%(epoch_cnt,i)))
-        plt.close()
+        fname = os.path.join(bdir, "ZE%06d_%05d.png"%(epoch_cnt,i))
+        if not os.path.exists(fname):
+            f,ax = plt.subplots(1)
+            ax.imshow(states[i], cmap='gray',interpolation="None")
+            r += rewards[i]
+            ax.set_title("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
+            ax.plot(np.cumsum(rewards[i:i+width]), label='rewards', c='orange')
+            ax.plot(actions[i:i+width], label='actions', c='green')
+            #ax.plot(ongoing[i:i+width], label='end')
+            ax.legend(loc='center left')
+            plt.savefig(fname)
+            plt.close()
         if ongoing[i]:
+            if r > 3:
+                os.system("convert %s %s"%(os.path.join(bdir,"ZE%06d*.png"%epoch_cnt), os.path.join(bdir,"_%06d_R%04d.gif"%(epoch_cnt,r))))
             epoch_cnt +=1
             print('new epoch', epoch_cnt, r)
             r = 0
@@ -49,7 +56,6 @@ def plot_cum_reward(data):
     plt.close()
 
 def plot_rae(data):
-    embed()
     rewards = data['rewards']
     actions = data['actions']
     ongoing = data['ongoing_flags']
@@ -102,16 +108,35 @@ def plot_head_actions(data):
         plt.close()
 
 if __name__ == '__main__':
-    back = 500
+    back = 1100
     f = sys.argv[1]#'buffer_0000001001.npz'
-    bdir = f.replace(".npz","_states")
+    fpath = os.path.join(config.model_savedir, f)
+    bdir = fpath.replace(".npz","_states")
+    print('writing to', bdir)
     if not os.path.exists(bdir):
         os.makedirs(bdir)
 
-    data = np.load(f)
+    data = np.load(fpath)
     plot_head_actions(data)
     plot_cum_reward(data)
     plot_rae(data)
     plot_replay_buffer(data)
     #from argparse import ArgumentParser
     #parser = ArgmentParser()
+
+
+#4400 head 7 action 2 so far reward 2.0
+#EPISODE:60 HEAD 7 REWARD:2.0 ------ ep 0254 total 0000004400 steps
+#loss: [0.0033551501376026375, 0.0034131699518527925, 0.0030968723283332634, 0.0032495729539059395, 0.0035153610666656472, 0.0024509053094327214, 0.0023225715024558107, 0.002976390396567487, 0.0007492094665058104, 0.0003219344009238288, 3.238787191699297e-05]
+#actions [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+         #2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+         #2, 2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+         #2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2,
+         #2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+         #2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+         #2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+         #1, 2, 2, 0, 2, 2, 2, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0,
+         #0, 2, 2, 2, 0, 0, 0, 2, 0, 2, 2, 0, 2, 2, 2, 0, 0, 2, 0, 2, 0, 2, 0,
+         #0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 3, 2,
+         #2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 3, 2, 2, 0, 0, 2, 0, 2, 2,
+         #2, 2, 0, 2, 2, 2, 2, 2]

@@ -6,18 +6,36 @@ from IPython import embed
 
 def experience_replay(batch_size, max_size, history_size=4,
                       random_seed=4455,
-                      name='buffer'):
+                      name='buffer', buffer_file=''
+                      ):
     """
     indexes start at zero - end at len()-history_size
     """
     random_state = np.random.RandomState(random_seed)
-    rewards = []
-    states = []
-    ongoing_flags = []
-    masks = []
-    actions = []
-    heads = []
-    acts = []
+    if buffer_file != '':
+        data = np.load(buffer_file)
+        states = list(data['states'])
+        rewards = list(data['rewards'])
+        actions = list(data['actions'])
+        heads = list(data['heads'])
+        ongoing_flags = list(data['ongoing_flags'])
+        try:
+            masks = list(data['masks'])
+        except:
+            masks = list(data['mask'])
+
+        acts = list(data['acts'])
+        cnt = data['cnt']
+        print("loaded buffer from %s" %buffer_file)
+    else:
+        print("init empty buffer")
+        rewards=[]
+        states=[]
+        ongoing_flags=[]
+        masks=[]
+        actions=[]
+        heads=[]
+        acts=[]
     while True:
         if (len(rewards)-(history_size+1)) < batch_size:
             yield_val = None
@@ -75,11 +93,12 @@ def experience_replay(batch_size, max_size, history_size=4,
                                                  actions=np.array(actions),
                                                  rewards=np.array(rewards),
                                                  ongoing_flags=np.array(ongoing_flags),
-                                                 mask=np.array(masks), heads=np.array(heads),
+                                                 masks=np.array(masks), heads=np.array(heads),
                                                  cnt=cnt, acts=acts)
                 except:
                     print('bad save experience')
                     embed()
+                print("finished experience buffer save")
                 # write file so we know there is a new file here
                 a=open(bname.replace('.npz', '_new.txt'), 'w')
                 a.write(str(cnt))

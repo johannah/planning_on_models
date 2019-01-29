@@ -25,6 +25,7 @@ from dqn_model import EnsembleNet, NetWithPrior
 from experience_handler import experience_replay
 from IPython import embed
 from imageio import imwrite
+from glob import glob
 
 def seed_everything(seed=1234):
     #random.seed(seed)
@@ -128,27 +129,28 @@ def train_batch(batch, epoch_losses, epoch_steps):
     et = time.time()
     return epoch_losses, epoch_steps
 
-def handle_checkpoint(cnt):
-    if not cnt % info['CHECKPOINT_EVERY_STEPS']:
+def handle_checkpoint(last_save, cnt, epoch):
+    if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
         print("checkpoint")
+        last_save = cnt
         state = {'info':info,
                  'optimizer':opt.state_dict(),
                  'cnt':cnt,
+                 'epoch':epoch,
                  'policy_net_state_dict':policy_net.state_dict(),
                  'target_net_state_dict':target_net.state_dict(),
                  }
         filename = model_base_filepath + "_%010dq.pkl"%cnt
         save_checkpoint(state, filename)
-        return filename
-    else: return ''
+        return last_save,filename
+    else: return last_save, ''
 
-def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, replay_buffer):
+def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, replay_buffer,checkpoint=''):
     # mask to determine which head can use this experience
     exp_mask = random_state.binomial(1, info['BERNOULLI_P'], info['N_ENSEMBLE']).astype(np.uint8)
     # at this observed state
     experience =  [S_prime, action, reward, finished, exp_mask, k_used, acts, cnt]
-    do_checkpoint = handle_checkpoint(cnt)
-    batch = replay_buffer.send((do_checkpoint, experience))
+    batch = replay_buffer.send((checkpoint, experience))
     # update so "state" representation is past history_size frames
     S_hist.pop(0)
     S_hist.append(S_prime)
@@ -156,7 +158,7 @@ def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, ep
     cnt+=1
     return cnt, S_hist, batch, episodic_reward
 
-def run_training_episode(epoch_num, total_steps):
+def run_training_episode(epoch_num, total_steps, last_save):
     start_steps = total_steps
     episode_steps = 0
     start = time.time()
@@ -185,18 +187,20 @@ def run_training_episode(epoch_num, total_steps):
             action = acts[active_head]
             k_used = active_head
         S_prime, reward, finished = env.step4(action)
+        last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
         total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay)
         episode_actions.append(action)
         if batch:
             epoch_losses, epoch_steps = train_batch(batch, epoch_losses, epoch_steps)
-        total_steps +=1
+        if not total_steps % 100:
+            print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
 
     stop = time.time()
     ep_time =  stop - start
     print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
-    print('actions',episode_actions)
     print("loss: {}".format([epoch_losses[k] / float(epoch_steps[k]) for k in range(info['N_ENSEMBLE'])]))
-    return total_steps, ep_time
+    print('actions',episode_actions)
+    return total_steps, ep_time, last_save
 
 
 #def run_eval_episode(eval_epoch):
@@ -252,14 +256,36 @@ def run_training_episode(epoch_num, total_steps):
 #    print('eval actions', eval_actions)
 #    return eval_cnt, reward_trace
 #
+
+def write_info_file(model_loaded=''):
+    info_f = open(os.path.join(model_base_filedir, 'info%s.txt'%model_loaded), 'w')
+    info_f.write(datetime.date.today().ctime()+'\n')
+    for (key,val) in info.items():
+        info_f.write('%s=%s\n'%(key,val))
+    info_f.close()
+
+
 if __name__ == '__main__':
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('-c', '--cuda', action='store_true', default=False)
+    parser.add_argument('-l', '--model_loadpath', default='', help='.pkl model file full path')
+    parser.add_argument('-b', '--buffer_loadpath', default='', help='.npz model file full path')
+    args = parser.parse_args()
+    if args.cuda:
+        device = 'cuda'
+    else:
+        device = 'cpu'
+    print("running on %s"%device)
+
+    # takes about 24 steps after "fire" for game to end
     # 3 is right
     # 2 is left
     # 1 is fire
     # 0 is noop
     info = {
         "GAME":'Breakout', # gym prefix
-        "DEVICE":'cuda',
+        "DEVICE":device,
         "NAME":'_debug', # start files with name
         "N_ENSEMBLE":11, # number of heads to use
         "N_EVALUATIONS":3, # Number of evaluation episodes to run
@@ -277,7 +303,7 @@ if __name__ == '__main__':
         "N_EPOCHS":10000,  # Number of episodes to run
         "BATCH_SIZE":128, # Batch size to use for learning
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
-        "EPSILON":0.0, # Epsilon greedy exploration ~prob of random action, 0. disables
+        "EPSILON":0.05, # Epsilon greedy exploration ~prob of random action, 0. disables
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":18, # Learning rate for Adam
@@ -286,6 +312,7 @@ if __name__ == '__main__':
         }
 
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
+    info['args'] = args
     #eval_replay_size = 10000#int(replay_size*.1)
     #eval_write_every = 2000
     #eval_exp_replay = experience_replay(batch_size=BATCH_SIZE, max_size=eval_replay_size,
@@ -298,26 +325,29 @@ if __name__ == '__main__':
 
     accumulation_rewards = []
     overall_time = 0.
+
+    if args.model_loadpath:
+        model_dict = torch.load(args.model_loadpath)
+        info = model_dict['info']
+        info["SEED"] = model_dict['cnt']
+        model_base_filedir = os.path.split(os.path.split(args.model_loadpath)[0])[1]
+        model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
+        last_save = model_dict['cnt']
+    else:
+        last_save = 0
+        run_num = 0
+        model_base_filedir = os.path.join(config.model_savedir, info['NAME'] + '%02d'%run_num)
+        while os.path.exists(model_base_filedir):
+            run_num +=1
+            model_base_filedir = os.path.join(config.model_loadpath, info['NAME'] + '%02d'%run_num)
+        os.makedirs(model_base_filedir)
+        model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
+
+
     env = DMAtariEnv(info['GAME'],random_seed=info['SEED'])
     action_space = np.arange(env.env.action_space.n)
     heads = list(range(info['N_ENSEMBLE']))
-    total_steps = 0
-    eval_total_steps = 0
-    eval_cnt = 0
-
-    run_num = 0
-    model_base_filedir = os.path.join(config.model_savedir, info['NAME'] + '%02d'%run_num)
-    while os.path.exists(model_base_filedir):
-        run_num +=1
-        model_base_filedir = os.path.join(config.model_savedir, info['NAME'] + '%02d'%run_num)
-    os.makedirs(model_base_filedir)
-    model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
-    info_f = open(os.path.join(model_base_filedir, 'info.txt'), 'w')
-    info_f.write(datetime.date.today().ctime()+'\n')
-    for (key,val) in info.items():
-        info_f.write('%s=%s\n'%(key,val))
-    info_f.close()
-
+    seed_everything(info["SEED"])
     prior_net_ensemble = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                      n_actions=env.env.action_space.n,
                                      network_output_size=info['NETWORK_INPUT_SIZE'][0],
@@ -337,29 +367,37 @@ if __name__ == '__main__':
 
     opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
 
-    load_from_checkpoint = False
-    if load_from_checkpoint:
+    if args.model_loadpath is not '':
         # what about random states - they will be wrong now???
         # TODO - what about target net update cnt
-        model_loadpath = '/localdata/jhansen/planning/model_savedir/_debug3Hp0504/_debug3Hp05_0000000016q.pkl'
-        model_dict = torch.load(model_loadpath)
         target_net.load_state_dict(model_dict['target_net_state_dict'])
         policy_net.load_state_dict(model_dict['policy_net_state_dict'])
-        info['SEED'] += 10
-        embed()
+        opt.load_state_dict(model_dict['optimizer'])
+        total_steps = model_dict['cnt']
+        # set random seed based on how many it has seen
+        if args.buffer_loadpath == '':
+            args.buffer_loadpath = glob(args.model_loadpath.replace('.pkl', '*.npz'))[0]
+            print("auto loading buffer from:%s" %args.buffer_loadpath)
+        try:
+            epoch_start = info['epoch']
+        except:
+            epoch_start = 67
 
-    seed_everything(info["SEED"])
-    random_state = np.random.RandomState(info["SEED"])
-
-
-    exp_replay = experience_replay(batch_size=info['BATCH_SIZE'], max_size=info['BUFFER_SIZE'],
+    else:
+        epoch_start = 0
+        total_steps = model_dict['cnt']
+    exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
+                                   max_size=info['BUFFER_SIZE'],
                                    history_size=info['HISTORY_SIZE'],
-                                   name='train_buffer')
+                                   name='train_buffer', random_seed=info['SEED'],
+                                   buffer_file=args.buffer_loadpath)
+
+    random_state = np.random.RandomState(info["SEED"])
     next(exp_replay) # Start experience-replay coroutines
 
-    for epoch_num in range(info['N_EPOCHS']):
-        total_steps = run_training_episode(epoch_num, total_steps)
-        overall_time += ttime
+    for epoch_num in range(epoch_start, info['N_EPOCHS']):
+        total_steps, etime, last_save = run_training_episode(epoch_num, total_steps, last_save)
+        overall_time += etime
         print("TOTAL STEPS", total_steps)
 
         if info['TARGET_UPDATE'] > 1 and epoch_num % info['TARGET_UPDATE'] == 0:
@@ -376,4 +414,5 @@ if __name__ == '__main__':
         #    accumulation_rewards.append(np.mean(evaluation_rewards))
         #    print("Mean evaluation reward all eval epochs {}".format(accumulation_rewards[-1]))
         #    plot_evals(accumulation_rewards)
+
 
