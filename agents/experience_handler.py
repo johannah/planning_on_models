@@ -69,7 +69,6 @@ def experience_replay(batch_size, max_size, history_size=4,
 
         do_checkpoint, experience = yield yield_val
         if experience is not None:
-
             est = time.time()
             # add experience
             states.append((experience[0]*256).astype(np.uint8))

@@ -37,6 +37,7 @@ class DMAtariEnv():
         for i in range(self.random_state.randint(0,30)):
             # noop steps in beginning
             frame, r, finished, info = self.env.step(self.noop_action)
+            self.start_info = info
             obs = prepare_frame(frame,self.network_input_size)
             self.total_reward += r
         obs = prepare_frame(frame,self.network_input_size)
@@ -61,7 +62,7 @@ class DMAtariEnv():
         # per mnih nature paper - end game if life lost
         end = [finished1,finished2,finished3,finished4]
         infos = [info1,info2,info3,info4]
-        lives = [info!={'ale.lives': 5} for info in infos]
+        lives = [info!=self.start_info for info in infos]
         obs4 = prepare_frame(frame4,self.network_input_size)
         # take maximum to avoid frame flicker
         obs_step4 = np.maximum(obs3,obs4)

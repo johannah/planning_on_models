@@ -72,10 +72,10 @@ def train_batch(batch, epoch_losses, epoch_steps):
     st = time.time()
     inputs_pt = torch.Tensor(batch[0]).to(info['DEVICE'])
     nexts_pt =  torch.Tensor(batch[1]).to(info['DEVICE'])
-    ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
-    mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
     actions_pt = torch.LongTensor(batch[2][:,0][:, None]).to(info['DEVICE'])
     rewards_pt = torch.Tensor(batch[2][:,1].astype(np.float32)).to(info['DEVICE'])
+    ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
+    mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
     all_target_next_Qs = [n.detach() for n in target_net(nexts_pt, None)]
     all_Qs = policy_net(inputs_pt, None)
     if info['USE_DOUBLE_DQN']:
@@ -84,6 +84,8 @@ def train_batch(batch, epoch_losses, epoch_steps):
     opt.zero_grad()
     for k in range(info['N_ENSEMBLE']):
         total_used = torch.sum(mask_pt[:, k])
+        if not total_used:
+            print("K not used", k, total_used)
         if total_used:
             if info['USE_DOUBLE_DQN']:
                 policy_next_Qs = all_policy_next_Qs[k]
@@ -107,22 +109,23 @@ def train_batch(batch, epoch_losses, epoch_steps):
 
             # BROADCASTING! NEED TO MAKE SURE DIMS MATCH
             # need to do updates on each head based on experience mask
-            full_loss = (Qs - target_Qs) ** 2
+            #full_loss = (Qs - target_Qs) ** 2
+            full_loss = F.smooth_l1_loss(Qs, target_Qs)
+
             full_loss = mask_pt[:, k] * full_loss
             #loss = torch.mean(full_loss)
-
             loss = torch.sum(full_loss / total_used)
             loss.backward(retain_graph=True)
-            loss_np = loss.cpu().detach().numpy()
-            if np.isinf(loss_np) or np.isnan(loss_np):
-                print('nan')
-                embed()
-            for param in policy_net.parameters():
-                if param.grad is not None:
-                    # Multiply grads by 1 / K?
-                    param.grad.data *= 1. / info['N_ENSEMBLE']
+            #loss_np = loss.cpu().detach().numpy()
+            #if np.isinf(loss_np) or np.isnan(loss_np):
+            #    print('nan')
+            #    embed()
             epoch_losses[k] += loss.detach().cpu().numpy()
             epoch_steps[k] += 1.
+    for param in policy_net.parameters():
+        if param.grad is not None:
+            # Multiply grads by 1 / K
+            param.grad.data *= 1. / info['N_ENSEMBLE']
     # After iterating all heads, do the update step
     torch.nn.utils.clip_grad_value_(policy_net.parameters(), info['CLIP_GRAD'])
     opt.step()
@@ -175,13 +178,13 @@ def run_training_episode(epoch_num, total_steps, last_save):
     total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
     print("start action while loop")
 
-    # fake start
-    action = 1
-    S_prime, reward, finished = env.step4(action)
-    last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
-    total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
-    episode_actions.append(action)
-    # end fake start
+    ## fake start
+    #action = 1
+    #S_prime, reward, finished = env.step4(action)
+    #last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
+    #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
+    #episode_actions.append(action)
+    ## end fake start
 
     while not finished:
         est = time.time()
@@ -204,7 +207,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
         if batch:
             epoch_losses, epoch_steps = train_batch(batch, epoch_losses, epoch_steps)
         eet = time.time()
-        if not total_steps % 10:
+        if not total_steps % 100:
             # CPU 40 seconds to complete 1 action when buffer is 6000
             # CPU .0008 seconds to complete 1 action when buffer is 0
             print('time', eet-est)
@@ -212,9 +215,10 @@ def run_training_episode(epoch_num, total_steps, last_save):
 
     stop = time.time()
     ep_time =  stop - start
-    print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
-    print("loss: {}".format([epoch_losses[k] / float(epoch_steps[k]) for k in range(info['N_ENSEMBLE'])]))
-    print('actions',episode_actions)
+    if epoch_num %1:
+        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
+        print("loss: {}".format([epoch_losses[k] / float(epoch_steps[k]) for k in range(info['N_ENSEMBLE'])]))
+        print('actions',episode_actions)
     return total_steps, ep_time, last_save
 
 def write_info_file(cnt):
@@ -246,24 +250,23 @@ if __name__ == '__main__':
     info = {
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'_act1start', # start files with name
+        "NAME":'_Breakout_kbugfix', # start files with name
         "N_ENSEMBLE":11, # number of heads to use
-        "N_EVALUATIONS":3, # Number of evaluation episodes to run
-        "BERNOULLI_P": 0.8, # Probability of experience to go to each head
-        "TARGET_UPDATE":30, # TARGET_UPDATE how often to use replica target
+        "N_EVALUATIONS":10, # Number of evaluation episodes to run
+        "BERNOULLI_P": 1.0, # Probability of experience to go to each head
+        "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "USE_DOUBLE_DQN":True, # Whether to use double DQN or regular DQN
-        "CHECKPOINT_EVERY_STEPS":1000,
+        "CHECKPOINT_EVERY_STEPS":10000,
         "ADAM_LEARNING_RATE": 0.00001,  #LR from this thread - https://github.com/dennybritz/reinforcement-learning/issues/30
         "CLIP_REWARD_MAX":1,
         "CLIP_REWARD_MAX":-1,
         "HISTORY_SIZE":4, # how many past frames to use for state input
-        "EVALUATE_EVERY":200, # How often to check and evaluate
         "PRINT_EVERY":1, # How often to print statistics
         "PRIOR_SCALE":0.0, # Weight for randomized prior, 0. disables
-        "N_EPOCHS":10000,  # Number of episodes to run
-        "BATCH_SIZE":128, # Batch size to use for learning
+        "N_EPOCHS":90000,  # Number of episodes to run
+        "BATCH_SIZE":64, # Batch size to use for learning
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
-        "EPSILON":0.05, # Epsilon greedy exploration ~prob of random action, 0. disables
+        "EPSILON":0.01, # Epsilon greedy exploration ~prob of random action, 0. disables
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":18, # Learning rate for Adam
@@ -344,14 +347,14 @@ if __name__ == '__main__':
     random_state = np.random.RandomState(info["SEED"])
     next(exp_replay) # Start experience-replay coroutines
 
+    last_target_update = 0
     print("Starting training")
     for epoch_num in range(epoch_start, info['N_EPOCHS']):
         total_steps, etime, last_save = run_training_episode(epoch_num, total_steps, last_save)
         overall_time += etime
-        print("TOTAL STEPS", total_steps)
-
-        if info['TARGET_UPDATE'] > 1 and epoch_num % info['TARGET_UPDATE'] == 0:
+        if (total_steps - last_target_update) >= info['TARGET_UPDATE']:
             print("Updating target network at {}".format(epoch_num))
             target_net.load_state_dict(policy_net.state_dict())
+            last_target_update = total_steps
 
 
