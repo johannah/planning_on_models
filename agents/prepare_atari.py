@@ -31,6 +31,7 @@ class DMAtariEnv():
 
     def reset(self):
         frame = self.env.reset()
+        self.really_finished = False
         self.num_true_steps = 0
         self.total_reward = 0
         finished = False
@@ -40,10 +41,15 @@ class DMAtariEnv():
             self.start_info = info
             obs = prepare_frame(frame,self.network_input_size)
             self.total_reward += r
+        a_meaning = self.env.unwrapped.get_action_meanings()
+        if a_meaning[1] == 'FIRE' and len(a_meaning) >= 3:
+            frame, r, finished, info = self.env.step(1)
         obs = prepare_frame(frame,self.network_input_size)
         if finished:
             print("received end in init routine")
             self.reset()
+        self.lives = self.env.unwrapped.ale.lives()
+        self.really_finished = finished
         return obs, self.noop_action, self.total_reward, finished
 
     # expects single step atari - will repeat 4 times
@@ -61,18 +67,25 @@ class DMAtariEnv():
         frame4, r4, finished4, info4 = self.env.step(action)
         # per mnih nature paper - end game if life lost
         end = [finished1,finished2,finished3,finished4]
-        infos = [info1,info2,info3,info4]
-        lives = [info!=self.start_info for info in infos]
         obs4 = prepare_frame(frame4,self.network_input_size)
         # take maximum to avoid frame flicker
         obs_step4 = np.maximum(obs3,obs4)
         reward = r1+r2+r3+r4
-        finished = max(end+lives)
+        #infos = [info1,info2,info3,info4]
+        #lives = [info!=self.lives for info in infos]
+        #finished = max(end+lives)
+        finished = self.really_finished = max(end)
+        lives = self.env.unwrapped.ale.lives()
+        if lives < self.lives and lives > 0:
+            finished = True
         self.num_true_steps+=4
+
         if self.num_true_steps >= 18000:
             finished = True
-        if finished:
+
+        if self.really_finished:
             print('finished epoch')
+            embed()
             #print(finished,'action',action,'lives', lives, infos)
             self.num_episodes +=1
         # clip bt -1 and 1
@@ -82,5 +95,7 @@ class DMAtariEnv():
 
 if __name__ == '__main__':
     env = DMAtariEnv(gamename='Breakout')
-    while True:
-        env.step4(np.random.randint(2))
+    rdn = np.random.RandomState(30303)
+    while not env.really_finished:
+        env.step4(rdn.randint(env.env.action_space.n))
+    embed()
