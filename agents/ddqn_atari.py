@@ -102,10 +102,10 @@ def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, ep
     return cnt, S_hist, batch, episodic_reward
 
 def run_training_episode(epoch_num, total_steps, last_save):
+    start = time.time()
     episodic_losses = []
     start_steps = total_steps
     episode_steps = 0
-    start = time.time()
     random_state.shuffle(heads)
     active_head = heads[0]
     episodic_reward = 0.0
@@ -141,22 +141,23 @@ def run_training_episode(epoch_num, total_steps, last_save):
         last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
         #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
         total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
-        episode_actions.append(action)
+        #episode_actions.append(action)
         if batch:
             loss = train_batch(batch, total_steps)
             board_logger.scalar_summary('Loss per frame', total_steps, loss)
         eet = time.time()
-        if not total_steps % 100:
-            # CPU 40 seconds to complete 1 action when buffer is 6000
-            # CPU .0008 seconds to complete 1 action when buffer is 0
-            print('time', eet-est)
-            print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
-            print('epsilon', epsilon)
+        #if not total_steps % 100:
+        #    # CPU 40 seconds to complete 1 action when buffer is 6000
+        #    # CPU .0008 seconds to complete 1 action when buffer is 0
+        #    print('time', eet-est)
+        #    print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
+        #    print('epsilon', epsilon)
     stop = time.time()
     ep_time =  stop - start
     board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
     print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
-    print('actions',episode_actions)
+    #print('actions',episode_actions)
+    print("time for episode", ep_time)
     return episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
 
 def write_info_file(cnt):
