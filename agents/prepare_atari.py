@@ -17,6 +17,7 @@ def prepare_frame(frame, network_input_size):
 class DMAtariEnv():
     def __init__(self, gamename='Breakout', network_input_size=(84,84),
                  clip_reward_max=1, clip_reward_min=-1, random_seed=223):
+        self.really_finished = True
         self.clip_reward_max = clip_reward_max
         self.clip_reward_min = clip_reward_min
         self.network_input_size = network_input_size
@@ -27,30 +28,41 @@ class DMAtariEnv():
         self.num_episodes = 0
         if not os.path.exists('imgs'):
             os.makedirs('imgs')
-        self.reset()
 
     def reset(self):
-        frame = self.env.reset()
-        self.really_finished = False
-        self.num_true_steps = 0
         self.total_reward = 0
-        finished = False
-        for i in range(self.random_state.randint(0,30)):
-            # noop steps in beginning
-            frame, r, finished, info = self.env.step(self.noop_action)
-            self.start_info = info
-            obs = prepare_frame(frame,self.network_input_size)
-            self.total_reward += r
+        if not self.really_finished:
+            print("soft reset")
+            a_meaning = self.env.unwrapped.get_action_meanings()
+            action = self.noop_action
+            frame, reward, finished, info = self.env.step(action)
+            obs = prepare_frame(frame, self.network_input_size)
+            self.total_reward+=reward
+        else:
+            print("HARD reset")
+            frame = self.env.reset()
+            self.really_finished = False
+            self.num_true_steps = 0
+            finished = False
+            for i in range(self.random_state.randint(0,30)):
+                # noop steps in beginning
+                action = self.noop_action
+                frame, r, finished, info = self.env.step(action)
+                self.total_reward += r
+                obs = prepare_frame(frame,self.network_input_size)
         a_meaning = self.env.unwrapped.get_action_meanings()
         if a_meaning[1] == 'FIRE' and len(a_meaning) >= 3:
-            frame, r, finished, info = self.env.step(1)
-        obs = prepare_frame(frame,self.network_input_size)
+            action = 1
+            frame, r, finished, info = self.env.step(action)
+            obs = prepare_frame(frame,self.network_input_size)
+            self.total_reward += r
+        self.really_finished = finished
         if finished:
             print("received end in init routine")
             self.reset()
         self.lives = self.env.unwrapped.ale.lives()
-        self.really_finished = finished
-        return obs, self.noop_action, self.total_reward, finished
+        print("lives left: %s"%self.lives)
+        return obs, action, self.total_reward, finished
 
     # expects single step atari - will repeat 4 times
     def step4(self, action):
@@ -77,7 +89,10 @@ class DMAtariEnv():
         finished = self.really_finished = max(end)
         lives = self.env.unwrapped.ale.lives()
         if lives < self.lives and lives > 0:
+            print("lost life")
+            print(lives, self.lives)
             finished = True
+            self.lives = lives
         self.num_true_steps+=4
 
         if self.num_true_steps >= 18000:
@@ -85,8 +100,6 @@ class DMAtariEnv():
 
         if self.really_finished:
             print('finished epoch')
-            embed()
-            #print(finished,'action',action,'lives', lives, infos)
             self.num_episodes +=1
         # clip bt -1 and 1
         reward_clipped = min(reward,self.clip_reward_max)
@@ -96,6 +109,13 @@ class DMAtariEnv():
 if __name__ == '__main__':
     env = DMAtariEnv(gamename='Breakout')
     rdn = np.random.RandomState(30303)
-    while not env.really_finished:
-        env.step4(rdn.randint(env.env.action_space.n))
+    cnt = 0
+
+    for epoch in range(10):
+        env.reset()
+        finished = False
+        while not finished:
+            act = rdn.randint(env.env.action_space.n)
+            obs,r,finished=env.step4(act)
+            cnt+=1
     embed()

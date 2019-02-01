@@ -281,7 +281,7 @@ if __name__ == '__main__':
     policy_net.load_state_dict(model_dict['policy_net_state_dict'])
     opt.load_state_dict(model_dict['optimizer'])
     total_steps = model_dict['cnt']
-    epoch_start = info['epoch']
+    epoch_start = model_dict['epoch']
 
     exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
                                    max_size=10000,

@@ -23,29 +23,56 @@ def plot_replay_buffer(data):
     else:
         skip = n-back
 
-    epoch_cnt = np.sum(data['ongoing_flags'][:skip])
+    inv = np.bitwise_not(data['ongoing_flags'])
+    bounds = np.where(inv == True)[0]
+    # start one episode before the skip param
+    start = np.where(bounds>skip)[0][0]-1
+    skip = bounds[start]
+    epoch_cnt = start
     r = 0
     cmd_list = []
     ep_rewards = []
     epochs = []
-    for i in range(skip,n):
-        fname = os.path.join(bdir, "ZE%06d_%05d.png"%(epoch_cnt,i))
+    imgs = []
+    titles = []
+    fnames = []
+    got = False
+    for i in range(start,n):
         r += rewards[i]
-        if not os.path.exists(fname):
-            f,ax = plt.subplots(1)
-            ax.imshow(states[i], cmap='gray',interpolation="None")
-            ax.set_title("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
-            ax.plot(np.cumsum(rewards[i:i+width]), label='rewards', c='orange')
-            ax.plot(actions[i:i+width], label='actions', c='green')
-            #ax.plot(ongoing[i:i+width], label='end')
-            ax.legend(loc='center left')
-            plt.savefig(fname)
-            plt.close()
-        if ongoing[i]:
+        print(r,data['acts'][i])
+        fnames.append(os.path.join(bdir, "ZE%06d_%05d.png"%(epoch_cnt,i)))
+        imgs.append(states[i])
+        titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
+        #if not os.path.exists(fname):
+        #    f,ax = plt.subplots(1)
+        #    ax.imshow(states[i], cmap='gray',interpolation="None")
+        #    ax.set_title("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
+        #    #ax.plot(np.cumsum(rewards[i:i+width]), label='rewards', c='orange')
+        #    #ax.plot(actions[i:i+width], label='actions', c='green')
+        #    #ax.plot(ongoing[i:i+width], label='end')
+        #    ax.legend(loc='center left')
+        #    plt.savefig(fname)
+        #    plt.close()
+        if not ongoing[i]:
             ep_rewards.append(r)
             epochs.append(epoch_cnt)
-            if r > 3:
+            if r > -20:
+                print('reward', r, epoch_cnt)
+                got = True
+                for (img,tit,ff) in zip(imgs,titles,fnames):
+                    f,ax = plt.subplots(1)
+                    ax.imshow(img, cmap='gray',interpolation="None")
+                    ax.set_title(tit)
+                    #ax.plot(np.cumsum(rewards[i:i+width]), label='rewards', c='orange')
+                    #ax.plot(actions[i:i+width], label='actions', c='green')
+                    #ax.plot(ongoing[i:i+width], label='end')
+                    #ax.legend(loc='center left')
+                    plt.savefig(ff)
+                    plt.close()
                 os.system("convert %s %s"%(os.path.join(bdir,"ZE%06d*.png"%epoch_cnt), os.path.join(bdir,"_%06d_R%04d.gif"%(epoch_cnt,r))))
+                imgs = []
+                titles = []
+                fnames = []
             epoch_cnt +=1
             print('new epoch', epoch_cnt, r)
             r = 0
@@ -53,7 +80,8 @@ def plot_replay_buffer(data):
     plt.scatter(epochs, ep_rewards)
     plt.savefig(os.path.join(bdir, 'epoch_rewards.png'))
     plt.close()
-    os.system("convert %s %s"%(os.path.join(bdir,"ZE*.png"), os.path.join(bdir,"o.gif")))
+    if got:
+        os.system("convert %s %s"%(os.path.join(bdir,"ZE*.png"), os.path.join(bdir,"o.gif")))
 
 def plot_cum_reward(data):
     rewards = data['rewards']
@@ -116,7 +144,7 @@ def plot_head_actions(data):
         plt.close()
 
 if __name__ == '__main__':
-    back = 2000
+    back = 10000
     f = sys.argv[1]#'buffer_0000001001.npz'
     fpath = os.path.join(config.model_savedir, f)
     bdir = fpath.replace(".npz","_states")

@@ -74,7 +74,7 @@ def experience_replay(batch_size, max_size, history_size=4,
             states.append((experience[0]*256).astype(np.uint8))
             actions.append(experience[1])
             rewards.append(experience[2])
-            ongoing_flags.append(experience[3])
+            ongoing_flags.append(not(experience[3]))
             masks.append(experience[4])
             heads.append(experience[5])
             acts.append(experience[6])
