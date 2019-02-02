@@ -232,7 +232,7 @@ if __name__ == '__main__':
         "PRIOR_SCALE":0.0, # Weight for randomized prior, 0. disables
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":64, # Batch size to use for learning
-        "BUFFER_SIZE":1e6, # Buffer size for experience replay
+        "BUFFER_SIZE":1e4, # Buffer size for experience replay
         "EPSILON":0.1, # Epsilon greedy exploration ~prob of random action, 0. disables
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting

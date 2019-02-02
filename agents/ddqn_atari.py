@@ -50,8 +50,10 @@ def train_batch(batch, cnt):
     st = time.time()
     inputs_pt = torch.Tensor(batch[0]).to(info['DEVICE'])
     nexts_pt =  torch.Tensor(batch[1]).to(info['DEVICE'])
+    #print('state',inputs_pt.sum(), nexts_pt.sum())
     actions_pt = torch.LongTensor(batch[2][:,0][:, None]).to(info['DEVICE'])
     rewards_pt = torch.Tensor(batch[2][:,1].astype(np.float32)).to(info['DEVICE'])
+
     ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
     mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
 
@@ -69,7 +71,6 @@ def train_batch(batch, cnt):
         print("++++++++++++++++++++++++++++++++++++++++++++++++")
         print('updating target network')
         target_net.load_state_dict(policy_net.state_dict())
-
     return loss.item()
 
 def handle_checkpoint(last_save, cnt, epoch):
@@ -83,7 +84,7 @@ def handle_checkpoint(last_save, cnt, epoch):
                  'policy_net_state_dict':policy_net.state_dict(),
                  'target_net_state_dict':target_net.state_dict(),
                  }
-        filename = model_base_filepath + "_%010dq.pkl"%cnt
+        filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
         save_checkpoint(state, filename)
         return last_save,filename
     else: return last_save, ''
@@ -118,6 +119,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
     policy_net.train()
     total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
     print("start action while loop")
+    checkpoint_times = []
 
     while not finished:
         est = time.time()
@@ -138,14 +140,15 @@ def run_training_episode(epoch_num, total_steps, last_save):
         #    action = acts[active_head]
             #k_used = active_head
         S_prime, reward, finished = env.step4(action)
+        cst = time.time()
         last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
         #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
         total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
-        #episode_actions.append(action)
         if batch:
             loss = train_batch(batch, total_steps)
             board_logger.scalar_summary('Loss per frame', total_steps, loss)
         eet = time.time()
+        checkpoint_times.append(time.time()-cst)
         #if not total_steps % 100:
         #    # CPU 40 seconds to complete 1 action when buffer is 6000
         #    # CPU .0008 seconds to complete 1 action when buffer is 0
@@ -155,6 +158,8 @@ def run_training_episode(epoch_num, total_steps, last_save):
     stop = time.time()
     ep_time =  stop - start
     board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
+    board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
+    board_logger.scalar_summary('epoch time', epoch_num, ep_time)
     print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
     #print('actions',episode_actions)
     print("time for episode", ep_time)
@@ -289,5 +294,3 @@ if __name__ == '__main__':
 #            print("Updating target network at {}".format(epoch_num))
 #            target_net.load_state_dict(policy_net.state_dict())
 #            last_target_update = total_steps
-
-
