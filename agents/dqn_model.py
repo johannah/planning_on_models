@@ -59,7 +59,13 @@ class EnsembleNet(nn.Module):
         return [net(x) for net in self.net_list]
 
     def forward(self, x, k):
-        return self.net_list[k](self.core_net(x))
+        if k is not None:
+            return self.net_list[k](self.core_net(x))
+        else:
+            core_cache = self._core(x)
+            net_heads = self._heads(core_cache)
+            return net_heads
+
 
 
 class NetWithPrior(nn.Module):

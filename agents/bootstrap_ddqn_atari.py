@@ -1,31 +1,23 @@
-# extending on code from
-# https://github.com/58402140/Fruit
-
-import matplotlib
-matplotlib.use('Agg')
-import sys
-# TODO - fix install
-sys.path.append('../models')
-import config
-from ae_utils import save_checkpoint
-import datetime
 import os
+import sys
 import numpy as np
-from matplotlib import pyplot as plt
-import copy
-import time
-from collections import Counter
+from IPython import embed
 
+import math
+from logger import TensorBoardLogger
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from prepare_atari import DMAtariEnv
-from dqn_model import EnsembleNet, NetWithPrior
+import datetime
+import time
 from experience_handler import experience_replay
-from IPython import embed
-from imageio import imwrite
+from prepare_atari import DMAtariEnv
+sys.path.append('../models')
 from glob import glob
+import config
+from ae_utils import save_checkpoint
+from dqn_model import EnsembleNet
 
 def seed_everything(seed=1234):
     #random.seed(seed)
@@ -35,69 +27,42 @@ def seed_everything(seed=1234):
     os.environ['PYTHONHASHSEED'] = str(seed)
     #torch.backends.cudnn.deterministic = True
 
-def train_batch(batch, epoch_losses, epoch_steps):
+def train_batch(batch, cnt):
     st = time.time()
+    losses = [0.0 for k in range(info['N_ENSEMBLE'])]
     inputs_pt = torch.Tensor(batch[0]).to(info['DEVICE'])
     nexts_pt =  torch.Tensor(batch[1]).to(info['DEVICE'])
+    #print('state',inputs_pt.sum(), nexts_pt.sum())
     actions_pt = torch.LongTensor(batch[2][:,0][:, None]).to(info['DEVICE'])
     rewards_pt = torch.Tensor(batch[2][:,1].astype(np.float32)).to(info['DEVICE'])
+
     ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
     mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
-    all_target_next_Qs = [n.detach() for n in target_net(nexts_pt, None)]
-    all_Qs = policy_net(inputs_pt, None)
-    if info['USE_DOUBLE_DQN']:
-        all_policy_next_Qs = [n.detach() for n in policy_net(nexts_pt, None)]
-    # set grads to 0 before iterating heads
+
     opt.zero_grad()
+
+    q_values = policy_net_ensemble(inputs_pt, None)
+    next_q_values = policy_net_ensemble(nexts_pt, None)
+    next_q_state_values = target_net_ensemble(nexts_pt, None)
+
     for k in range(info['N_ENSEMBLE']):
+        # TODO mask
         total_used = torch.sum(mask_pt[:, k])
-        if not total_used:
-            print("K not used", k, total_used)
-        if total_used:
-            if info['USE_DOUBLE_DQN']:
-                policy_next_Qs = all_policy_next_Qs[k]
-                next_Qs = all_target_next_Qs[k]
-                policy_actions = policy_next_Qs.max(1)[1][:, None]
-                next_max_Qs = next_Qs.gather(1, policy_actions)
-                next_max_Qs = next_max_Qs.squeeze()
-            else:
-                next_Qs = all_target_next_Qs[k]
-                next_max_Qs = next_Qs.max(1)[0]
-                next_max_Qs = next_max_Qs.squeeze()
-
-            # mask based on if it is end of episode or not
-            next_max_Qs = ongoing_flags_pt * next_max_Qs
-            target_Qs = rewards_pt + info['GAMMA'] * next_max_Qs
-
-            # get current step predictions
-            Qs = all_Qs[k]
-            Qs = Qs.gather(1, actions_pt)
-            Qs = Qs.squeeze()
-
-            # BROADCASTING! NEED TO MAKE SURE DIMS MATCH
-            # need to do updates on each head based on experience mask
-            #full_loss = (Qs - target_Qs) ** 2
-            full_loss = F.smooth_l1_loss(Qs, target_Qs)
-
-            full_loss = mask_pt[:, k] * full_loss
-            #loss = torch.mean(full_loss)
-            loss = torch.sum(full_loss / total_used)
+        if total_used > 0.0:
+            q_value = q_values[k].gather(1, actions_pt).squeeze(1)
+            next_q_value = next_q_state_values[k].gather(1, next_q_values[k].max(1)[1].unsqueeze(1)).squeeze(1)
+            expected_q_value = rewards_pt + (info["GAMMA"] * next_q_value * ongoing_flags_pt)
+            full_loss = (q_value-expected_q_value.detach()).pow(2).mean()
+            full_loss = mask_pt[:,k]*full_loss
+            loss = torch.sum(full_loss/total_used)
             loss.backward(retain_graph=True)
-            #loss_np = loss.cpu().detach().numpy()
-            #if np.isinf(loss_np) or np.isnan(loss_np):
-            #    print('nan')
-            #    embed()
-            epoch_losses[k] += loss.detach().cpu().numpy()
-            epoch_steps[k] += 1.
-    for param in policy_net.parameters():
-        if param.grad is not None:
-            # Multiply grads by 1 / K
-            param.grad.data *= 1. / info['N_ENSEMBLE']
-    # After iterating all heads, do the update step
-    torch.nn.utils.clip_grad_value_(policy_net.parameters(), info['CLIP_GRAD'])
-    opt.step()
-    et = time.time()
-    return epoch_losses, epoch_steps
+            opt.step()
+            losses[k] = loss.cpu().detach().item()
+    if not cnt%info['TARGET_UPDATE']:
+        print("++++++++++++++++++++++++++++++++++++++++++++++++")
+        print('updating target network')
+        target_net_ensemble.load_state_dict(policy_net_ensemble.state_dict())
+    return losses
 
 def handle_checkpoint(last_save, cnt, epoch):
     if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
@@ -110,7 +75,7 @@ def handle_checkpoint(last_save, cnt, epoch):
                  'policy_net_state_dict':policy_net.state_dict(),
                  'target_net_state_dict':target_net.state_dict(),
                  }
-        filename = model_base_filepath + "_%010dq.pkl"%cnt
+        filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
         save_checkpoint(state, filename)
         return last_save,filename
     else: return last_save, ''
@@ -129,9 +94,10 @@ def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, ep
     return cnt, S_hist, batch, episodic_reward
 
 def run_training_episode(epoch_num, total_steps, last_save):
+    start = time.time()
+    episodic_losses = []
     start_steps = total_steps
     episode_steps = 0
-    start = time.time()
     random_state.shuffle(heads)
     active_head = heads[0]
     episodic_reward = 0.0
@@ -141,52 +107,56 @@ def run_training_episode(epoch_num, total_steps, last_save):
     S_hist = [S for _ in range(info['HISTORY_SIZE'])]
     epoch_losses = [0. for k in range(info['N_ENSEMBLE'])]
     epoch_steps = [1. for k in range(info['N_ENSEMBLE'])]
-    policy_net.train()
+    policy_net_ensemble.train()
     total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
     print("start action while loop")
-
-    ## fake start
-    action = 1
-    S_prime, reward, finished = env.step4(action)
-    last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
-    total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
-    episode_actions.append(action)
-    # end fake start
+    checkpoint_times = []
 
     while not finished:
         est = time.time()
         with torch.no_grad():
             # always do this calculation - as it is used for debugging
             S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(info['DEVICE'])
-            vals = [q.cpu().data.numpy() for q in policy_net(S_hist_pt, None)]
-            acts = [np.argmax(v, axis=-1)[0] for v in vals]
-
-        if (random_state.rand() < info['EPSILON']):
-            action = random_state.choice(action_space)
-            k_used = info['RANDOM_HEAD']
-        else:
+            # get all values for logging
+            vals = policy_net_ensemble(S_hist_pt, None)
+            acts = [np.argmax(vals[h].cpu().data.numpy(),-1)[0] for h in heads]
             action = acts[active_head]
-            k_used = active_head
-        S_prime, reward, finished = env.step4(action)
-        last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
-        total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
-        episode_actions.append(action)
-        if batch:
-            epoch_losses, epoch_steps = train_batch(batch, epoch_losses, epoch_steps)
-        eet = time.time()
-        if not total_steps % 100:
-            # CPU 40 seconds to complete 1 action when buffer is 6000
-            # CPU .0008 seconds to complete 1 action when buffer is 0
-            print('time', eet-est)
-            print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
+            #embed()
+            #vals = [q.cpu().data.numpy() for q in policy_net(S_hist_pt, None)]
+            #acts = [np.argmax(v, axis=-1)[0] for v in vals]
 
+        epsilon = epsilon_by_frame(total_steps)
+        if (random_state.rand() < epsilon):
+            action = random_state.choice(action_space)
+            #k_used = info['RANDOM_HEAD']
+        #else:
+        #    action = acts[active_head]
+            #k_used = active_head
+        S_prime, reward, finished = env.step4(action)
+        cst = time.time()
+        last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
+        #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
+        total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, active_head, acts, episodic_reward, exp_replay, checkpoint)
+        if batch:
+            loss = train_batch(batch, total_steps)
+            board_logger.scalar_summary('Loss per frame', total_steps, np.mean(loss))
+        eet = time.time()
+        checkpoint_times.append(time.time()-cst)
+        #if not total_steps % 100:
+        #    # CPU 40 seconds to complete 1 action when buffer is 6000
+        #    # CPU .0008 seconds to complete 1 action when buffer is 0
+        #    print('time', eet-est)
+        #    print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
+        #    print('epsilon', epsilon)
     stop = time.time()
     ep_time =  stop - start
-    if epoch_num %1:
-        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
-        print("loss: {}".format([epoch_losses[k] / float(epoch_steps[k]) for k in range(info['N_ENSEMBLE'])]))
-        print('actions',episode_actions)
-    return total_steps, ep_time, last_save
+    board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
+    board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
+    board_logger.scalar_summary('epoch time', epoch_num, ep_time)
+    print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
+    #print('actions',episode_actions)
+    print("time for episode", ep_time)
+    return episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
 
 def write_info_file(cnt):
     info_filename = model_base_filepath + "_%010d_info.txt"%cnt
@@ -217,14 +187,14 @@ if __name__ == '__main__':
     info = {
         "GAME":'Pong', # gym prefix
         "DEVICE":device,
-        "NAME":'_Pong_simplekbugfix', # start files with name
+        "NAME":'_Pong_BSddqn', # start files with name
         "N_ENSEMBLE":1, # number of heads to use
         "N_EVALUATIONS":10, # Number of evaluation episodes to run
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
-        "TARGET_UPDATE":100, # TARGET_UPDATE how often to use replica target
+        "TARGET_UPDATE":1000, # TARGET_UPDATE how often to use replica target
         "USE_DOUBLE_DQN":False, # Whether to use double DQN or regular DQN
         "CHECKPOINT_EVERY_STEPS":10000,
-        "ADAM_LEARNING_RATE": 0.00001,  #LR from this thread - https://github.com/dennybritz/reinforcement-learning/issues/30
+        "ADAM_LEARNING_RATE": 1e-4,
         "CLIP_REWARD_MAX":1,
         "CLIP_REWARD_MAX":-1,
         "HISTORY_SIZE":4, # how many past frames to use for state input
@@ -232,8 +202,10 @@ if __name__ == '__main__':
         "PRIOR_SCALE":0.0, # Weight for randomized prior, 0. disables
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":64, # Batch size to use for learning
-        "BUFFER_SIZE":1e4, # Buffer size for experience replay
-        "EPSILON":0.1, # Epsilon greedy exploration ~prob of random action, 0. disables
+        "BUFFER_SIZE":1e6, # Buffer size for experience replay
+        "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
+        "EPSILON_MIN":.01,
+        "EPSILON_DECAY":30000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":18, # Learning rate for Adam
@@ -276,30 +248,25 @@ if __name__ == '__main__':
     action_space = np.arange(env.env.action_space.n)
     heads = list(range(info['N_ENSEMBLE']))
     seed_everything(info["SEED"])
-    prior_net_ensemble = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
-                                     n_actions=env.env.action_space.n,
-                                     network_output_size=info['NETWORK_INPUT_SIZE'][0],
-                                     num_channels=info['HISTORY_SIZE'])
+    #policy_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
+    #target_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
     policy_net_ensemble = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.env.action_space.n,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
-                                      num_channels=info['HISTORY_SIZE'])
-
-    policy_net = NetWithPrior(policy_net_ensemble, prior_net_ensemble, info['PRIOR_SCALE']).to(info['DEVICE'])
-
+                                      num_channels=info['HISTORY_SIZE']).to(info['DEVICE'])
     target_net_ensemble = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.env.action_space.n,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
-                                      num_channels=info['HISTORY_SIZE'])
-    target_net = NetWithPrior(target_net_ensemble, prior_net_ensemble, info['PRIOR_SCALE']).to(info['DEVICE'])
+                                      num_channels=info['HISTORY_SIZE']).to(info['DEVICE'])
+
 
     opt = optim.Adam(policy_net_ensemble.parameters(), lr=info['ADAM_LEARNING_RATE'])
 
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???
         # TODO - what about target net update cnt
-        target_net.load_state_dict(model_dict['target_net_state_dict'])
-        policy_net.load_state_dict(model_dict['policy_net_state_dict'])
+        target_net_ensemble.load_state_dict(model_dict['target_net_state_dict'])
+        policy_net_ensemble.load_state_dict(model_dict['policy_net_state_dict'])
         opt.load_state_dict(model_dict['optimizer'])
         print("loaded model state_dicts")
         if args.buffer_loadpath == '':
@@ -314,14 +281,19 @@ if __name__ == '__main__':
     random_state = np.random.RandomState(info["SEED"])
     next(exp_replay) # Start experience-replay coroutines
 
+    board_logger = TensorBoardLogger(model_base_filedir)
     last_target_update = 0
     print("Starting training")
+    all_rewards = []
+
+    epsilon_by_frame = lambda frame_idx: info['EPSILON_MIN'] + (info['EPSILON_MAX'] - info['EPSILON_MIN']) * math.exp( -1. * frame_idx / info['EPSILON_DECAY'])
     for epoch_num in range(epoch_start, info['N_EPOCHS']):
-        total_steps, etime, last_save = run_training_episode(epoch_num, total_steps, last_save)
+        ep_reward, total_steps, etime, last_save, mean_loss = run_training_episode(epoch_num, total_steps, last_save)
+        all_rewards.append(ep_reward)
         overall_time += etime
-        if (total_steps - last_target_update) >= info['TARGET_UPDATE']:
-            print("Updating target network at {}".format(epoch_num))
-            target_net.load_state_dict(policy_net.state_dict())
-            last_target_update = total_steps
+        board_logger.scalar_summary("avg reward last 100 episodes", epoch_num, np.mean(all_rewards[-100:]))
 
-
+#        if (total_steps - last_target_update) >= info['TARGET_UPDATE']:
+#            print("Updating target network at {}".format(epoch_num))
+#            target_net.load_state_dict(policy_net.state_dict())
+#            last_target_update = total_steps
