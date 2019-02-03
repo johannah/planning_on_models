@@ -39,12 +39,12 @@ def train_batch(batch, cnt):
     ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
     mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
 
-    opt.zero_grad()
 
     q_values = policy_net_ensemble(inputs_pt, None)
     next_q_values = policy_net_ensemble(nexts_pt, None)
     next_q_state_values = target_net_ensemble(nexts_pt, None)
 
+    opt.zero_grad()
     cnt_losses = []
     for k in range(info['N_ENSEMBLE']):
         # TODO mask
@@ -53,7 +53,8 @@ def train_batch(batch, cnt):
             q_value = q_values[k].gather(1, actions_pt).squeeze(1)
             next_q_value = next_q_state_values[k].gather(1, next_q_values[k].max(1)[1].unsqueeze(1)).squeeze(1)
             expected_q_value = rewards_pt + (info["GAMMA"] * next_q_value * ongoing_flags_pt)
-            full_loss = (q_value-expected_q_value.detach()).pow(2).mean()
+            #full_loss = (q_value-expected_q_value.detach()).pow(2).mean()
+            full_loss = F.smooth_l1_loss(q_value,expected_q_value.detach())
             full_loss = mask_pt[:,k]*full_loss
             loss = torch.sum(full_loss/total_used)
             cnt_losses.append(loss)
@@ -61,10 +62,15 @@ def train_batch(batch, cnt):
             #losses[k] = loss.cpu().detach().item()
     all_loss = torch.stack(cnt_losses).sum()
     all_loss.backward()
-    #for param in policy_net_ensemble.parameters():
-    #    if param.grad is not None:
-    #        param.grad.data *=1.0/info['N_ENSEMBLE']
-    #torch.nn.utils.clip_grad_value_(policy_net_ensemble.parameters(), info['CLIP_GRAD'])
+    start = 0
+    end = 0
+    for param in policy_net_ensemble.core_net.parameters():
+        if param.grad is not None:
+            #start += param.grad.data.sum()
+            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+            #end += param.grad.data.sum()
+    torch.nn.utils.clip_grad_value_(policy_net_ensemble.parameters(), info['CLIP_GRAD'])
+    #print(start,end)
     opt.step()
     if not cnt%info['TARGET_UPDATE']:
         print("++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -198,14 +204,13 @@ if __name__ == '__main__':
     # 0 is noop
     info = {
         'USE_EPSILON':False,
-        "GAME":'Breakout', # gym prefix
+        "GAME":'Pong', # gym prefix
         "DEVICE":device,
-        "NAME":'_Breakout11', # start files with name
+        "NAME":'_Pong11_corek', # start files with name
         "N_ENSEMBLE":11, # number of heads to use
         "BERNOULLI_P": 0.9, # Probability of experience to go to each head
-        "TARGET_UPDATE":50000, # TARGET_UPDATE how often to use replica target
-        "USE_DOUBLE_DQN":False, # Whether to use double DQN or regular DQN
-        "CHECKPOINT_EVERY_STEPS":30000,
+        "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target TODO - what should this be
+        "CHECKPOINT_EVERY_STEPS":50000,
         "ADAM_LEARNING_RATE": .00025,
         "CLIP_REWARD_MAX":1,
         "CLIP_REWARD_MAX":-1,
