@@ -128,7 +128,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
             S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(info['DEVICE'])
             # get all values for logging
             vals = policy_net_ensemble(S_hist_pt, None)
-            acts = [np.argmax(vals[h].cpu().data.numpy(),-1)[0] for h in heads]
+            acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
             action = acts[active_head]
             #embed()
             #vals = [q.cpu().data.numpy() for q in policy_net(S_hist_pt, None)]
@@ -200,9 +200,9 @@ if __name__ == '__main__':
         'USE_EPSILON':False,
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'_Pong', # start files with name
-        "N_ENSEMBLE":7, # number of heads to use
-        "BERNOULLI_P": 1.0, # Probability of experience to go to each head
+        "NAME":'_Breakout11', # start files with name
+        "N_ENSEMBLE":11, # number of heads to use
+        "BERNOULLI_P": 0.9, # Probability of experience to go to each head
         "TARGET_UPDATE":50000, # TARGET_UPDATE how often to use replica target
         "USE_DOUBLE_DQN":False, # Whether to use double DQN or regular DQN
         "CHECKPOINT_EVERY_STEPS":30000,
