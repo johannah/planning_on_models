@@ -64,14 +64,16 @@ def train_batch(batch, cnt):
     all_loss.backward()
     start = 0
     end = 0
+    # trains faster if core_net is divided by 1/k vs the entire network
     for param in policy_net_ensemble.core_net.parameters():
         if param.grad is not None:
             #start += param.grad.data.sum()
             param.grad.data *=1.0/float(info['N_ENSEMBLE'])
             #end += param.grad.data.sum()
     torch.nn.utils.clip_grad_value_(policy_net_ensemble.parameters(), info['CLIP_GRAD'])
-    #print(start,end)
     opt.step()
+    et = time.time()
+    #print(et-st)
     if not cnt%info['TARGET_UPDATE']:
         print("++++++++++++++++++++++++++++++++++++++++++++++++")
         print('updating target network')
@@ -166,6 +168,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
         #    print('epsilon', epsilon)
     stop = time.time()
     ep_time =  stop - start
+    board_logger.scalar_summary('Reward by step', total_steps, episodic_reward)
     board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
     board_logger.scalar_summary('head per episode', epoch_num, active_head)
     board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
@@ -204,14 +207,18 @@ if __name__ == '__main__':
     # 0 is noop
     info = {
         'USE_EPSILON':False,
-        "GAME":'Pong', # gym prefix
+        "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'_Pong11_corek', # start files with name
-        "N_ENSEMBLE":11, # number of heads to use
+        "NAME":'_Breakout7RMS', # start files with name
+        "N_ENSEMBLE":7, # number of heads to use
         "BERNOULLI_P": 0.9, # Probability of experience to go to each head
-        "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target TODO - what should this be
+        "TARGET_UPDATE":8000, # TARGET_UPDATE how often to use replica target TODO - what should this be
         "CHECKPOINT_EVERY_STEPS":50000,
-        "ADAM_LEARNING_RATE": .00025,
+        "RMS_LEARNING_RATE": .00025,
+        "RMS_DECAY":0.95,
+        "RMS_MOMENTUM":0.0,
+        "RMS_EPSILON":0.00001,
+        "RMS_CENTERED":True,
         "CLIP_REWARD_MAX":1,
         "CLIP_REWARD_MAX":-1,
         "HISTORY_SIZE":4, # how many past frames to use for state input
@@ -225,7 +232,7 @@ if __name__ == '__main__':
         "EPSILON_DECAY":30000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
-        "SEED":18, # Learning rate for Adam
+        "SEED":18,
         "RANDOM_HEAD":-1,
         "NETWORK_INPUT_SIZE":(84,84),
         }
@@ -280,7 +287,13 @@ if __name__ == '__main__':
                                       num_channels=info['HISTORY_SIZE']).to(info['DEVICE'])
 
 
-    opt = optim.Adam(policy_net_ensemble.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    #opt = optim.Adam(policy_net_ensemble.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    opt = optim.RMSprop(policy_net_ensemble.parameters(),
+                        lr=info["RMS_LEARNING_RATE"],
+                        momentum=info["RMS_MOMENTUM"],
+                        eps=info["RMS_EPSILON"],
+                        centered=info["RMS_CENTERED"],
+                        alpha=info["RMS_DECAY"])
 
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???

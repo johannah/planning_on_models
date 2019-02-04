@@ -11,9 +11,10 @@ from imageio import mimsave
 
 def plot_replay_buffer(data):
     states = data['states']
-    rewards = data['rewards']
-    actions = data['actions']
-    ongoing = data['ongoing_flags']
+    # others - actions, rewards, ongoing
+    actions = data['others'][:,0]
+    rewards = data['others'][:,1]
+    ongoing = data['others'][:,2]
     #mimsave('example.gif',states)
     n = states.shape[0]
     # number of pixels in plot
@@ -23,7 +24,7 @@ def plot_replay_buffer(data):
     else:
         skip = n-back
 
-    inv = np.bitwise_not(data['ongoing_flags'])
+    inv = np.bitwise_not(ongoing.astype(np.bool))
     bounds = np.where(inv == True)[0]
     # start one episode before the skip param
     start = np.where(bounds>skip)[0][0]-1
@@ -39,10 +40,11 @@ def plot_replay_buffer(data):
     got = False
     for i in range(start,n):
         r += rewards[i]
-        print(r,data['acts'][i])
+        #print(r,data['acts'][i])
         fnames.append(os.path.join(bdir, "ZE%06d_%05d.png"%(epoch_cnt,i)))
         imgs.append(states[i])
-        titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
+        #titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
+        titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,-1,r,actions[i]))
         #if not os.path.exists(fname):
         #    f,ax = plt.subplots(1)
         #    ax.imshow(states[i], cmap='gray',interpolation="None")
@@ -56,7 +58,7 @@ def plot_replay_buffer(data):
         if not ongoing[i]:
             ep_rewards.append(r)
             epochs.append(epoch_cnt)
-            if r > -20:
+            if r > 0:
                 print('reward', r, epoch_cnt)
                 got = True
                 for (img,tit,ff) in zip(imgs,titles,fnames):
@@ -84,7 +86,8 @@ def plot_replay_buffer(data):
         os.system("convert %s %s"%(os.path.join(bdir,"ZE*.png"), os.path.join(bdir,"o.gif")))
 
 def plot_cum_reward(data):
-    rewards = data['rewards']
+    # others - actions, rewards, ongoing
+    rewards = data['others'][:,1]
     plt.figure()
     plt.plot(np.cumsum(rewards), label='rewards')
     plt.legend()
@@ -92,9 +95,10 @@ def plot_cum_reward(data):
     plt.close()
 
 def plot_rae(data):
-    rewards = data['rewards']
-    actions = data['actions']
-    ongoing = data['ongoing_flags']
+    # others - actions, rewards, ongoing
+    actions = data['others'][:,0]
+    rewards = data['others'][:,1]
+    ongoing = data['others'][:,2]
     plt.figure()
     plt.plot(rewards, label='rewards')
     plt.plot(actions, label='actions')
@@ -114,7 +118,8 @@ def plot_head_actions(data):
     frames = np.arange(r,n)
     #ymin = acts.min()-1
     #ymax = acts.max()+1
-    chosen = data['actions']
+    # others - actions, rewards, ongoing
+    chosen = data['others'][:,0]
     heads = data['heads']
 
 
@@ -153,7 +158,7 @@ if __name__ == '__main__':
         os.makedirs(bdir)
 
     data = np.load(fpath)
-    plot_head_actions(data)
+    #plot_head_actions(data)
     plot_cum_reward(data)
     plot_rae(data)
     plot_replay_buffer(data)

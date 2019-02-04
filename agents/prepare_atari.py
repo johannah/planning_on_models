@@ -44,7 +44,7 @@ class DMAtariEnv():
             self.really_finished = False
             self.num_true_steps = 0
             finished = False
-            for i in range(self.random_state.randint(0,30)):
+            for i in range(self.random_state.randint(1,30)):
                 # noop steps in beginning
                 action = self.noop_action
                 frame, r, finished, info = self.env.step(action)
