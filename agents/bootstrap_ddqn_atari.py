@@ -59,25 +59,22 @@ def train_batch(batch, cnt):
             loss = torch.sum(full_loss/total_used)
             cnt_losses.append(loss)
             #loss.backward(retain_graph=True)
-            #losses[k] = loss.cpu().detach().item()
+            losses[k] = loss.cpu().detach().item()
     all_loss = torch.stack(cnt_losses).sum()
     all_loss.backward()
-    start = 0
-    end = 0
     # trains faster if core_net is divided by 1/k vs the entire network
     for param in policy_net_ensemble.core_net.parameters():
         if param.grad is not None:
-            #start += param.grad.data.sum()
             param.grad.data *=1.0/float(info['N_ENSEMBLE'])
-            #end += param.grad.data.sum()
     torch.nn.utils.clip_grad_value_(policy_net_ensemble.parameters(), info['CLIP_GRAD'])
     opt.step()
-    et = time.time()
-    #print(et-st)
     if not cnt%info['TARGET_UPDATE']:
         print("++++++++++++++++++++++++++++++++++++++++++++++++")
         print('updating target network')
         target_net_ensemble.load_state_dict(policy_net_ensemble.state_dict())
+    et = time.time()
+    board_logger.scalar_summary('Loss by step', cnt, np.mean(losses))
+    board_logger.scalar_summary('Train batch time by step', cnt, et-st)
     return losses
 
 def handle_checkpoint(last_save, cnt, epoch):
@@ -156,8 +153,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
         #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
         total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, active_head, acts, episodic_reward, exp_replay, checkpoint)
         if batch:
-            loss = train_batch(batch, total_steps)
-            board_logger.scalar_summary('Loss per frame', total_steps, np.mean(loss))
+            train_batch(batch, total_steps)
         eet = time.time()
         checkpoint_times.append(time.time()-cst)
         #if not total_steps % 100:
@@ -212,8 +208,8 @@ if __name__ == '__main__':
         "NAME":'_Breakout7RMS', # start files with name
         "N_ENSEMBLE":7, # number of heads to use
         "BERNOULLI_P": 0.9, # Probability of experience to go to each head
-        "TARGET_UPDATE":8000, # TARGET_UPDATE how often to use replica target TODO - what should this be
-        "CHECKPOINT_EVERY_STEPS":50000,
+        "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target TODO - what should this be
+        "CHECKPOINT_EVERY_STEPS":100000,
         "RMS_LEARNING_RATE": .00025,
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
@@ -225,7 +221,7 @@ if __name__ == '__main__':
         "PRINT_EVERY":1, # How often to print statistics
         "PRIOR_SCALE":0.0, # Weight for randomized prior, 0. disables
         "N_EPOCHS":90000,  # Number of episodes to run
-        "BATCH_SIZE":64, # Batch size to use for learning
+        "BATCH_SIZE":32, # Batch size to use for learning
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.01,

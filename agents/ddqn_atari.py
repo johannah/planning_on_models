@@ -48,30 +48,37 @@ def seed_everything(seed=1234):
 
 def train_batch(batch, cnt):
     st = time.time()
-    inputs_pt = torch.Tensor(batch[0]).to(info['DEVICE'])
-    nexts_pt =  torch.Tensor(batch[1]).to(info['DEVICE'])
-    #print('state',inputs_pt.sum(), nexts_pt.sum())
-    actions_pt = torch.LongTensor(batch[2][:,0][:, None]).to(info['DEVICE'])
-    rewards_pt = torch.Tensor(batch[2][:,1].astype(np.float32)).to(info['DEVICE'])
+    # min history to learn is 200,000 frames in dqn
+    # cnt is in steps the agent has seen
+    loss = 0.0
+    if cnt > info['MIN_HISTORY_TO_LEARN']/info['HISTORY_SIZE']:
+        inputs_pt = torch.Tensor(batch[0]).to(info['DEVICE'])
+        nexts_pt =  torch.Tensor(batch[1]).to(info['DEVICE'])
+        #print('state',inputs_pt.sum(), nexts_pt.sum())
+        actions_pt = torch.LongTensor(batch[2][:,0][:, None]).to(info['DEVICE'])
+        rewards_pt = torch.Tensor(batch[2][:,1].astype(np.float32)).to(info['DEVICE'])
 
-    ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
-    mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
+        ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
+        mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
 
-    opt.zero_grad()
-    q_values = policy_net(inputs_pt)
-    next_q_values = policy_net(nexts_pt)
-    next_q_state_values = target_net(nexts_pt)
-    q_value = q_values.gather(1, actions_pt).squeeze(1)
-    next_q_value = next_q_state_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
-    expected_q_value = rewards_pt + (info["GAMMA"] * next_q_value * ongoing_flags_pt)
-    loss = (q_value-expected_q_value.detach()).pow(2).mean()
-    loss.backward()
-    opt.step()
-    if not cnt%info['TARGET_UPDATE']:
-        print("++++++++++++++++++++++++++++++++++++++++++++++++")
-        print('updating target network')
-        target_net.load_state_dict(policy_net.state_dict())
-    return loss.item()
+        opt.zero_grad()
+        q_values = policy_net(inputs_pt)
+        next_q_values = policy_net(nexts_pt)
+        next_q_state_values = target_net(nexts_pt)
+        q_value = q_values.gather(1, actions_pt).squeeze(1)
+        next_q_value = next_q_state_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
+        expected_q_value = rewards_pt + (info["GAMMA"] * next_q_value * ongoing_flags_pt)
+        loss = (q_value-expected_q_value.detach()).pow(2).mean()
+        loss.backward()
+        opt.step()
+        loss = loss.item()
+        if not cnt%info['TARGET_UPDATE']:
+            print("++++++++++++++++++++++++++++++++++++++++++++++++")
+            print('updating target network')
+            target_net.load_state_dict(policy_net.state_dict())
+    board_logger.scalar_summary('batch train time by cnt', cnt, st-time.time())
+    board_logger.scalar_summary('Loss per frame', cnt, loss)
+    return loss
 
 def handle_checkpoint(last_save, cnt, epoch):
     if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
@@ -145,8 +152,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
         #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
         total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
         if batch:
-            loss = train_batch(batch, total_steps)
-            board_logger.scalar_summary('Loss per frame', total_steps, loss)
+            train_batch(batch, total_steps)
         eet = time.time()
         checkpoint_times.append(time.time()-cst)
         #if not total_steps % 100:
@@ -158,6 +164,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
     stop = time.time()
     ep_time =  stop - start
     board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
+    board_logger.scalar_summary('Reward per step', total_steps, episodic_reward)
     board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
     board_logger.scalar_summary('epoch time', epoch_num, ep_time)
     print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
@@ -192,23 +199,27 @@ if __name__ == '__main__':
     # 1 is fire
     # 0 is noop
     info = {
-        "GAME":'Pong', # gym prefix
+        "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'_Pong_ddqn', # start files with name
+        "NAME":'_Breakout_ddqn', # start files with name
         "N_ENSEMBLE":1, # number of heads to use
         "N_EVALUATIONS":10, # Number of evaluation episodes to run
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
-        "TARGET_UPDATE":1000, # TARGET_UPDATE how often to use replica target
-        "USE_DOUBLE_DQN":False, # Whether to use double DQN or regular DQN
+        "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
+        "MIN_HISTORY_TO_LEARN":200000, # in environment frames
         "CHECKPOINT_EVERY_STEPS":10000,
-        "ADAM_LEARNING_RATE": 1e-4,
+        "RMS_LEARNING_RATE": .00025,
+        "RMS_DECAY":0.95,
+        "RMS_MOMENTUM":0.0,
+        "RMS_EPSILON":0.00001,
+        "RMS_CENTERED":True,
+       # "ADAM_LEARNING_RATE": 1e-4,
         "CLIP_REWARD_MAX":1,
         "CLIP_REWARD_MAX":-1,
         "HISTORY_SIZE":4, # how many past frames to use for state input
         "PRINT_EVERY":1, # How often to print statistics
-        "PRIOR_SCALE":0.0, # Weight for randomized prior, 0. disables
         "N_EPOCHS":90000,  # Number of episodes to run
-        "BATCH_SIZE":64, # Batch size to use for learning
+        "BATCH_SIZE":32, # Batch size to use for learning
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.01,
@@ -257,7 +268,13 @@ if __name__ == '__main__':
     seed_everything(info["SEED"])
     policy_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
     target_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
-    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    #opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    opt = optim.RMSprop(policy_net.parameters(),
+                        lr=info["RMS_LEARNING_RATE"],
+                        momentum=info["RMS_MOMENTUM"],
+                        eps=info["RMS_EPSILON"],
+                        centered=info["RMS_CENTERED"],
+                        alpha=info["RMS_DECAY"])
 
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???

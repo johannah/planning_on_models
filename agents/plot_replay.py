@@ -40,11 +40,12 @@ def plot_replay_buffer(data):
     got = False
     for i in range(start,n):
         r += rewards[i]
-        #print(r,data['acts'][i])
         fnames.append(os.path.join(bdir, "ZE%06d_%05d.png"%(epoch_cnt,i)))
         imgs.append(states[i])
-        #titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
-        titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,-1,r,actions[i]))
+        try:
+            titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,data['heads'][i],r,actions[i]))
+        except:
+            titles.append("%6d E%05d K%02d R%03d A%d"%(i,epoch_cnt,-1,r,actions[i]))
         #if not os.path.exists(fname):
         #    f,ax = plt.subplots(1)
         #    ax.imshow(states[i], cmap='gray',interpolation="None")
