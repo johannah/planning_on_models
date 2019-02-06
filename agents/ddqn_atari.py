@@ -23,8 +23,11 @@ class DDQNCoreNet(nn.Module):
         self.num_channels =  num_channels
         self.num_actions = num_actions
         conv1 = nn.Conv2d(self.num_channels, 32, kernel_size=8, stride=4)
+        torch.nn.init.kaiming_uniform_(conv1.weight, nonlinearity='relu')
         conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
+        torch.nn.init.kaiming_uniform_(conv2.weight, nonlinearity='relu')
         conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        torch.nn.init.kaiming_uniform_(conv3.weight, nonlinearity='relu')
         self.conv_layers = nn.Sequential(conv1, nn.ReLU(),
                                          conv2, nn.ReLU(),
                                          conv3, nn.ReLU())
@@ -49,9 +52,8 @@ def seed_everything(seed=1234):
 def train_batch(batch, cnt):
     st = time.time()
     # min history to learn is 200,000 frames in dqn
-    # cnt is in steps the agent has seen
     loss = 0.0
-    if cnt > info['MIN_HISTORY_TO_LEARN']/info['HISTORY_SIZE']:
+    if cnt > info['MIN_HISTORY_TO_LEARN']:
         inputs_pt = torch.Tensor(batch[0]).to(info['DEVICE'])
         nexts_pt =  torch.Tensor(batch[1]).to(info['DEVICE'])
         #print('state',inputs_pt.sum(), nexts_pt.sum())
@@ -130,22 +132,22 @@ def run_training_episode(epoch_num, total_steps, last_save):
 
     while not finished:
         est = time.time()
-        with torch.no_grad():
-            # always do this calculation - as it is used for debugging
-            S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(info['DEVICE'])
-            vals = policy_net(S_hist_pt)
-            action = np.argmax(vals.cpu().data.numpy(),-1)[0]
-            #embed()
-            #vals = [q.cpu().data.numpy() for q in policy_net(S_hist_pt, None)]
-            #acts = [np.argmax(v, axis=-1)[0] for v in vals]
+        if total_steps < info["MIN_HISTORY_TO_LEARN"]:
+            epsilon = 1.0
+        else:
+            epsilon = epsilon_by_frame(total_steps)
+        board_logger.scalar_summary('epsilon by step', total_steps, epsilon)
 
-        epsilon = epsilon_by_frame(total_steps)
         if (random_state.rand() < epsilon):
             action = random_state.choice(action_space)
-            #k_used = info['RANDOM_HEAD']
-        #else:
-        #    action = acts[active_head]
-            #k_used = active_head
+            vals = [-1.0 for aa in action_space]
+        else:
+            with torch.no_grad():
+                # always do this calculation - as it is used for debugging
+                S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(info['DEVICE'])
+                vals = policy_net(S_hist_pt)
+                action = np.argmax(vals.cpu().data.numpy(),-1)[0]
+
         S_prime, reward, finished = env.step4(action)
         cst = time.time()
         last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
@@ -167,9 +169,10 @@ def run_training_episode(epoch_num, total_steps, last_save):
     board_logger.scalar_summary('Reward per step', total_steps, episodic_reward)
     board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
     board_logger.scalar_summary('epoch time', epoch_num, ep_time)
-    print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
-    #print('actions',episode_actions)
-    print("time for episode", ep_time)
+    if not epoch_num%5:
+        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
+        #print('actions',episode_actions)
+        print("time for episode", ep_time)
     return episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
 
 def write_info_file(cnt):
@@ -206,9 +209,9 @@ if __name__ == '__main__':
         "N_EVALUATIONS":10, # Number of evaluation episodes to run
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        "MIN_HISTORY_TO_LEARN":200000, # in environment frames
+        "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "CHECKPOINT_EVERY_STEPS":10000,
-        "RMS_LEARNING_RATE": .00025,
+        "RMS_LEARNING_RATE": 0.00001,
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
         "RMS_EPSILON":0.00001,
@@ -220,7 +223,7 @@ if __name__ == '__main__':
         "PRINT_EVERY":1, # How often to print statistics
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
-        "BUFFER_SIZE":1e6, # Buffer size for experience replay
+        "BUFFER_SIZE":1e5, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.01,
         "EPSILON_DECAY":30000,

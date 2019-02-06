@@ -208,7 +208,7 @@ if __name__ == '__main__':
         "NAME":'_Breakout7RMS', # start files with name
         "N_ENSEMBLE":7, # number of heads to use
         "BERNOULLI_P": 0.9, # Probability of experience to go to each head
-        "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target TODO - what should this be
+        "TARGET_UPDATE":40000, # TARGET_UPDATE how often to use replica target in frames agent has seen
         "CHECKPOINT_EVERY_STEPS":100000,
         "RMS_LEARNING_RATE": .00025,
         "RMS_DECAY":0.95,

@@ -95,15 +95,15 @@ class DMAtariEnv():
             self.lives = lives
         self.num_true_steps+=4
 
-        if self.num_true_steps >= 18000:
+        if self.num_true_steps >= 108000:
+            print("MAX STEPS REACHED")
             finished = True
 
         if self.really_finished:
             print('finished epoch')
             self.num_episodes +=1
         # clip bt -1 and 1
-        reward_clipped = min(reward,self.clip_reward_max)
-        reward_clipped = max(reward_clipped,self.clip_reward_min)
+        reward_clipped = np.clip(reward,self.clip_reward_min,self.clip_reward_max)
         return obs_step4, reward_clipped, finished
 
 if __name__ == '__main__':
