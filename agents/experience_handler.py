@@ -45,21 +45,12 @@ def experience_replay(batch_size, max_size, history_size=4,
             # observation S indexes [7,8,9,10] and
             # next observation s_prime indexes [8,9,10,11] and
             # experience = (S, S_prime, [action, reward, ongoing], exp_mask)
-
             S = np.array([states[i-history_size:i+1] for i in batch_indexes]).astype(np.float32)/256.
             _other = np.array([others[i] for i in batch_indexes])
             _masks = np.array([masks[i] for i in batch_indexes])
             yield_val = [S[:,:history_size], S[:,1:], _other, _masks]
-            et = time.time()
-            # on gpu/cpu - with small array - find indexes takes .02
-            # on gpu/cpu - with small array - add experience takes 1.66e-6
-            # on gpu with len(6000) array - add experience takes 9.53e-7
-            # on gpu with len(6000) array - find indexes takes 0.836
-            #print('buffer add',et-est)
-
         do_checkpoint, experience = yield yield_val
         if experience is not None:
-            est = time.time()
             # add experience
             states.append((experience[0]*256).astype(np.uint8))
             masks.append(experience[4])
@@ -83,12 +74,14 @@ def experience_replay(batch_size, max_size, history_size=4,
                 bname = do_checkpoint.replace('.pkl', '_%s.npz'%name)
                 print("saving new experience buffer:%s"%bname)
                 try:
-                    np.savez_compressed(bname, states=np.array(states),
+                    if not is_eval:
+                        np.savez_compressed(bname, states=np.array(states),
                                                others=np.array(others),
                                                masks=np.array(masks),
                                                cnt=cnt)
 
-                    if is_eval:
+                    else:
+                        # save heads as well
                         np.savez_compressed(bname, states=np.array(states),
                                                 others=np.array(others),
                                                 masks=np.array(masks),
@@ -97,10 +90,7 @@ def experience_replay(batch_size, max_size, history_size=4,
                     print("finished experience buffer save")
 
                 except Exception as e:
-                    # sometimes not enough memory to save on shared lab machine
-                    # (docker was using a lot)
                     print('bad save experience')
                     print(e)
                     time.sleep(5)
-                    #embed()
 
