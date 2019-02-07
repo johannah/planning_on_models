@@ -83,8 +83,9 @@ def train_batch(batch, cnt):
         print('updating target network')
         target_net_ensemble.load_state_dict(policy_net_ensemble.state_dict())
     et = time.time()
-    board_logger.scalar_summary('Loss by step', cnt, np.mean(losses))
-    board_logger.scalar_summary('Train batch time by step', cnt, et-st)
+
+    board_logger.scalar_summary('batch train time per cnt', cnt, st-time.time())
+    board_logger.scalar_summary('loss per cnt', cnt, np.mean(losses))
     return losses
 
 def run_training_episode(epoch_num, total_steps, last_save):
@@ -103,7 +104,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
     epoch_losses = [0. for k in range(info['N_ENSEMBLE'])]
     epoch_steps = [1. for k in range(info['N_ENSEMBLE'])]
     policy_net_ensemble.train()
-    total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
+    total_steps, S_hist, batch, episodic_reward = handle_step(random_state, total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay, info['N_ENSEMBLE'], info['BERNOULLI_P'])
     print("start action while loop")
     checkpoint_times = []
 
@@ -117,26 +118,31 @@ def run_training_episode(epoch_num, total_steps, last_save):
             acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
             action = acts[active_head]
 
+        board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
+        bfa = time.time()
         S_prime, reward, finished = env.step4(action)
+        board_logger.scalar_summary('time take action per step', total_steps, time.time()-bfa)
         cst = time.time()
         last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
         #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
-        total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, active_head, acts, episodic_reward, exp_replay, checkpoint)
+        asst = time.time()
+        total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, active_head, acts, episodic_reward, exp_replay, checkpoint, info['N_ENSEMBLE'], info['BERNOULLI_P'])
+        board_logger.scalar_summary('time handle_step per step', total_steps, time.time()-asst)
         if batch:
             train_batch(batch, total_steps)
         eet = time.time()
         checkpoint_times.append(time.time()-cst)
     stop = time.time()
     ep_time =  stop - start
-    board_logger.scalar_summary('Reward per step', total_steps, episodic_reward)
-    board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
+    board_logger.scalar_summary('reward per step', total_steps, episodic_reward)
+    board_logger.scalar_summary('reward per episode', epoch_num, episodic_reward)
     board_logger.scalar_summary('head per episode', epoch_num, active_head)
-    board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
-    board_logger.scalar_summary('epoch time', epoch_num, ep_time)
-    board_logger.scalar_summary('epoch steps', epoch_num, total_steps-start_steps)
-    print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
-    #print('actions',episode_actions)
-    print("time for episode", ep_time)
+    board_logger.scalar_summary('time per episode', epoch_num, ep_time)
+    board_logger.scalar_summary('steps per episode', epoch_num, total_steps-start_steps)
+    if not epoch_num%5:
+        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
+        #print('actions',episode_actions)
+        print("time for episode", ep_time)
     return active_head, episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
 
 if __name__ == '__main__':
@@ -211,7 +217,7 @@ if __name__ == '__main__':
         print("starting NEW project: %s"%model_base_filedir)
 
     model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
-    write_info_file(total_steps)
+    write_info_file(info, model_base_filepath, total_steps)
     env = DMAtariEnv(info['GAME'],random_seed=info['SEED'])
     action_space = np.arange(env.env.action_space.n)
     heads = list(range(info['N_ENSEMBLE']))

@@ -72,8 +72,8 @@ def train_batch(batch, cnt):
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
             print('updating target network')
             target_net.load_state_dict(policy_net.state_dict())
-    board_logger.scalar_summary('batch train time by cnt', cnt, st-time.time())
-    board_logger.scalar_summary('Loss per frame', cnt, loss)
+    board_logger.scalar_summary('batch train time per cnt', cnt, st-time.time())
+    board_logger.scalar_summary('loss per cnt', cnt, loss)
     return loss
 
 def handle_checkpoint(last_save, cnt, epoch):
@@ -103,7 +103,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
     # init current state buffer with initial frame
     S_hist = [S for _ in range(info['HISTORY_SIZE'])]
     policy_net.train()
-    total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
+    total_steps, S_hist, batch, episodic_reward = handle_step(random_state, total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
     checkpoint_times = []
 
     while not finished:
@@ -120,23 +120,27 @@ def run_training_episode(epoch_num, total_steps, last_save):
                 S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(info['DEVICE'])
                 vals = policy_net(S_hist_pt)
                 action = np.argmax(vals.cpu().data.numpy(),-1)[0]
-
+        board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
+        bfa = time.time()
         S_prime, reward, finished = env.step4(action)
+        board_logger.scalar_summary('time take action per step', total_steps, time.time()-bfa)
         cst = time.time()
         last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
-        total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
+        asst = time.time()
+        total_steps, S_hist, batch, episodic_reward = handle_step(random_state, total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
+        board_logger.scalar_summary('time handle_step per step', total_steps, time.time()-asst)
         if batch:
             train_batch(batch, total_steps)
         eet = time.time()
         checkpoint_times.append(time.time()-cst)
     stop = time.time()
     ep_time =  stop - start
-    board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
-    board_logger.scalar_summary('Reward per step', total_steps, episodic_reward)
-    board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
-    board_logger.scalar_summary('epoch time', epoch_num, ep_time)
+    board_logger.scalar_summary('reward per episode', epoch_num, episodic_reward)
+    board_logger.scalar_summary('reward per step', total_steps, episodic_reward)
+    board_logger.scalar_summary('time per episode', epoch_num, ep_time)
+    board_logger.scalar_summary('steps per episode', epoch_num, total_steps-start_steps)
     if not epoch_num%5:
-        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num,  episodic_reward, total_steps-start_steps, total_steps))
+        print("EPISODE:%s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, episodic_reward, total_steps-start_steps, total_steps))
         #print('actions',episode_actions)
         print("time for episode", ep_time)
     return episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
@@ -179,7 +183,7 @@ if __name__ == '__main__':
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.1,
-        "EPSILON_DECAY":1000000,
+        "EPSILON_DECAY":4000000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":18, # Learning rate for Adam
@@ -217,7 +221,7 @@ if __name__ == '__main__':
         print("starting NEW project: %s"%model_base_filedir)
 
     model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
-    write_info_file(model_base_filepath, total_steps)
+    write_info_file(info, model_base_filepath, total_steps)
     env = DMAtariEnv(info['GAME'],random_seed=info['SEED'])
     action_space = np.arange(env.env.action_space.n)
     seed_everything(info["SEED"])
