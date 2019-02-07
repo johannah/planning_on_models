@@ -17,6 +17,7 @@ sys.path.append('../models')
 from glob import glob
 import config
 from ae_utils import save_checkpoint
+
 class DDQNCoreNet(nn.Module):
     def __init__(self, num_channels, num_actions):
         super(DDQNCoreNet, self).__init__()
@@ -70,7 +71,8 @@ def train_batch(batch, cnt):
         q_value = q_values.gather(1, actions_pt).squeeze(1)
         next_q_value = next_q_state_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
         expected_q_value = rewards_pt + (info["GAMMA"] * next_q_value * ongoing_flags_pt)
-        loss = (q_value-expected_q_value.detach()).pow(2).mean()
+        #loss = (q_value-expected_q_value.detach()).pow(2).mean()
+        loss = F.smooth_l1_loss(q_value,expected_q_value.detach())
         loss.backward()
         opt.step()
         loss = loss.item()
@@ -111,6 +113,26 @@ def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, ep
     cnt+=1
     return cnt, S_hist, batch, episodic_reward
 
+def linearly_decaying_epsilon(decay_period, step, warmup_steps, epsilon):
+  """ from dopamine - Returns the current epsilon for the agent's epsilon-greedy policy.
+  This follows the Nature DQN schedule of a linearly decaying epsilon (Mnih et
+  al., 2015). The schedule is as follows:
+    Begin at 1. until warmup_steps steps have been taken; then
+    Linearly decay epsilon from 1. to epsilon in decay_period steps; and then
+    Use epsilon from there on.
+  Args:
+    decay_period: float, the period over which epsilon is decayed.
+    step: int, the number of training steps completed so far.
+    warmup_steps: int, the number of steps taken before epsilon is decayed.
+    epsilon: float, the final value to which to decay the epsilon parameter.
+  Returns:
+    A float, the current epsilon value computed according to the schedule.
+  """
+  steps_left = decay_period + warmup_steps - step
+  bonus = (1.0 - epsilon) * steps_left / decay_period
+  bonus = np.clip(bonus, 0., 1. - epsilon)
+  return epsilon + bonus
+
 def run_training_episode(epoch_num, total_steps, last_save):
     start = time.time()
     episodic_losses = []
@@ -123,19 +145,18 @@ def run_training_episode(epoch_num, total_steps, last_save):
     episode_actions = [action]
     # init current state buffer with initial frame
     S_hist = [S for _ in range(info['HISTORY_SIZE'])]
-    epoch_losses = [0. for k in range(info['N_ENSEMBLE'])]
-    epoch_steps = [1. for k in range(info['N_ENSEMBLE'])]
     policy_net.train()
     total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
-    print("start action while loop")
+    #print("start action while loop")
     checkpoint_times = []
 
     while not finished:
         est = time.time()
-        if total_steps < info["MIN_HISTORY_TO_LEARN"]:
-            epsilon = 1.0
-        else:
-            epsilon = epsilon_by_frame(total_steps)
+        #if total_steps < info["MIN_HISTORY_TO_LEARN"]:
+        #    epsilon = 1.0
+        #else:
+        #    epsilon = epsilon_by_frame(total_steps
+        epsilon = linearly_decaying_epsilon(info["EPSILON_DECAY"], total_steps, info["MIN_HISTORY_TO_LEARN"], info["EPSILON_MIN"])
         board_logger.scalar_summary('epsilon by step', total_steps, epsilon)
 
         if (random_state.rand() < epsilon):
@@ -210,7 +231,9 @@ if __name__ == '__main__':
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
-        "CHECKPOINT_EVERY_STEPS":10000,
+        "CHECKPOINT_EVERY_STEPS":100000,
+        "ADAM_LEARNING_RATE":0.00025,
+        "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
@@ -223,10 +246,10 @@ if __name__ == '__main__':
         "PRINT_EVERY":1, # How often to print statistics
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
-        "BUFFER_SIZE":1e5, # Buffer size for experience replay
+        "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
-        "EPSILON_MIN":.01,
-        "EPSILON_DECAY":30000,
+        "EPSILON_MIN":.1,
+        "EPSILON_DECAY":1000000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":18, # Learning rate for Adam
@@ -271,13 +294,13 @@ if __name__ == '__main__':
     seed_everything(info["SEED"])
     policy_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
     target_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
-    #opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
-    opt = optim.RMSprop(policy_net.parameters(),
-                        lr=info["RMS_LEARNING_RATE"],
-                        momentum=info["RMS_MOMENTUM"],
-                        eps=info["RMS_EPSILON"],
-                        centered=info["RMS_CENTERED"],
-                        alpha=info["RMS_DECAY"])
+    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'], eps=info['ADAM_EPSILON'])
+    #opt = optim.RMSprop(policy_net.parameters(),
+    #                    lr=info["RMS_LEARNING_RATE"],
+    #                    momentum=info["RMS_MOMENTUM"],
+    #                    eps=info["RMS_EPSILON"],
+    #                    centered=info["RMS_CENTERED"],
+    #                    alpha=info["RMS_DECAY"])
 
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???

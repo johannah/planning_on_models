@@ -32,14 +32,14 @@ class DMAtariEnv():
     def reset(self):
         self.total_reward = 0
         if not self.really_finished:
-            print("soft reset")
+            #print("soft reset")
             a_meaning = self.env.unwrapped.get_action_meanings()
             action = self.noop_action
             frame, reward, finished, info = self.env.step(action)
             obs = prepare_frame(frame, self.network_input_size)
             self.total_reward+=reward
         else:
-            print("HARD reset")
+            #print("HARD reset")
             frame = self.env.reset()
             self.really_finished = False
             self.num_true_steps = 0
@@ -51,17 +51,17 @@ class DMAtariEnv():
                 self.total_reward += r
                 obs = prepare_frame(frame,self.network_input_size)
         a_meaning = self.env.unwrapped.get_action_meanings()
-        if a_meaning[1] == 'FIRE' and len(a_meaning) >= 3:
-            action = 1
-            frame, r, finished, info = self.env.step(action)
-            obs = prepare_frame(frame,self.network_input_size)
-            self.total_reward += r
+        #if a_meaning[1] == 'FIRE' and len(a_meaning) >= 3:
+        #    action = 1
+        #    frame, r, finished, info = self.env.step(action)
+        #    obs = prepare_frame(frame,self.network_input_size)
+        #    self.total_reward += r
         self.really_finished = finished
         if finished:
             print("received end in init routine")
             self.reset()
         self.lives = self.env.unwrapped.ale.lives()
-        print("lives left: %s"%self.lives)
+        #print("lives left: %s"%self.lives)
         return obs, action, self.total_reward, finished
 
     # expects single step atari - will repeat 4 times
@@ -89,8 +89,8 @@ class DMAtariEnv():
         finished = self.really_finished = max(end)
         lives = self.env.unwrapped.ale.lives()
         if lives < self.lives and lives > 0:
-            print("lost life")
-            print(lives, self.lives)
+            #print("lost life")
+            #print(lives, self.lives)
             finished = True
             self.lives = lives
         self.num_true_steps+=4
