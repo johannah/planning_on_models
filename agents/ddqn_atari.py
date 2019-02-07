@@ -11,8 +11,10 @@ import torch.nn.functional as F
 import torch.optim as optim
 import datetime
 import time
-from experience_handler import experience_replay
-from prepare_atari import DMAtariEnv
+from replay_buffer import ReplayBuffer, samples_to_tensors
+#from experience_handler import experience_replay
+#from prepare_atari import DMAtariEnv
+from env import Environment
 sys.path.append('../models')
 from glob import glob
 import config
@@ -42,29 +44,22 @@ class DDQNCoreNet(nn.Module):
         x = self.conv_layers(x)
         return self.lin_layers(x.view(x.shape[0], -1))
 
-def train_batch(batch, cnt):
+def train_batch(cnt):
     st = time.time()
     # min history to learn is 200,000 frames in dqn
     loss = 0.0
     if cnt > info['MIN_HISTORY_TO_LEARN']:
-        inputs_pt = torch.Tensor(batch[0]).to(info['DEVICE'])
-        nexts_pt =  torch.Tensor(batch[1]).to(info['DEVICE'])
-        #print('state',inputs_pt.sum(), nexts_pt.sum())
-        actions_pt = torch.LongTensor(batch[2][:,0][:, None]).to(info['DEVICE'])
-        rewards_pt = torch.Tensor(batch[2][:,1].astype(np.float32)).to(info['DEVICE'])
-
-        ongoing_flags_pt = torch.Tensor(batch[2][:,2]).to(info['DEVICE'])
-        mask_pt = torch.FloatTensor(batch[3]).to(info['DEVICE'])
-
+        samples = replay_buffer.sample(info['BATCH_SIZE'])
+        states, actions, rewards, next_states, ongoing_flags = samples_to_tensors(samples, info['DEVICE'])
         opt.zero_grad()
-        q_values = policy_net(inputs_pt)
-        next_q_values = policy_net(nexts_pt)
-        next_q_state_values = target_net(nexts_pt)
-        q_value = q_values.gather(1, actions_pt).squeeze(1)
+        q_values = policy_net(states)
+        next_q_values = policy_net(next_states)
+        next_q_state_values = target_net(next_states)
+        q_value = q_values.gather(1, actions[:,None]).squeeze(1)
         next_q_value = next_q_state_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
-        expected_q_value = rewards_pt + (info["GAMMA"] * next_q_value * ongoing_flags_pt)
+        expected_q_value = rewards + (info["GAMMA"] * next_q_value * ongoing_flags)
         #loss = (q_value-expected_q_value.detach()).pow(2).mean()
-        loss = F.smooth_l1_loss(q_value,expected_q_value.detach())
+        loss = F.smooth_l1_loss(q_value, expected_q_value.detach())
         loss.backward()
         opt.step()
         loss = loss.item()
@@ -76,7 +71,7 @@ def train_batch(batch, cnt):
     board_logger.scalar_summary('loss per cnt', cnt, loss)
     return loss
 
-def handle_checkpoint(last_save, cnt, epoch):
+def handle_checkpoint(last_save, cnt, epoch, last_mean):
     if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
         print("checkpoint")
         last_save = cnt
@@ -86,25 +81,38 @@ def handle_checkpoint(last_save, cnt, epoch):
                  'epoch':epoch,
                  'policy_net_state_dict':policy_net.state_dict(),
                  'target_net_state_dict':target_net.state_dict(),
+                 'last_mean':last_mean,
                  }
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
+        npy_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.npz"%cnt)
         save_checkpoint(state, filename)
-        return last_save,filename
-    else: return last_save, ''
+        replay_buffer.save_buffer(npy_filename)
+        return last_save
+    else: return last_save
 
-def run_training_episode(epoch_num, total_steps, last_save):
+
+#def handle_new_step(random_state, cnt, S_prime, action, reward, finished, k_used, acts, episodic_reward, replay_buffer, checkpoint='', n_ensemble=1, bernoulli_p=1.0):
+#    # mask to determine which head can use this experience
+#    exp_mask = random_state.binomial(1, bernoulli_p, n_ensemble).astype(np.uint8)
+#    # at this observed state
+#    experience =  [S_prime, action, reward, finished, exp_mask, k_used, acts, cnt]
+#    batch = replay_buffer.send((checkpoint, experience))
+#    # update so "state" representation is past history_size frames
+#    episodic_reward += reward
+#    cnt+=1
+#    return cnt, batch, episodic_reward
+
+
+def run_training_episode(epoch_num, total_steps):
+    finished = False
     episode_steps = 0
     start = time.time()
     episodic_losses = []
     start_steps = total_steps
     episodic_reward = 0.0
-    S, action, reward, finished = env.reset()
-    episode_actions = [action]
-    # init current state buffer with initial frame
-    S_hist = [S for _ in range(info['HISTORY_SIZE'])]
+    _S = env.reset()
+    episode_actions = []
     policy_net.train()
-    total_steps, S_hist, batch, episodic_reward = handle_step(random_state, total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
-    checkpoint_times = []
 
     while not finished:
         est = time.time()
@@ -117,22 +125,24 @@ def run_training_episode(epoch_num, total_steps, last_save):
         else:
             with torch.no_grad():
                 # always do this calculation - as it is used for debugging
-                S_hist_pt = torch.Tensor(np.array(S_hist)[None]).to(info['DEVICE'])
-                vals = policy_net(S_hist_pt)
+                _Spt= torch.Tensor(_S[None]).to(info['DEVICE'])
+                vals = policy_net(_Spt)
                 action = np.argmax(vals.cpu().data.numpy(),-1)[0]
         board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
         bfa = time.time()
-        S_prime, reward, finished = env.step4(action)
-        board_logger.scalar_summary('time take action per step', total_steps, time.time()-bfa)
-        cst = time.time()
-        last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
-        asst = time.time()
-        total_steps, S_hist, batch, episodic_reward = handle_step(random_state, total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
-        board_logger.scalar_summary('time handle_step per step', total_steps, time.time()-asst)
-        if batch:
-            train_batch(batch, total_steps)
+        _S_prime, reward, finished = env.step(action)
+        replay_buffer.append(_S, action, reward, _S_prime, finished)
+
+        #board_logger.scalar_summary('time take action per step', total_steps, time.time()-bfa)
+        #cst = time.time()
+        #asst = time.time()
+        #total_steps, batch, episodic_reward = handle_new_step(random_state, total_steps, S_hist[-1], action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
+        #board_logger.scalar_summary('time handle_step per step', total_steps, time.time()-asst)
+        train_batch(total_steps)
+        _S = _S_prime
+        episodic_reward += reward
+        total_steps+=1
         eet = time.time()
-        checkpoint_times.append(time.time()-cst)
     stop = time.time()
     ep_time =  stop - start
     board_logger.scalar_summary('reward per episode', epoch_num, episodic_reward)
@@ -143,8 +153,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
         print("EPISODE:%s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, episodic_reward, total_steps-start_steps, total_steps))
         #print('actions',episode_actions)
         print("time for episode", ep_time)
-    return episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
-
+    return episodic_reward, total_steps, ep_time
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
@@ -159,9 +168,9 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'Breakout', # gym prefix
+        "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'_Breakout_ddqn', # start files with name
+        "NAME":'_ROMSBreakout_ddqn', # start files with name
         "N_EVALUATIONS":10, # Number of evaluation episodes to run
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
@@ -183,21 +192,24 @@ if __name__ == '__main__':
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.1,
-        "EPSILON_DECAY":4000000,
+        "EPSILON_DECAY":1000000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":18, # Learning rate for Adam
         "RANDOM_HEAD":-1,
+        "FAKE_ACTION":-3,
+        "FAKE_REWARD":-5,
         "NETWORK_INPUT_SIZE":(84,84),
         }
 
-    info['FAKE_ACTS'] = [info['RANDOM_HEAD']]
+    info['FAKE_ACTS'] = [info['FAKE_ACTION']]
     info['args'] = args
     accumulation_rewards = []
     overall_time = 0.
     info['load_time'] = datetime.date.today().ctime()
 
     if args.model_loadpath != '':
+        print('loading model from: %s' %args.model_loadpath)
         model_dict = torch.load(args.model_loadpath)
         info = model_dict['info']
         total_steps = model_dict['cnt']
@@ -222,11 +234,11 @@ if __name__ == '__main__':
 
     model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
     write_info_file(info, model_base_filepath, total_steps)
-    env = DMAtariEnv(info['GAME'],random_seed=info['SEED'])
-    action_space = np.arange(env.env.action_space.n)
+    env = Environment(info['GAME'])
+    action_space = np.arange(env.num_actions)
     seed_everything(info["SEED"])
-    policy_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
-    target_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
+    policy_net = DDQNCoreNet(info['HISTORY_SIZE'], env.num_actions).to(info['DEVICE'])
+    target_net = DDQNCoreNet(info['HISTORY_SIZE'], env.num_actions).to(info['DEVICE'])
     opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'], eps=info['ADAM_EPSILON'])
     #opt = optim.RMSprop(policy_net.parameters(),
     #                    lr=info["RMS_LEARNING_RATE"],
@@ -245,14 +257,15 @@ if __name__ == '__main__':
         if args.buffer_loadpath == '':
             args.buffer_loadpath = glob(args.model_loadpath.replace('.pkl', '*.npz'))[0]
             print("auto loading buffer from:%s" %args.buffer_loadpath)
-    exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
-                                   max_size=info['BUFFER_SIZE'],
-                                   history_size=info['HISTORY_SIZE'],
-                                   name='train_buffer', random_seed=info['SEED'],
-                                   buffer_file=args.buffer_loadpath)
+    replay_buffer = ReplayBuffer(info['BUFFER_SIZE'])
+    #exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
+    #                               max_size=info['BUFFER_SIZE'],
+    #                               history_size=info['HISTORY_SIZE'],
+    #                               name='train_buffer', random_seed=info['SEED'],
+    #                               buffer_file=args.buffer_loadpath)
 
     random_state = np.random.RandomState(info["SEED"])
-    next(exp_replay) # Start experience-replay coroutines
+    #next(exp_replay) # Start experience-replay coroutines
 
     board_logger = TensorBoardLogger(model_base_filedir)
     last_target_update = 0
@@ -261,9 +274,11 @@ if __name__ == '__main__':
 
     epsilon_by_frame = lambda frame_idx: info['EPSILON_MIN'] + (info['EPSILON_MAX'] - info['EPSILON_MIN']) * math.exp( -1. * frame_idx / info['EPSILON_DECAY'])
     for epoch_num in range(epoch_start, info['N_EPOCHS']):
-        ep_reward, total_steps, etime, last_save, mean_loss = run_training_episode(epoch_num, total_steps, last_save)
+        ep_reward, total_steps, etime = run_training_episode(epoch_num, total_steps)
         all_rewards.append(ep_reward)
         overall_time += etime
-        board_logger.scalar_summary("avg reward last 100 episodes", epoch_num, np.mean(all_rewards[-100:]))
+        last_mean = np.mean(all_rewards[-100:])
+        board_logger.scalar_summary("avg reward last 100 episodes", epoch_num, last_mean)
+        last_save = handle_checkpoint(last_save, total_steps, epoch_num, last_mean)
 
 

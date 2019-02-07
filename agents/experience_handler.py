@@ -49,6 +49,7 @@ def experience_replay(batch_size, max_size, history_size=4,
             _other = np.array([others[i] for i in batch_indexes])
             _masks = np.array([masks[i] for i in batch_indexes])
             yield_val = [S[:,:history_size], S[:,1:], _other, _masks]
+            embed()
         do_checkpoint, experience = yield yield_val
         if experience is not None:
             # add experience
