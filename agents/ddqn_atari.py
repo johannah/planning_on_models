@@ -17,6 +17,7 @@ sys.path.append('../models')
 from glob import glob
 import config
 from ae_utils import save_checkpoint
+from dqn_utils import linearly_decaying_epsilon, handle_step, seed_everything, write_info_file
 
 class DDQNCoreNet(nn.Module):
     def __init__(self, num_channels, num_actions):
@@ -40,15 +41,6 @@ class DDQNCoreNet(nn.Module):
     def forward(self, x):
         x = self.conv_layers(x)
         return self.lin_layers(x.view(x.shape[0], -1))
-
-
-def seed_everything(seed=1234):
-    #random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    #torch.backends.cudnn.deterministic = True
 
 def train_batch(batch, cnt):
     st = time.time()
@@ -100,46 +92,11 @@ def handle_checkpoint(last_save, cnt, epoch):
         return last_save,filename
     else: return last_save, ''
 
-def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, replay_buffer,checkpoint=''):
-    # mask to determine which head can use this experience
-    exp_mask = random_state.binomial(1, info['BERNOULLI_P'], info['N_ENSEMBLE']).astype(np.uint8)
-    # at this observed state
-    experience =  [S_prime, action, reward, finished, exp_mask, k_used, acts, cnt]
-    batch = replay_buffer.send((checkpoint, experience))
-    # update so "state" representation is past history_size frames
-    S_hist.pop(0)
-    S_hist.append(S_prime)
-    episodic_reward += reward
-    cnt+=1
-    return cnt, S_hist, batch, episodic_reward
-
-def linearly_decaying_epsilon(decay_period, step, warmup_steps, epsilon):
-  """ from dopamine - Returns the current epsilon for the agent's epsilon-greedy policy.
-  This follows the Nature DQN schedule of a linearly decaying epsilon (Mnih et
-  al., 2015). The schedule is as follows:
-    Begin at 1. until warmup_steps steps have been taken; then
-    Linearly decay epsilon from 1. to epsilon in decay_period steps; and then
-    Use epsilon from there on.
-  Args:
-    decay_period: float, the period over which epsilon is decayed.
-    step: int, the number of training steps completed so far.
-    warmup_steps: int, the number of steps taken before epsilon is decayed.
-    epsilon: float, the final value to which to decay the epsilon parameter.
-  Returns:
-    A float, the current epsilon value computed according to the schedule.
-  """
-  steps_left = decay_period + warmup_steps - step
-  bonus = (1.0 - epsilon) * steps_left / decay_period
-  bonus = np.clip(bonus, 0., 1. - epsilon)
-  return epsilon + bonus
-
 def run_training_episode(epoch_num, total_steps, last_save):
+    episode_steps = 0
     start = time.time()
     episodic_losses = []
     start_steps = total_steps
-    episode_steps = 0
-    random_state.shuffle(heads)
-    active_head = heads[0]
     episodic_reward = 0.0
     S, action, reward, finished = env.reset()
     episode_actions = [action]
@@ -147,15 +104,10 @@ def run_training_episode(epoch_num, total_steps, last_save):
     S_hist = [S for _ in range(info['HISTORY_SIZE'])]
     policy_net.train()
     total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S, action, reward, finished, info['RANDOM_HEAD'], info['FAKE_ACTS'], 0, exp_replay)
-    #print("start action while loop")
     checkpoint_times = []
 
     while not finished:
         est = time.time()
-        #if total_steps < info["MIN_HISTORY_TO_LEARN"]:
-        #    epsilon = 1.0
-        #else:
-        #    epsilon = epsilon_by_frame(total_steps
         epsilon = linearly_decaying_epsilon(info["EPSILON_DECAY"], total_steps, info["MIN_HISTORY_TO_LEARN"], info["EPSILON_MIN"])
         board_logger.scalar_summary('epsilon by step', total_steps, epsilon)
 
@@ -172,18 +124,11 @@ def run_training_episode(epoch_num, total_steps, last_save):
         S_prime, reward, finished = env.step4(action)
         cst = time.time()
         last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
-        #total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, exp_replay, checkpoint)
         total_steps, S_hist, batch, episodic_reward = handle_step(total_steps, S_hist, S_prime, action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
         if batch:
             train_batch(batch, total_steps)
         eet = time.time()
         checkpoint_times.append(time.time()-cst)
-        #if not total_steps % 100:
-        #    # CPU 40 seconds to complete 1 action when buffer is 6000
-        #    # CPU .0008 seconds to complete 1 action when buffer is 0
-        #    print('time', eet-est)
-        #    print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
-        #    print('epsilon', epsilon)
     stop = time.time()
     ep_time =  stop - start
     board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
@@ -191,18 +136,10 @@ def run_training_episode(epoch_num, total_steps, last_save):
     board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
     board_logger.scalar_summary('epoch time', epoch_num, ep_time)
     if not epoch_num%5:
-        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
+        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num,  episodic_reward, total_steps-start_steps, total_steps))
         #print('actions',episode_actions)
         print("time for episode", ep_time)
     return episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
-
-def write_info_file(cnt):
-    info_filename = model_base_filepath + "_%010d_info.txt"%cnt
-    info_f = open(info_filename, 'w')
-    for (key,val) in info.items():
-        info_f.write('%s=%s\n'%(key,val))
-    info_f.close()
-
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -217,16 +154,10 @@ if __name__ == '__main__':
         device = 'cpu'
     print("running on %s"%device)
 
-    # takes about 24 steps after "fire" for game to end
-    # 3 is right
-    # 2 is left
-    # 1 is fire
-    # 0 is noop
     info = {
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
         "NAME":'_Breakout_ddqn', # start files with name
-        "N_ENSEMBLE":1, # number of heads to use
         "N_EVALUATIONS":10, # Number of evaluation episodes to run
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
@@ -239,7 +170,6 @@ if __name__ == '__main__':
         "RMS_MOMENTUM":0.0,
         "RMS_EPSILON":0.00001,
         "RMS_CENTERED":True,
-       # "ADAM_LEARNING_RATE": 1e-4,
         "CLIP_REWARD_MAX":1,
         "CLIP_REWARD_MAX":-1,
         "HISTORY_SIZE":4, # how many past frames to use for state input
@@ -257,7 +187,7 @@ if __name__ == '__main__':
         "NETWORK_INPUT_SIZE":(84,84),
         }
 
-    info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
+    info['FAKE_ACTS'] = [info['RANDOM_HEAD']]
     info['args'] = args
     accumulation_rewards = []
     overall_time = 0.
@@ -287,10 +217,9 @@ if __name__ == '__main__':
         print("starting NEW project: %s"%model_base_filedir)
 
     model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
-    write_info_file(total_steps)
+    write_info_file(model_base_filepath, total_steps)
     env = DMAtariEnv(info['GAME'],random_seed=info['SEED'])
     action_space = np.arange(env.env.action_space.n)
-    heads = list(range(info['N_ENSEMBLE']))
     seed_everything(info["SEED"])
     policy_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
     target_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
@@ -333,7 +262,4 @@ if __name__ == '__main__':
         overall_time += etime
         board_logger.scalar_summary("avg reward last 100 episodes", epoch_num, np.mean(all_rewards[-100:]))
 
-#        if (total_steps - last_target_update) >= info['TARGET_UPDATE']:
-#            print("Updating target network at {}".format(epoch_num))
-#            target_net.load_state_dict(policy_net.state_dict())
-#            last_target_update = total_steps
+

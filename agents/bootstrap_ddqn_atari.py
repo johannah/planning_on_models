@@ -18,14 +18,24 @@ from glob import glob
 import config
 from ae_utils import save_checkpoint
 from dqn_model import EnsembleNet
+from dqn_utils import handle_step, seed_everything, write_info_file
 
-def seed_everything(seed=1234):
-    #random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    #torch.backends.cudnn.deterministic = True
+def handle_checkpoint(last_save, cnt, epoch):
+    if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
+        print("checkpoint")
+        last_save = cnt
+        state = {'info':info,
+                 'optimizer':opt.state_dict(),
+                 'cnt':cnt,
+                 'epoch':epoch,
+                 'policy_net_ensemble_state_dict':policy_net_ensemble.state_dict(),
+                 'target_net_ensemble_state_dict':target_net_ensemble.state_dict(),
+                 }
+        filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
+        save_checkpoint(state, filename)
+        return last_save,filename
+    else: return last_save, ''
+
 
 def train_batch(batch, cnt):
     st = time.time()
@@ -77,35 +87,6 @@ def train_batch(batch, cnt):
     board_logger.scalar_summary('Train batch time by step', cnt, et-st)
     return losses
 
-def handle_checkpoint(last_save, cnt, epoch):
-    if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
-        print("checkpoint")
-        last_save = cnt
-        state = {'info':info,
-                 'optimizer':opt.state_dict(),
-                 'cnt':cnt,
-                 'epoch':epoch,
-                 'policy_net_ensemble_state_dict':policy_net_ensemble.state_dict(),
-                 'target_net_ensemble_state_dict':target_net_ensemble.state_dict(),
-                 }
-        filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
-        save_checkpoint(state, filename)
-        return last_save,filename
-    else: return last_save, ''
-
-def handle_step(cnt, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, replay_buffer,checkpoint=''):
-    # mask to determine which head can use this experience
-    exp_mask = random_state.binomial(1, info['BERNOULLI_P'], info['N_ENSEMBLE']).astype(np.uint8)
-    # at this observed state
-    experience =  [S_prime, action, reward, finished, exp_mask, k_used, acts, cnt]
-    batch = replay_buffer.send((checkpoint, experience))
-    # update so "state" representation is past history_size frames
-    S_hist.pop(0)
-    S_hist.append(S_prime)
-    episodic_reward += reward
-    cnt+=1
-    return cnt, S_hist, batch, episodic_reward
-
 def run_training_episode(epoch_num, total_steps, last_save):
     epsilon = 0.0
     start = time.time()
@@ -135,18 +116,7 @@ def run_training_episode(epoch_num, total_steps, last_save):
             vals = policy_net_ensemble(S_hist_pt, None)
             acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
             action = acts[active_head]
-            #embed()
-            #vals = [q.cpu().data.numpy() for q in policy_net(S_hist_pt, None)]
-            #acts = [np.argmax(v, axis=-1)[0] for v in vals]
 
-        if info['USE_EPSILON']:
-            epsilon = epsilon_by_frame(total_steps)
-            if (random_state.rand() < epsilon):
-                action = random_state.choice(action_space)
-            k_used = info['RANDOM_HEAD']
-        #else:
-        #    action = acts[active_head]
-            #k_used = active_head
         S_prime, reward, finished = env.step4(action)
         cst = time.time()
         last_save, checkpoint = handle_checkpoint(last_save, total_steps, epoch_num)
@@ -156,15 +126,9 @@ def run_training_episode(epoch_num, total_steps, last_save):
             train_batch(batch, total_steps)
         eet = time.time()
         checkpoint_times.append(time.time()-cst)
-        #if not total_steps % 100:
-        #    # CPU 40 seconds to complete 1 action when buffer is 6000
-        #    # CPU .0008 seconds to complete 1 action when buffer is 0
-        #    print('time', eet-est)
-        #    print(total_steps, 'head', active_head,'action', action, 'so far reward', episodic_reward)
-        #    print('epsilon', epsilon)
     stop = time.time()
     ep_time =  stop - start
-    board_logger.scalar_summary('Reward by step', total_steps, episodic_reward)
+    board_logger.scalar_summary('Reward per step', total_steps, episodic_reward)
     board_logger.scalar_summary('Reward per episode', epoch_num, episodic_reward)
     board_logger.scalar_summary('head per episode', epoch_num, active_head)
     board_logger.scalar_summary('Avg get batch time', epoch_num, np.mean(checkpoint_times))
@@ -174,14 +138,6 @@ def run_training_episode(epoch_num, total_steps, last_save):
     #print('actions',episode_actions)
     print("time for episode", ep_time)
     return active_head, episodic_reward, total_steps, ep_time, last_save, np.mean(episodic_losses)
-
-def write_info_file(cnt):
-    info_filename = model_base_filepath + "_%010d_info.txt"%cnt
-    info_f = open(info_filename, 'w')
-    for (key,val) in info.items():
-        info_f.write('%s=%s\n'%(key,val))
-    info_f.close()
-
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -195,14 +151,7 @@ if __name__ == '__main__':
     else:
         device = 'cpu'
     print("running on %s"%device)
-
-    # takes about 24 steps after "fire" for game to end
-    # 3 is right
-    # 2 is left
-    # 1 is fire
-    # 0 is noop
     info = {
-        'USE_EPSILON':False,
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
         "NAME":'_Breakout7RMS', # start files with name
@@ -210,6 +159,8 @@ if __name__ == '__main__':
         "BERNOULLI_P": 0.9, # Probability of experience to go to each head
         "TARGET_UPDATE":40000, # TARGET_UPDATE how often to use replica target in frames agent has seen
         "CHECKPOINT_EVERY_STEPS":100000,
+        "ADAM_LEARNING_RATE":.00025,
+        "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": .00025,
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
@@ -223,9 +174,6 @@ if __name__ == '__main__':
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
-        "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
-        "EPSILON_MIN":.01,
-        "EPSILON_DECAY":30000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":18,
@@ -233,9 +181,6 @@ if __name__ == '__main__':
         "NETWORK_INPUT_SIZE":(84,84),
         }
 
-    if not info['USE_EPSILON'] and info['N_ENSEMBLE'] == 1:
-        print('no epsilon and single epsilon')
-        embed()
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
     info['args'] = args
     accumulation_rewards = []
@@ -271,8 +216,6 @@ if __name__ == '__main__':
     action_space = np.arange(env.env.action_space.n)
     heads = list(range(info['N_ENSEMBLE']))
     seed_everything(info["SEED"])
-    #policy_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
-    #target_net = DDQNCoreNet(info['HISTORY_SIZE'], env.env.action_space.n).to(info['DEVICE'])
     policy_net_ensemble = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.env.action_space.n,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
@@ -283,13 +226,13 @@ if __name__ == '__main__':
                                       num_channels=info['HISTORY_SIZE']).to(info['DEVICE'])
 
 
-    #opt = optim.Adam(policy_net_ensemble.parameters(), lr=info['ADAM_LEARNING_RATE'])
-    opt = optim.RMSprop(policy_net_ensemble.parameters(),
-                        lr=info["RMS_LEARNING_RATE"],
-                        momentum=info["RMS_MOMENTUM"],
-                        eps=info["RMS_EPSILON"],
-                        centered=info["RMS_CENTERED"],
-                        alpha=info["RMS_DECAY"])
+    opt = optim.Adam(policy_net_ensemble.parameters(), lr=info['ADAM_LEARNING_RATE'], eps=info['ADAM_EPSILON'])
+    #opt = optim.RMSprop(policy_net_ensemble.parameters(),
+    #                    lr=info["RMS_LEARNING_RATE"],
+    #                    momentum=info["RMS_MOMENTUM"],
+    #                    eps=info["RMS_EPSILON"],
+    #                    centered=info["RMS_CENTERED"],
+    #                    alpha=info["RMS_DECAY"])
 
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???
@@ -315,7 +258,6 @@ if __name__ == '__main__':
     print("Starting training")
     all_rewards = []
 
-    epsilon_by_frame = lambda frame_idx: info['EPSILON_MIN'] + (info['EPSILON_MAX'] - info['EPSILON_MIN']) * math.exp( -1. * frame_idx / info['EPSILON_DECAY'])
     total_head_reward = [0.0 for x in range(info['N_ENSEMBLE'])]
     head_count = [0 for x in range(info['N_ENSEMBLE'])]
     for epoch_num in range(epoch_start, info['N_EPOCHS']):
