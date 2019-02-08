@@ -30,10 +30,11 @@ class Sample(object):
 
 
 class ReplayBuffer(object):
-    def __init__(self, max_size):
+    def __init__(self, max_size, random_seed=293):
         self.max_size = max_size
         self.samples = []
         self.oldest_idx = 0
+        self.random_state = np.random.RandomState(random_seed)
 
     def __len__(self):
         return len(self.samples)
@@ -53,27 +54,30 @@ class ReplayBuffer(object):
         else:
             self.samples.append(new_sample)
 
+    def ready(self, min_size):
+        return min_size < len(self.samples)
+
     def sample(self, batch_size):
         """Simpliest uniform sampling (w/o replacement) to produce a batch.
         """
         assert batch_size < len(self.samples), 'not enough samples to sample from'
-        return random.sample(self.samples, batch_size)
+        return self.random_state.choice(self.samples, batch_size)
 
     def clear(self):
         self.samples = []
         self.oldest_idx = 0
 
     def save_buffer(self, filename):
-        print("starting save of buffer of size %s to: %s"%(len(self.samples), filename))
-        try:
-            fp = open(filename, 'wb')
-            pickle.dump(self.samples, fp)
-            fp.close()
-            print("successfully saved data buffer")
+        print("SKIPPPING !!!!!! starting save of buffer of size %s to: %s"%(len(self.samples), filename))
+        #try:
+        #    fp = open(filename, 'wb')
+        #    pickle.dump(self.samples, fp)
+        #    fp.close()
+        #    print("successfully saved data buffer")
 
-        except Exception as e:
-            print("save buffer fail", e)
-            embed()
+        #except Exception as e:
+        #    print("save buffer fail", e)
+        #    embed()
 
 
 def samples_to_tensors(samples, DEVICE):

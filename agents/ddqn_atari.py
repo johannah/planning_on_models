@@ -48,7 +48,7 @@ def train_batch(cnt):
     st = time.time()
     # min history to learn is 200,000 frames in dqn
     loss = 0.0
-    if cnt > info['MIN_HISTORY_TO_LEARN']:
+    if replay_buffer.ready(info['MIN_HISTORY_TO_LEARN']):
         samples = replay_buffer.sample(info['BATCH_SIZE'])
         states, actions, rewards, next_states, ongoing_flags = samples_to_tensors(samples, info['DEVICE'])
         opt.zero_grad()
@@ -159,7 +159,7 @@ if __name__ == '__main__':
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         #"CHECKPOINT_EVERY_STEPS":100000,
-        "CHECKPOINT_EVERY_STEPS":100000,
+        "CHECKPOINT_EVERY_STEPS":500000,
         "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
@@ -173,7 +173,7 @@ if __name__ == '__main__':
         "PRINT_EVERY":1, # How often to print statistics
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
-        "BUFFER_SIZE":1e6, # Buffer size for experience replay
+        "BUFFER_SIZE":1e5, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.1,
         "EPSILON_DECAY":1000000,
@@ -238,9 +238,10 @@ if __name__ == '__main__':
         policy_net.load_state_dict(model_dict['policy_net_state_dict'])
         opt.load_state_dict(model_dict['optimizer'])
         print("loaded model state_dicts")
-        if args.buffer_loadpath == '':
-            args.buffer_loadpath = glob(args.model_loadpath.replace('.pkl', '*.npz'))[0]
-            print("auto loading buffer from:%s" %args.buffer_loadpath)
+        # TODO cant load buffer yet
+        #if args.buffer_loadpath == '':
+        #    args.buffer_loadpath = glob(args.model_loadpath.replace('.pkl', '*.npz'))[0]
+        #    print("auto loading buffer from:%s" %args.buffer_loadpath)
     replay_buffer = ReplayBuffer(info['BUFFER_SIZE'])
     #exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
     #                               max_size=info['BUFFER_SIZE'],
