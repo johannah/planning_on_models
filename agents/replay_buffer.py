@@ -1,6 +1,7 @@
 import random
 import torch
 import numpy as np
+import pickle
 from IPython import embed
 
 class Sample(object):
@@ -64,7 +65,15 @@ class ReplayBuffer(object):
 
     def save_buffer(self, filename):
         print("starting save of buffer of size %s to: %s"%(len(self.samples), filename))
-        np.savez(filename, self.samples)
+        try:
+            fp = open(filename, 'wb')
+            pickle.dump(self.samples, fp)
+            fp.close()
+            print("successfully saved data buffer")
+
+        except Exception as e:
+            print("save buffer fail", e)
+            embed()
 
 
 def samples_to_tensors(samples, DEVICE):

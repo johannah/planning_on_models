@@ -84,23 +84,11 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
                  'last_mean':last_mean,
                  }
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
-        npy_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.npz"%cnt)
+        npy_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
         save_checkpoint(state, filename)
         replay_buffer.save_buffer(npy_filename)
         return last_save
     else: return last_save
-
-
-#def handle_new_step(random_state, cnt, S_prime, action, reward, finished, k_used, acts, episodic_reward, replay_buffer, checkpoint='', n_ensemble=1, bernoulli_p=1.0):
-#    # mask to determine which head can use this experience
-#    exp_mask = random_state.binomial(1, bernoulli_p, n_ensemble).astype(np.uint8)
-#    # at this observed state
-#    experience =  [S_prime, action, reward, finished, exp_mask, k_used, acts, cnt]
-#    batch = replay_buffer.send((checkpoint, experience))
-#    # update so "state" representation is past history_size frames
-#    episodic_reward += reward
-#    cnt+=1
-#    return cnt, batch, episodic_reward
 
 
 def run_training_episode(epoch_num, total_steps):
@@ -132,12 +120,7 @@ def run_training_episode(epoch_num, total_steps):
         bfa = time.time()
         _S_prime, reward, finished = env.step(action)
         replay_buffer.append(_S, action, reward, _S_prime, finished)
-
-        #board_logger.scalar_summary('time take action per step', total_steps, time.time()-bfa)
-        #cst = time.time()
-        #asst = time.time()
-        #total_steps, batch, episodic_reward = handle_new_step(random_state, total_steps, S_hist[-1], action, reward, finished, info['RANDOM_HEAD'], vals, episodic_reward, exp_replay, checkpoint)
-        #board_logger.scalar_summary('time handle_step per step', total_steps, time.time()-asst)
+        board_logger.scalar_summary('time take_step_and_add per step', total_steps, time.time()-bfa)
         train_batch(total_steps)
         _S = _S_prime
         episodic_reward += reward
@@ -175,6 +158,7 @@ if __name__ == '__main__':
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
+        #"CHECKPOINT_EVERY_STEPS":100000,
         "CHECKPOINT_EVERY_STEPS":100000,
         "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
