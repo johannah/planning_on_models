@@ -15,8 +15,12 @@ class CoreNet(nn.Module):
         self.num_channels = num_channels
         # params from ddqn appendix
         self.conv1 = nn.Conv2d(self.num_channels, 32, 8, 4)
+        # TODO - should we have this init during PRIOR code?
+        torch.nn.init.kaiming_uniform_(self.conv1.weight, nonlinearity='relu')
         self.conv2 = nn.Conv2d(32, 64, 4, 2)
+        torch.nn.init.kaiming_uniform_(self.conv2.weight, nonlinearity='relu')
         self.conv3 = nn.Conv2d(64, 64, 3, 1)
+        torch.nn.init.kaiming_uniform_(self.conv3.weight, nonlinearity='relu')
         self.conv1.bias.data.fill_(0.)
         self.conv2.bias.data.fill_(0.)
         self.conv3.bias.data.fill_(0.)

@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import datetime
 import time
-from experience_handler import experience_replay
+#from experience_handler import experience_replay
 from prepare_atari import DMAtariEnv
 sys.path.append('../models')
 from glob import glob
@@ -19,6 +19,8 @@ import config
 from ae_utils import save_checkpoint
 from dqn_model import EnsembleNet
 from dqn_utils import handle_step, seed_everything, write_info_file
+from replay_buffer import ReplayBuffer, samples_to_tensors
+#from experience_handler import experience_replay
 
 def handle_checkpoint(last_save, cnt, epoch):
     if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:

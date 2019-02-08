@@ -67,7 +67,7 @@ def train_batch(cnt):
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
             print('updating target network')
             target_net.load_state_dict(policy_net.state_dict())
-    board_logger.scalar_summary('batch train time per cnt', cnt, st-time.time())
+    board_logger.scalar_summary('batch train time per cnt', cnt, time.time()-st)
     board_logger.scalar_summary('loss per cnt', cnt, loss)
     return loss
 
