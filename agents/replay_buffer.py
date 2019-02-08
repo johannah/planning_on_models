@@ -43,7 +43,7 @@ class ReplayBuffer(object):
         """Simplest FIFO eviction scheme."""
         to_evict = self.oldest_idx
         self.oldest_idx = (self.oldest_idx + 1) % self.max_size
-        return to_evict
+        return int(to_evict)
 
     def append(self, state, action, reward, next_state, end):
         assert len(self.samples) <= self.max_size
