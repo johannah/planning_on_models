@@ -126,7 +126,7 @@ def run_training_episode(epoch_num, total_steps):
     board_logger.scalar_summary('time per episode', epoch_num, ep_time)
     board_logger.scalar_summary('steps per episode', epoch_num, total_steps-start_steps)
     if not epoch_num%1:
-        print("EPISODE:%s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, episodic_reward, total_steps-start_steps, total_steps))
+        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
         print("time for episode", ep_time)
     return episodic_reward, total_steps, ep_time
 
