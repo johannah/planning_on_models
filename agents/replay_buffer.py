@@ -1,4 +1,3 @@
-import random
 import torch
 import numpy as np
 import pickle
@@ -105,7 +104,6 @@ class ReplayBuffer(object):
         assert(min(self.state_indexes) >= self.history_size)
         assert(max(self.state_indexes) < len(self.states))
         state_indexes = [self.state_indexes[i] for i in batch_indexes]
-        # todo - should use my from_storage_state function
         _all_states = self.from_storage_function([self.states[i-(self.history_size):i+1] for i in state_indexes])
         _states = _all_states[:,:self.history_size]
         _next_states = _all_states[:,1:]
@@ -208,10 +206,6 @@ def test_buffer():
     assert s2[-1][-1] == 37
     assert s2[-1][0] == 33
 
-
-# TODO load from saved
-# plotting?
-# save
 
 if __name__ == '__main__':
     test_buffer()
