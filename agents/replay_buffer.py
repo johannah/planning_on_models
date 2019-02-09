@@ -28,19 +28,20 @@ class ReplayBuffer(object):
         assert(min_sampling_size < max_buffer_size), 'invalid configurationn - min sampling size should be smaller than the buffer'
         self.min_sampling_size = min_sampling_size
         self.history_size = history_size
+        self.pop_offset = 0
         self.num_masks = num_masks
-        self.states = []
+        self.episodes = []
         self.rewards = []
         self.actions = []
         self.ongoings = []
-        self.episode_cnts = []
-        self.state_indexes = []
+        self.episodes = []
+        self.episode_indexes = []
+        self.episode_steps = []
         # only use masks if needed
         self.device = device
         self.masks = []
-        self.episode_num = 0
+        self.episode_num = -1
         self.need_new_init = True
-        self.episode_boundaries = []
         self.bernoulli_probability = bernoulli_probability
         self.random_state = np.random.RandomState(random_seed)
 
@@ -48,19 +49,19 @@ class ReplayBuffer(object):
         # this initial state should be the entire history_size state
         # indexing is done by the next_state only, so this init_state is never
         # referenced in indexing
-        for state in full_state:
-            self.states.append(self.to_storage_function(state))
-        self.need_new_init = False
         self.episode_num+=1
-        self.episode_boundaries.append(len(self.states))
+        self.episodes.append([])
+        for state in full_state:
+            self.episodes[self.episode_num].append(self.to_storage_function(state))
+        self.need_new_init = False
 
     def add_experience(self, next_state, action, reward, finished):
-        assert len(self.states) >= self.history_size, 'did not add initial states before adding experience'
         assert self.need_new_init == False
         # this state can be indexed - must be before state - index is to
         # last needed index for "state"
-        self.state_indexes.append(len(self.states))
-        self.states.append(self.to_storage_function(next_state))
+        self.episode_steps.append(len(self.episodes[self.episode_num]))
+        self.episodes[self.episode_num].append(self.to_storage_function(next_state))
+        self.episode_indexes.append(self.episode_num)
         self.rewards.append(reward)
         self.actions.append(action)
         self.ongoings.append(int(not finished))
@@ -72,39 +73,43 @@ class ReplayBuffer(object):
 
     def ready(self, batch_size):
         compare = max(batch_size, self.min_sampling_size)
-        return compare < len(self.state_indexes)
+        return compare < len(self.self.rewards)
 
     def evict(self):
         """
          we should evict frames when the replay buffer is too big, however,
          we have to do this carefully to make sure that we dont hit edge cases
         """
-        if len(self.state_indexes)>self.max_buffer_size:
+        if len(self.rewards)>self.max_buffer_size:
             # history_size+1 states are required for each index in the buffer
-            oldest_index = self.state_indexes.pop(0)
             # remove the oldest state required for this index only
             # this will be index-self.history_size
             # if oldest_index == 4, then states will pop the true frame 0
-            self.states.pop(0)
             self.rewards.pop(0)
             self.actions.pop(0)
-            self.ongoings.pop(0)
+            ongoing = self.ongoings.pop(0)
+            episode = self.episode_indexes.pop(0)
+            episode_step = self.episode_steps.pop(0)
             if self.num_masks > 0:
                 self.masks.pop(0)
-            self.state_indexes = [x-1 for x in self.state_indexes]
+
+            self.episodes[episode].pop(0)
+            if len(self.episodes[episode])==self.history_size:
+                # finished
+                self.episodes[episode] = 0
+
 
     def sample(self, batch_indexes, pytorchify):
-        """ the index is counted at last needed index of  "state"
+        """ TODO check this
+         the index is counted at last needed index of  "state"
          if states == [0,1,2,3,4,5,6]
          then avilable indexes are [3,4,5]
          if index=5, state will be grabbed from states[2,3,4,5]
          next_state will be grabbed from states[3,4,5,6], assuming history_size=4
         """
-
-        assert(min(self.state_indexes) >= self.history_size)
-        assert(max(self.state_indexes) < len(self.states))
-        state_indexes = [self.state_indexes[i] for i in batch_indexes]
-        _all_states = self.from_storage_function([self.states[i-(self.history_size):i+1] for i in state_indexes])
+        eps = [self.episode_indexes[i] for i in batch_indexes]
+        epi = [self.episode_steps[i] for i in batch_indexes]
+        _all_states = self.from_storage_function([self.episodes[ep][i-self.history_size:i+1] for (ep,i)  in zip(eps, epi)])
         _states = _all_states[:,:self.history_size]
         _next_states = _all_states[:,1:]
         _rewards = np.array([self.rewards[i] for i in batch_indexes])
@@ -133,8 +138,8 @@ class ReplayBuffer(object):
         return self.sample(batch_indexes, pytorchify)
 
     def sample_ordered(self, start_index, batch_size=32, pytorchify=True):
-        assert self.ready(batch_size), 'not enough samples in replay buffer'
-        assert(start_index < len(self.rewards)-1), 'start index too high'
+        #assert self.ready(batch_size), 'not enough samples in replay buffer'
+        #assert(start_index < len(self.rewards)-1), 'start index too high'
         batch_indexes = np.arange(start_index, min(start_index+batch_size, len(self.rewards)), dtype=np.int)
         return self.sample(batch_indexes, pytorchify)
 
@@ -149,17 +154,13 @@ class ReplayBuffer(object):
         pickle.dump(self.__dict__, f, 2)
         f.close()
 
-
-
 def test_buffer():
     replay_buffer = ReplayBuffer(max_buffer_size=10, history_size=4, min_sampling_size=2,
                                   num_masks=0, bernoulli_probability=1.0, device='cpu', random_seed=293,
                                  to_storage_function=to_simple_storage_state,
                                  from_storage_function=from_simple_storage_state)
 
-    print('indexes', replay_buffer.state_indexes)
-    print('states',replay_buffer.states)
-    print('avail states', [replay_buffer.states[i] for i in replay_buffer.state_indexes])
+    print('episodes', replay_buffer.episodes)
     # episode 1
     replay_buffer.add_init_state([0,1,2,3])
     replay_buffer.add_experience(next_state=4, action=1, reward=1, finished=False)
@@ -168,9 +169,7 @@ def test_buffer():
     replay_buffer.add_experience(next_state=7, action=1, reward=1, finished=False)
     replay_buffer.add_experience(next_state=8, action=1, reward=1, finished=True)
     # episode 2
-    print('indexes', replay_buffer.state_indexes)
-    print('states',replay_buffer.states)
-    print('avail states', [replay_buffer.states[i] for i in replay_buffer.state_indexes])
+    print('episodes', replay_buffer.episodes)
     print('-----------')
     replay_buffer.add_init_state([10,11,12,13])
     replay_buffer.add_experience(next_state=14, action=2, reward=1, finished=False)
@@ -178,17 +177,13 @@ def test_buffer():
     replay_buffer.add_experience(next_state=16, action=2, reward=0, finished=False)
     replay_buffer.add_experience(next_state=17, action=2, reward=1, finished=False)
     replay_buffer.add_experience(next_state=18, action=2, reward=1, finished=False)
-    print('indexes', replay_buffer.state_indexes)
-    print('states',replay_buffer.states)
-    print('avail states', [replay_buffer.states[i] for i in replay_buffer.state_indexes])
+    print('episodes', replay_buffer.episodes)
     print('-----------')
-    s,a,r,ns,f,bi = replay_buffer.sample_ordered(0,3)
+    s,a,r,ns,f,bi = replay_buffer.sample_ordered(0,3,False)
     # episode 3
     replay_buffer.add_init_state([20,21,22,23])
     replay_buffer.add_experience(next_state=24, action=3, reward=0, finished=True)
-    print('indexes', replay_buffer.state_indexes)
-    print('states',replay_buffer.states)
-    print('avail states', [replay_buffer.states[i] for i in replay_buffer.state_indexes])
+    print('episodes', replay_buffer.episodes)
     print('-----------')
     # episode 4
     replay_buffer.add_init_state([30,31,32,33])
@@ -196,9 +191,7 @@ def test_buffer():
     replay_buffer.add_experience(next_state=35, action=4, reward=0, finished=False)
     replay_buffer.add_experience(next_state=37, action=4, reward=0, finished=False)
     replay_buffer.add_experience(next_state=38, action=4, reward=0, finished=True)
-    print('indexes', replay_buffer.state_indexes)
-    print('states',replay_buffer.states)
-    print('avail states', [replay_buffer.states[i] for i in replay_buffer.state_indexes])
+    print('episodes', replay_buffer.episodes)
     print('-----------')
     s2,a2,r2,ns2,f2,bi2 = replay_buffer.sample_ordered(8,3,False)
     assert ns2[-1][-1] == 38
