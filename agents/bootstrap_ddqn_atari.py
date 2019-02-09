@@ -134,8 +134,7 @@ def run_training_episode(epoch_num, total_steps):
     episode_loss.append(np.mean(losses))
     episode_reward.append(episodic_reward)
     episode_times.append(ep_time)
-    avg_rewards.append(np.mean(episode_reward[:-100]))
-
+    avg_rewards.append(np.mean(episode_reward[-100:]))
 
     #board_logger.scalar_summary('%s head reward per episode'%active_head, epoch_num, episodic_reward)
     #board_logger.scalar_summary('head per episode', epoch_num, active_head)
@@ -147,13 +146,14 @@ def run_training_episode(epoch_num, total_steps):
         print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
         print("time for episode", ep_time)
         # TODO plot title
-        plot_dict_losses({'episode steps':{'index':np.arange(epoch_num+1), 'val':episode_step}},    name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
-        plot_dict_losses({'episode head':{'index':np.arange(epoch_num+1), 'val':episode_head}},     name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
-        plot_dict_losses({'steps loss':{'index':steps, 'val':episode_loss}},               name=os.path.join(model_base_filedir, 'steps_loss.png'))
-        plot_dict_losses({'steps reward':{'index':steps, 'val':episode_reward}},           name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode steps':{'index':np.arange(epoch_num+1), 'val':episode_step}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
+        plot_dict_losses({'episode head':{'index':np.arange(epoch_num+1), 'val':episode_head}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
+        plot_dict_losses({'steps loss':{'index':steps, 'val':episode_loss}}, name=os.path.join(model_base_filedir, 'steps_loss.png'))
+        plot_dict_losses({'steps reward':{'index':steps, 'val':episode_reward}},  name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
         plot_dict_losses({'episode reward':{'index':np.arange(epoch_num+1), 'val':episode_reward}}, name=os.path.join(model_base_filedir, 'episode_reward.png'), rolling_length=0)
-        plot_dict_losses({'episode times':{'index':np.arange(epoch_num+1), 'val':episode_times}},   name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
-        plot_dict_losses({'steps avg reward':{'index':steps, 'val':avg_rewards}},          name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode times':{'index':np.arange(epoch_num+1), 'val':episode_times}}, name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
+        plot_dict_losses({'steps avg reward':{'index':steps, 'val':avg_rewards}}, name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
+        print('avg reward', avg_rewards[-1])
     return episodic_reward, total_steps, ep_time
 
 if __name__ == '__main__':
@@ -177,7 +177,7 @@ if __name__ == '__main__':
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":10000, # in environment frames
-        "CHECKPOINT_EVERY_STEPS":200000,
+        "CHECKPOINT_EVERY_STEPS":500000,
         "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
