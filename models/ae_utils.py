@@ -29,10 +29,6 @@ def get_cuts(length,window_size):
         return zip([0], [length])
 
 
-
-
-
-
 def concat_elu(x):
     """ like concatenated ReLU (http://arxiv.org/abs/1603.05201), but then with ELU """
     # Pytorch ordering

@@ -4,7 +4,7 @@ import numpy as np
 from IPython import embed
 
 import math
-from logger import TensorBoardLogger
+#from logger import TensorBoardLogger
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,8 +17,9 @@ from replay_buffer import ReplayBuffer
 from dqn_model import EnsembleNet
 from dqn_utils import handle_step, seed_everything, write_info_file
 from env import Environment
-sys.path.append('../models')
 from glob import glob
+sys.path.append('../models')
+from lstm_utils import plot_dict_losses
 import config
 from ae_utils import save_checkpoint
 from dqn_utils import seed_everything, write_info_file
@@ -58,9 +59,9 @@ def train_batch(cnt):
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
             print('updating target network')
             target_net.load_state_dict(policy_net.state_dict())
-    board_logger.scalar_summary('batch train time per cnt', cnt, time.time()-st)
-    board_logger.scalar_summary('loss per cnt', cnt, np.mean(losses))
-    return losses
+    #board_logger.scalar_summary('batch train time per cnt', cnt, time.time()-st)
+    #board_logger.scalar_summary('loss per cnt', cnt, np.mean(losses))
+    return np.mean(losses)
 
 def handle_checkpoint(last_save, cnt, epoch, last_mean):
     if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
@@ -73,6 +74,13 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
                  'policy_net_state_dict':policy_net.state_dict(),
                  'target_net_state_dict':target_net.state_dict(),
                  'last_mean':last_mean,
+                 'steps':steps,
+                 'episode_step':episode_step,
+                 'episode_head':episode_head,
+                 'episode_loss':episode_loss,
+                 'episode_reward':episode_reward,
+                 'episode_times':episode_times,
+                 'avg_rewards':avg_rewards,
                  }
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
         save_checkpoint(state, filename)
@@ -84,7 +92,6 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
 
 def run_training_episode(epoch_num, total_steps):
     finished = False
-    episode_steps = 0
     start = time.time()
     episodic_losses = []
     start_steps = total_steps
@@ -95,6 +102,7 @@ def run_training_episode(epoch_num, total_steps):
     policy_net.train()
     random_state.shuffle(heads)
     active_head = heads[0]
+    losses = []
     while not finished:
         est = time.time()
         with torch.no_grad():
@@ -107,27 +115,45 @@ def run_training_episode(epoch_num, total_steps):
             #action = acts[active_head]
             #vals = policy_net(_Spt)
             #action = np.argmax(vals.cpu().data.numpy(),-1)[0]
-        board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
+        #board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
         bfa = time.time()
         _S_prime, reward, finished = env.step(action)
         rbuffer.add_experience(next_state=_S_prime[-1], action=action, reward=reward, finished=finished)
-        board_logger.scalar_summary('time take_step_and_add per step', total_steps, time.time()-bfa)
-        train_batch(total_steps)
+        #board_logger.scalar_summary('time take_step_and_add per step', total_steps, time.time()-bfa)
+        losses.append(train_batch(total_steps))
         _S = _S_prime
         episodic_reward += reward
         total_steps+=1
         eet = time.time()
     stop = time.time()
     ep_time =  stop - start
-    board_logger.scalar_summary('%s head reward per episode'%active_head, epoch_num, episodic_reward)
-    board_logger.scalar_summary('head per episode', epoch_num, active_head)
-    board_logger.scalar_summary('reward per episode', epoch_num, episodic_reward)
-    board_logger.scalar_summary('reward per step', total_steps, episodic_reward)
-    board_logger.scalar_summary('time per episode', epoch_num, ep_time)
-    board_logger.scalar_summary('steps per episode', epoch_num, total_steps-start_steps)
-    if not epoch_num%1:
+
+    steps.append(total_steps)
+    episode_step.append(total_steps-start_steps)
+    episode_head.append(active_head)
+    episode_loss.append(np.mean(losses))
+    episode_reward.append(episodic_reward)
+    episode_times.append(ep_time)
+    avg_rewards.append(np.mean(episode_reward[:-100]))
+
+
+    #board_logger.scalar_summary('%s head reward per episode'%active_head, epoch_num, episodic_reward)
+    #board_logger.scalar_summary('head per episode', epoch_num, active_head)
+    #board_logger.scalar_summary('reward per episode', epoch_num, episodic_reward)
+    #board_logger.scalar_summary('reward per step', total_steps, episodic_reward)
+    #board_logger.scalar_summary('time per episode', epoch_num, ep_time)
+    #board_logger.scalar_summary('steps per episode', epoch_num, total_steps-start_steps)
+    if not epoch_num%10:
         print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
         print("time for episode", ep_time)
+        # TODO plot title
+        plot_dict_losses({'episode steps':{'index':np.arange(epoch_num+1), 'val':episode_step}},    name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
+        plot_dict_losses({'episode head':{'index':np.arange(epoch_num+1), 'val':episode_head}},     name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
+        plot_dict_losses({'steps loss':{'index':steps, 'val':episode_loss}},               name=os.path.join(model_base_filedir, 'steps_loss.png'))
+        plot_dict_losses({'steps reward':{'index':steps, 'val':episode_reward}},           name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode reward':{'index':np.arange(epoch_num+1), 'val':episode_reward}}, name=os.path.join(model_base_filedir, 'episode_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode times':{'index':np.arange(epoch_num+1), 'val':episode_times}},   name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
+        plot_dict_losses({'steps avg reward':{'index':steps, 'val':avg_rewards}},          name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
     return episodic_reward, total_steps, ep_time
 
 if __name__ == '__main__':
@@ -195,11 +221,27 @@ if __name__ == '__main__':
         last_save = model_dict['cnt']
         info['loaded_from'] = args.model_loadpath
         epoch_start = model_dict['epoch']
+        steps = model_dict['steps']
+        episode_step = model_dict['episode_step']
+        episode_head = model_dict['episode_head']
+        episode_loss = model_dict['episode_loss']
+        episode_reward = model_dict['episode_reward']
+        episode_times = model_dict['episode_times']
+        avg_rewards = model_dict['avg_rewards']
     else:
         total_steps = 0
         last_save = 0
         epoch_start = 0
         run_num = 0
+        steps = []
+        episode_step = []
+        episode_head = []
+        episode_loss = []
+        episode_reward = []
+        episode_times = []
+        avg_rewards = []
+
+
         model_base_filedir = os.path.join(config.model_savedir, info['NAME'] + '%02d'%run_num)
         while os.path.exists(model_base_filedir):
             run_num +=1
@@ -225,6 +267,7 @@ if __name__ == '__main__':
 
 
     opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'], eps=info['ADAM_EPSILON'])
+
     #opt = optim.RMSprop(policy_net.parameters(),
     #                    lr=info["RMS_LEARNING_RATE"],
     #                    momentum=info["RMS_MOMENTUM"],
@@ -253,7 +296,7 @@ if __name__ == '__main__':
 
 
     random_state = np.random.RandomState(info["SEED"])
-    board_logger = TensorBoardLogger(model_base_filedir)
+    #board_logger = TensorBoardLogger(model_base_filedir)
     last_target_update = 0
     all_rewards = []
 
@@ -263,7 +306,7 @@ if __name__ == '__main__':
         all_rewards.append(ep_reward)
         overall_time += etime
         last_mean = np.mean(all_rewards[-100:])
-        board_logger.scalar_summary("avg reward last 100 episodes", epoch_num, last_mean)
+        #board_logger.scalar_summary("avg reward last 100 episodes", epoch_num, last_mean)
         last_save = handle_checkpoint(last_save, total_steps, epoch_num, last_mean)
 
 
