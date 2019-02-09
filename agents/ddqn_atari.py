@@ -159,8 +159,7 @@ if __name__ == '__main__':
         "N_EVALUATIONS":10, # Number of evaluation episodes to run
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        #"MIN_HISTORY_TO_LEARN":50000, # in environment frames
-        "MIN_HISTORY_TO_LEARN":50, # in environment frames
+        "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         #"CHECKPOINT_EVERY_STEPS":100,
         "CHECKPOINT_EVERY_STEPS":200000,
         "ADAM_LEARNING_RATE":0.00025,
