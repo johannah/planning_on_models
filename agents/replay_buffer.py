@@ -54,7 +54,7 @@ class ReplayBuffer(object):
         # indexing is done by the next_state only, so this init_state is never
         # referenced in indexing
         self.episode_num+=1
-        print("INIT episode", self.episode_num)
+        #print("INIT episode", self.episode_num)
         self.episode_step_cnt = 0
         self.episodes.append([])
         for state in full_state:
@@ -100,7 +100,7 @@ class ReplayBuffer(object):
             episode_step = self.episode_steps.pop(0)
             if evicting_episode != self.evicting_episode:
                 # started evicting a new episode - keep track
-                print("NEW EVICT EP", evicting_episode)
+                #print("NEW EVICT EP", evicting_episode)
                 self.evicting_episode = evicting_episode
                 self.episode_pop_count = -1
             else:
@@ -109,7 +109,7 @@ class ReplayBuffer(object):
             self.episodes[evicting_episode].pop(0)
             if len(self.episodes[evicting_episode])==self.history_size:
                 # finished
-                print('end of evicting episode', evicting_episode)
+                #print('end of evicting episode', evicting_episode)
                 self.episodes[evicting_episode] = 0
 
     def sample(self, batch_indexes, pytorchify):
