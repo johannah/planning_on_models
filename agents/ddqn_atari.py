@@ -2,6 +2,7 @@ import os
 import sys
 import numpy as np
 from IPython import embed
+import pickle
 
 import math
 from logger import TensorBoardLogger
@@ -11,7 +12,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import datetime
 import time
-from replay_buffer import ReplayBuffer, samples_to_tensors
+from replay_buffer import ReplayBuffer
 #from experience_handler import experience_replay
 #from prepare_atari import DMAtariEnv
 from env import Environment
@@ -48,9 +49,9 @@ def train_batch(cnt):
     st = time.time()
     # min history to learn is 200,000 frames in dqn
     loss = 0.0
-    if replay_buffer.ready(info['MIN_HISTORY_TO_LEARN']):
-        samples = replay_buffer.sample(info['BATCH_SIZE'])
-        states, actions, rewards, next_states, ongoing_flags = samples_to_tensors(samples, info['DEVICE'])
+    if rbuffer.ready(info['BATCH_SIZE']):
+        samples = rbuffer.sample_random(info['BATCH_SIZE'], pytorchify=True)
+        states, actions, rewards, next_states, ongoing_flags, _ = samples
         opt.zero_grad()
         q_values = policy_net(states)
         next_q_values = policy_net(next_states)
@@ -84,9 +85,9 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
                  'last_mean':last_mean,
                  }
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
-        npy_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
+        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
         save_checkpoint(state, filename)
-        replay_buffer.save_buffer(npy_filename)
+        rbuffer.save(buff_filename)
         return last_save
     else: return last_save
 
@@ -99,6 +100,7 @@ def run_training_episode(epoch_num, total_steps):
     start_steps = total_steps
     episodic_reward = 0.0
     _S = env.reset()
+    rbuffer.add_init_state(_S)
     episode_actions = []
     policy_net.train()
 
@@ -119,7 +121,7 @@ def run_training_episode(epoch_num, total_steps):
         board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
         bfa = time.time()
         _S_prime, reward, finished = env.step(action)
-        replay_buffer.append(_S, action, reward, _S_prime, finished)
+        rbuffer.add_experience(next_state=_S_prime[-1], action=action, reward=reward, finished=finished)
         board_logger.scalar_summary('time take_step_and_add per step', total_steps, time.time()-bfa)
         train_batch(total_steps)
         _S = _S_prime
@@ -153,13 +155,14 @@ if __name__ == '__main__':
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'_ROMSBreakout_ddqn', # start files with name
+        "NAME":'_ROMSBreakout_ddqnMyER', # start files with name
         "N_EVALUATIONS":10, # Number of evaluation episodes to run
         "BERNOULLI_P": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        "MIN_HISTORY_TO_LEARN":50000, # in environment frames
-        #"CHECKPOINT_EVERY_STEPS":100000,
-        "CHECKPOINT_EVERY_STEPS":500000,
+        #"MIN_HISTORY_TO_LEARN":50000, # in environment frames
+        "MIN_HISTORY_TO_LEARN":50, # in environment frames
+        #"CHECKPOINT_EVERY_STEPS":100,
+        "CHECKPOINT_EVERY_STEPS":200000,
         "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
@@ -187,7 +190,6 @@ if __name__ == '__main__':
         }
 
     info['FAKE_ACTS'] = [info['FAKE_ACTION']]
-    info['args'] = args
     accumulation_rewards = []
     overall_time = 0.
     info['load_time'] = datetime.date.today().ctime()
@@ -217,7 +219,6 @@ if __name__ == '__main__':
         print("starting NEW project: %s"%model_base_filedir)
 
     model_base_filepath = os.path.join(model_base_filedir, info['NAME'])
-    write_info_file(info, model_base_filepath, total_steps)
     env = Environment(info['GAME'])
     action_space = np.arange(env.num_actions)
     seed_everything(info["SEED"])
@@ -230,6 +231,11 @@ if __name__ == '__main__':
     #                    eps=info["RMS_EPSILON"],
     #                    centered=info["RMS_CENTERED"],
     #                    alpha=info["RMS_DECAY"])
+    rbuffer = ReplayBuffer(max_buffer_size=info['BUFFER_SIZE'],
+                                 history_size=info['HISTORY_SIZE'],
+                                 min_sampling_size=info['MIN_HISTORY_TO_LEARN'],
+                                 num_masks=0, device=info['DEVICE'])
+
 
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???
@@ -239,10 +245,12 @@ if __name__ == '__main__':
         opt.load_state_dict(model_dict['optimizer'])
         print("loaded model state_dicts")
         # TODO cant load buffer yet
-        #if args.buffer_loadpath == '':
-        #    args.buffer_loadpath = glob(args.model_loadpath.replace('.pkl', '*.npz'))[0]
-        #    print("auto loading buffer from:%s" %args.buffer_loadpath)
-    replay_buffer = ReplayBuffer(info['BUFFER_SIZE'])
+        if args.buffer_loadpath == '':
+            args.buffer_loadpath = args.model_loadpath.replace('.pkl', '_train_buffer.pkl')
+            print("auto loading buffer from:%s" %args.buffer_loadpath)
+            rbuffer.load(args.buffer_loadpath)
+    info['args'] = args
+    write_info_file(info, model_base_filepath, total_steps)
     #exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
     #                               max_size=info['BUFFER_SIZE'],
     #                               history_size=info['HISTORY_SIZE'],
@@ -250,7 +258,6 @@ if __name__ == '__main__':
     #                               buffer_file=args.buffer_loadpath)
 
     random_state = np.random.RandomState(info["SEED"])
-    #next(exp_replay) # Start experience-replay coroutines
 
     board_logger = TensorBoardLogger(model_base_filedir)
     last_target_update = 0

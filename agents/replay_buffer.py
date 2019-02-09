@@ -73,7 +73,6 @@ class ReplayBuffer(object):
 
     def ready(self, batch_size):
         compare = max(batch_size, self.min_sampling_size)
-        print(compare, len(self.state_indexes))
         return compare < len(self.state_indexes)
 
     def evict(self):
@@ -84,7 +83,6 @@ class ReplayBuffer(object):
         if len(self.state_indexes)>self.max_buffer_size:
             # history_size+1 states are required for each index in the buffer
             oldest_index = self.state_indexes.pop(0)
-            print("removing index", oldest_index)
             # remove the oldest state required for this index only
             # this will be index-self.history_size
             # if oldest_index == 4, then states will pop the true frame 0
@@ -95,8 +93,6 @@ class ReplayBuffer(object):
             if self.num_masks > 0:
                 self.masks.pop(0)
             self.state_indexes = [x-1 for x in self.state_indexes]
-            print(self.state_indexes)
-            print('after evict')
 
     def sample(self, batch_indexes, pytorchify):
         """ the index is counted at last needed index of  "state"
@@ -142,6 +138,17 @@ class ReplayBuffer(object):
         assert(start_index < len(self.rewards)-1), 'start index too high'
         batch_indexes = np.arange(start_index, min(start_index+batch_size, len(self.rewards)), dtype=np.int)
         return self.sample(batch_indexes, pytorchify)
+
+    def load(self, filename):
+        f = open(filename, 'rb')
+        tmp_dict = pickle.load(f)
+        f.close()
+        self.__dict__.update(tmp_dict)
+
+    def save(self, filename):
+        f = open(filename, 'wb')
+        pickle.dump(self.__dict__, f, 2)
+        f.close()
 
 
 
