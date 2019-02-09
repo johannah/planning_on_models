@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import datetime
 import time
-from replay_buffer import ReplayBuffer, samples_to_tensors
+from replay_buffer import ReplayBuffer
 #from experience_handler import experience_replay
 #from prepare_atari import DMAtariEnv
 from dqn_model import EnsembleNet
@@ -27,11 +27,10 @@ def train_batch(cnt):
     st = time.time()
     # min history to learn is 200,000 frames in dqn
     losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
-    if replay_buffer.ready(info['MIN_HISTORY_TO_LEARN']):
-        samples = replay_buffer.sample(info['BATCH_SIZE'])
-        # TODO  - not using mask finish this
-        #states, actions, rewards, next_states, ongoing_flags, masks = samples_to_tensors_with_mask(samples, info['DEVICE'])
-        states, actions, rewards, next_states, ongoing_flags = samples_to_tensors(samples, info['DEVICE'])
+    if rbuffer.ready(info['BATCH_SIZE']):
+        samples = rbuffer.sample_random(info['BATCH_SIZE'], pytorchify=True)
+        states, actions, rewards, next_states, ongoing_flags, masks, _ = samples
+
         opt.zero_grad()
         q_values = policy_net(states, None)
         next_q_values = policy_net(next_states, None)
@@ -76,9 +75,9 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
                  'last_mean':last_mean,
                  }
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
-        npy_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
         save_checkpoint(state, filename)
-        replay_buffer.save_buffer(npy_filename)
+        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
+        rbuffer.save(buff_filename)
         return last_save
     else: return last_save
 
@@ -91,6 +90,7 @@ def run_training_episode(epoch_num, total_steps):
     start_steps = total_steps
     episodic_reward = 0.0
     _S = env.reset()
+    rbuffer.add_init_state(_S)
     episode_actions = []
     policy_net.train()
     random_state.shuffle(heads)
@@ -110,7 +110,7 @@ def run_training_episode(epoch_num, total_steps):
         board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
         bfa = time.time()
         _S_prime, reward, finished = env.step(action)
-        replay_buffer.append(_S, action, reward, _S_prime, finished)
+        rbuffer.add_experience(next_state=_S_prime[-1], action=action, reward=reward, finished=finished)
         board_logger.scalar_summary('time take_step_and_add per step', total_steps, time.time()-bfa)
         train_batch(total_steps)
         _S = _S_prime
@@ -146,14 +146,12 @@ if __name__ == '__main__':
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'_ROMSBreakout_BT9', # start files with name
+        "NAME":'_ROMSBreakout_BT9_MyRP', # start files with name
         "N_ENSEMBLE":9,
-        "N_EVALUATIONS":10, # Number of evaluation episodes to run
-        "BERNOULLI_P": 1.0, # Probability of experience to go to each head
+        "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":10000, # in environment frames
-        #"CHECKPOINT_EVERY_STEPS":100000,
-        "CHECKPOINT_EVERY_STEPS":100000,
+        "CHECKPOINT_EVERY_STEPS":200000,
         "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
@@ -242,9 +240,18 @@ if __name__ == '__main__':
         opt.load_state_dict(model_dict['optimizer'])
         print("loaded model state_dicts")
         if args.buffer_loadpath == '':
-            args.buffer_loadpath = glob(args.model_loadpath.replace('.pkl', '*.npz'))[0]
+            args.buffer_loadpath = args.model_loadpath.replace('.pkl', '_train_buffer.pkl')
             print("auto loading buffer from:%s" %args.buffer_loadpath)
-    replay_buffer = ReplayBuffer(info['BUFFER_SIZE'])
+            rbuffer.load(args.buffer_loadpath)
+
+    rbuffer = ReplayBuffer(max_buffer_size=info['BUFFER_SIZE'],
+                           history_size=info['HISTORY_SIZE'],
+                           min_sampling_size=info['MIN_HISTORY_TO_LEARN'],
+                           num_masks=info['N_ENSEMBLE'],
+                           bernoulli_probability=info['BERNOULLI_PROBABILITY'],
+                           device=info['DEVICE'])
+
+
     random_state = np.random.RandomState(info["SEED"])
     board_logger = TensorBoardLogger(model_base_filedir)
     last_target_update = 0

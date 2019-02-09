@@ -85,8 +85,8 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
                  'last_mean':last_mean,
                  }
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
-        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
         save_checkpoint(state, filename)
+        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
         rbuffer.save(buff_filename)
         return last_save
     else: return last_save
@@ -251,12 +251,6 @@ if __name__ == '__main__':
             rbuffer.load(args.buffer_loadpath)
     info['args'] = args
     write_info_file(info, model_base_filepath, total_steps)
-    #exp_replay = experience_replay(batch_size=info['BATCH_SIZE'],
-    #                               max_size=info['BUFFER_SIZE'],
-    #                               history_size=info['HISTORY_SIZE'],
-    #                               name='train_buffer', random_seed=info['SEED'],
-    #                               buffer_file=args.buffer_loadpath)
-
     random_state = np.random.RandomState(info["SEED"])
 
     board_logger = TensorBoardLogger(model_base_filedir)
