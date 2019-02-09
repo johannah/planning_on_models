@@ -38,6 +38,7 @@ def train_batch(cnt):
         next_q_state_values = target_net(next_states, None)
         cnt_losses = []
         for k in range(info['N_ENSEMBLE']):
+            #TODO finish masking
             total_used = 1.0
             #total_used = torch.sum(mask_pt[:, k])
             if total_used > 0.0:
@@ -178,7 +179,8 @@ if __name__ == '__main__':
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":10000, # in environment frames
-        "CHECKPOINT_EVERY_STEPS":500000,
+        "BUFFER_SIZE":1e6, # Buffer size for experience replay
+        "CHECKPOINT_EVERY_STEPS":200000,
         "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
@@ -192,7 +194,6 @@ if __name__ == '__main__':
         "PRINT_EVERY":1, # How often to print statistics
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
-        "BUFFER_SIZE":1e5, # Buffer size for experience replay
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.1,
         "EPSILON_DECAY":1000000,

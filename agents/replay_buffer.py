@@ -12,6 +12,7 @@ def from_simple_storage_state(state):
 def to_uint8_storage_state(state):
     return (np.array(state)*255).astype(np.uint8)
 
+
 def from_uint8_storage_state(state):
     return (np.array(state)/255.).astype(np.float32)
 
@@ -41,7 +42,10 @@ class ReplayBuffer(object):
         self.device = device
         self.masks = []
         self.episode_num = -1
+        self.evicting_episode = -1
+        self.episode_step_cnt = 0
         self.need_new_init = True
+        self.episode_lengths = []
         self.bernoulli_probability = bernoulli_probability
         self.random_state = np.random.RandomState(random_seed)
 
@@ -50,23 +54,29 @@ class ReplayBuffer(object):
         # indexing is done by the next_state only, so this init_state is never
         # referenced in indexing
         self.episode_num+=1
+        print("INIT episode", self.episode_num)
+        self.episode_step_cnt = 0
         self.episodes.append([])
         for state in full_state:
             self.episodes[self.episode_num].append(self.to_storage_function(state))
+            self.episode_step_cnt+=1
         self.need_new_init = False
 
     def add_experience(self, next_state, action, reward, finished):
         assert self.need_new_init == False
         # this state can be indexed - must be before state - index is to
         # last needed index for "state"
-        self.episode_steps.append(len(self.episodes[self.episode_num]))
+        self.episode_steps.append(self.episode_step_cnt)
+        self.episode_step_cnt+=1
         self.episodes[self.episode_num].append(self.to_storage_function(next_state))
         self.episode_indexes.append(self.episode_num)
         self.rewards.append(reward)
         self.actions.append(action)
         self.ongoings.append(int(not finished))
         if finished:
+            self.episode_lengths.append(self.episode_step_cnt)
             self.need_new_init = True
+            print("finished episode", self.episode_num)
         if self.num_masks > 0:
             self.masks.append(self.random_state.binomial(1, self.bernoulli_probability, self.num_masks).astype(np.uint8))
         self.evict()
@@ -81,23 +91,26 @@ class ReplayBuffer(object):
          we have to do this carefully to make sure that we dont hit edge cases
         """
         if len(self.rewards)>self.max_buffer_size:
-            # history_size+1 states are required for each index in the buffer
-            # remove the oldest state required for this index only
-            # this will be index-self.history_size
-            # if oldest_index == 4, then states will pop the true frame 0
             self.rewards.pop(0)
             self.actions.pop(0)
-            ongoing = self.ongoings.pop(0)
-            episode = self.episode_indexes.pop(0)
-            episode_step = self.episode_steps.pop(0)
+            self.ongoings.pop(0)
             if self.num_masks > 0:
                 self.masks.pop(0)
-
-            self.episodes[episode].pop(0)
-            if len(self.episodes[episode])==self.history_size:
+            evicting_episode = self.episode_indexes.pop(0)
+            episode_step = self.episode_steps.pop(0)
+            if evicting_episode != self.evicting_episode:
+                # started evicting a new episode - keep track
+                print("NEW EVICT EP", evicting_episode)
+                self.evicting_episode = evicting_episode
+                self.episode_pop_count = -1
+            else:
+                self.episode_pop_count-=1
+            assert(len(self.episode_steps) == len(self.episode_indexes))
+            self.episodes[evicting_episode].pop(0)
+            if len(self.episodes[evicting_episode])==self.history_size:
                 # finished
-                self.episodes[episode] = 0
-
+                print('end of evicting episode', evicting_episode)
+                self.episodes[evicting_episode] = 0
 
     def sample(self, batch_indexes, pytorchify):
         """ TODO check this
@@ -108,9 +121,18 @@ class ReplayBuffer(object):
          next_state will be grabbed from states[3,4,5,6], assuming history_size=4
         """
         eps = [self.episode_indexes[i] for i in batch_indexes]
-        epi = [self.episode_steps[i] for i in batch_indexes]
-        _all_states = self.from_storage_function([self.episodes[ep][i-self.history_size:i+1] for (ep,i)  in zip(eps, epi)])
-        _states = _all_states[:,:self.history_size]
+        orig_epi = epi = [self.episode_steps[i] for i in batch_indexes]
+        for idx, e in enumerate(eps):
+            if e == self.evicting_episode:
+                epi[idx] += self.episode_pop_count
+        _list_all_states = [self.from_storage_function(self.episodes[ep][i-self.history_size:i+1]) for (ep,i)  in zip(eps, epi)]
+        _all_states = np.array(_list_all_states)
+        try:
+            assert(len(_all_states.shape) == 4)
+            _states = _all_states[:,:self.history_size]
+        except Exception as e:
+            print("bad sample", e)
+            embed()
         _next_states = _all_states[:,1:]
         _rewards = np.array([self.rewards[i] for i in batch_indexes])
         _actions = np.array([self.actions[i] for i in batch_indexes])
