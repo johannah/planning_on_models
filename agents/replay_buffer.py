@@ -73,7 +73,7 @@ class ReplayBuffer(object):
 
     def ready(self, batch_size):
         compare = max(batch_size, self.min_sampling_size)
-        return compare < len(self.self.rewards)
+        return compare < len(self.rewards)
 
     def evict(self):
         """

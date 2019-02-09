@@ -45,6 +45,7 @@ def train_batch(cnt):
                 next_q_value = next_q_state_values[k].gather(1, next_q_values[k].max(1)[1].unsqueeze(1)).squeeze(1)
                 expected_q_value = rewards + (info["GAMMA"] * next_q_value * ongoing_flags)
                 #loss = (q_value-expected_q_value.detach()).pow(2).mean()
+                # TODO do mask
                 loss = F.smooth_l1_loss(q_value, expected_q_value.detach())
                 cnt_losses.append(loss)
                 losses[k] = loss.cpu().detach().item()
@@ -57,7 +58,7 @@ def train_batch(cnt):
         opt.step()
         if not cnt%info['TARGET_UPDATE']:
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
-            print('updating target network')
+            print('updating target network at %s'%cnt)
             target_net.load_state_dict(policy_net.state_dict())
     #board_logger.scalar_summary('batch train time per cnt', cnt, time.time()-st)
     #board_logger.scalar_summary('loss per cnt', cnt, np.mean(losses))
