@@ -178,10 +178,10 @@ if __name__ == '__main__':
         "N_ENSEMBLE":9,
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        "MIN_HISTORY_TO_LEARN":10000, # in environment frames
+        "MIN_HISTORY_TO_LEARN":1000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":200000,
-        "ADAM_LEARNING_RATE":0.00025,
+        "CHECKPOINT_EVERY_STEPS":500000,
+        "ADAM_LEARNING_RATE":0.00015,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
         "RMS_DECAY":0.95,
