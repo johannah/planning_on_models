@@ -28,7 +28,9 @@ class Environment(object):
                  frame_size=84,
                  no_op_start=30,
                  rand_seed=393,
-                 dead_as_eoe=True):
+                 dead_as_eoe=True,
+                 max_steps=18000):
+        self.max_steps = 18000
         self.random_state = np.random.RandomState(rand_seed+15)
         self.ale = self._init_ale(rand_seed, rom_file)
         # normally (160, 210)
@@ -75,10 +77,12 @@ class Environment(object):
         return frame
 
     def reset(self):
+        self.steps = 0
         for _ in range(self.num_frames - 1):
             self.frame_queue.append(
                 np.zeros((self.frame_size, self.frame_size), dtype=np.uint8))
 
+        # steps are in steps the agent sees
         self.ale.reset_game()
         self.clipped_reward = 0
         self.total_reward = 0
@@ -116,6 +120,9 @@ class Environment(object):
                 self.end = True
                 break
 
+        self.steps +=1
+        if self.steps > self.max_steps:
+            self.end = True
         self.frame_queue.append(self._get_current_frame())
         self.total_reward += reward
         self.clipped_reward += clipped_reward
