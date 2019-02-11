@@ -24,6 +24,7 @@ class ReplayBuffer(object):
         self.from_storage_function = from_storage_function
         self.to_storage_function = to_storage_function
         self.max_buffer_size = max_buffer_size
+        self.device = device
         # min_sampling_size used to prevent starting training on too few samples
         # in replay buffer (may cause overfitting)
         assert(min_sampling_size < max_buffer_size), 'invalid configurationn - min sampling size should be smaller than the buffer'
@@ -39,7 +40,6 @@ class ReplayBuffer(object):
         self.episode_indexes = []
         self.episode_steps = []
         # only use masks if needed
-        self.device = device
         self.masks = []
         self.episode_num = -1
         self.evicting_episode = -1
@@ -48,6 +48,7 @@ class ReplayBuffer(object):
         self.episode_lengths = []
         self.bernoulli_probability = bernoulli_probability
         self.random_state = np.random.RandomState(random_seed)
+        self.mask_state = np.random.RandomState(random_seed+10)
 
     def add_init_state(self, full_state):
         # this initial state should be the entire history_size state
@@ -77,8 +78,8 @@ class ReplayBuffer(object):
             self.episode_lengths.append(self.episode_step_cnt)
             self.need_new_init = True
             print("finished episode", self.episode_num)
-        if self.num_masks > 0:
-            self.masks.append(self.random_state.binomial(1, self.bernoulli_probability, self.num_masks).astype(np.uint8))
+        if self.num_masks > 1:
+            self.masks.append(self.mask_state.binomial(1, self.bernoulli_probability, self.num_masks).astype(np.uint8))
         self.evict()
 
     def ready(self, batch_size):
@@ -94,7 +95,7 @@ class ReplayBuffer(object):
             self.rewards.pop(0)
             self.actions.pop(0)
             self.ongoings.pop(0)
-            if self.num_masks > 0:
+            if self.num_masks > 1:
                 self.masks.pop(0)
             evicting_episode = self.episode_indexes.pop(0)
             episode_step = self.episode_steps.pop(0)
@@ -113,13 +114,6 @@ class ReplayBuffer(object):
                 self.episodes[evicting_episode] = 0
 
     def sample(self, batch_indexes, pytorchify):
-        """ TODO check this
-         the index is counted at last needed index of  "state"
-         if states == [0,1,2,3,4,5,6]
-         then avilable indexes are [3,4,5]
-         if index=5, state will be grabbed from states[2,3,4,5]
-         next_state will be grabbed from states[3,4,5,6], assuming history_size=4
-        """
         eps = [self.episode_indexes[i] for i in batch_indexes]
         orig_epi = epi = [self.episode_steps[i] for i in batch_indexes]
         for idx, e in enumerate(eps):
@@ -146,7 +140,7 @@ class ReplayBuffer(object):
             _ongoings = torch.FloatTensor(_ongoings).to(self.device)
         return_vals = [_states, _actions, _rewards, _next_states, _ongoings]
 
-        if self.num_masks > 0:
+        if self.num_masks > 1:
             _masks = np.array([self.masks[i] for i in batch_indexes])
             if pytorchify:
                 _masks = torch.FloatTensor(_masks).to(self.device)
@@ -172,57 +166,209 @@ class ReplayBuffer(object):
         self.__dict__.update(tmp_dict)
 
     def save(self, filename):
+        st = time.time()
+        print("replay buffer saving: %s" %filename)
+        f = open(filename, 'wb')
+        pickle.dump(self.__dict__, f, 2)
+        f.close()
+        print("FINISHED replay buffer saving after %s seconds" %time.time()-st)
+
+class SimpleReplayBuffer(object):
+    def __init__(self, max_buffer_size=1e6, history_size=4, min_sampling_size=1000,
+                 num_masks=0, bernoulli_probability=1.0, device='cpu',
+                 random_seed=293, to_storage_function=to_uint8_storage_state,
+                 from_storage_function=from_uint8_storage_state):
+        self.from_storage_function = from_storage_function
+        self.to_storage_function = to_storage_function
+        self.max_buffer_size = max_buffer_size
+        self.device = device
+        # min_sampling_size used to prevent starting training on too few samples
+        # in replay buffer (may cause overfitting)
+        assert(min_sampling_size < max_buffer_size), 'invalid configurationn - min sampling size should be smaller than the buffer'
+        self.min_sampling_size = min_sampling_size
+        self.history_size = history_size
+        self.num_masks = num_masks
+        self.states = []
+        self.episode_num = -1
+        self.evicting_episode = -1
+        self.bernoulli_probability = bernoulli_probability
+        self.random_state = np.random.RandomState(random_seed)
+        self.mask_state = np.random.RandomState(random_seed+10)
+
+    def add_experience(self, state, action, reward, next_state, finished):
+        # this state can be indexed - must be before state - index is to
+        # last needed index for "state"
+        if self.num_masks > 1:
+            self.states.append((state,action,reward,next_state,not finished))
+        else:
+            mask = self.mask_state.binomial(1, self.bernoulli_probability, self.num_masks).astype(np.uint8)
+            self.states.append((state,action,reward,next_state,not finished,mask))
+        if finished:
+            self.episode_num+=1
+            print("finished episode", self.episode_num)
+        self.evict()
+
+    def ready(self, batch_size):
+        compare = max(batch_size, self.min_sampling_size)
+        return compare < len(self.states)
+
+    def evict(self):
+        """
+         we should evict frames when the replay buffer is too big, however,
+         we have to do this carefully to make sure that we dont hit edge cases
+        """
+        if len(self.states)>self.max_buffer_size:
+            self.states.pop(0)
+
+    def sample(self, batch_indexes, pytorchify):
+        """ TODO check this
+         the index is counted at last needed index of  "state"
+         if states == [0,1,2,3,4,5,6]
+         then avilable indexes are [3,4,5]
+         if index=5, state will be grabbed from states[2,3,4,5]
+         next_state will be grabbed from states[3,4,5,6], assuming history_size=4
+        """
+        batch = [self.states[i] for i in batch_indexes]
+        _states = np.array([item[0] for item in batch])
+        _actions = np.array([item[1] for item in batch])
+        _rewards = np.array([item[2] for item in batch])
+        _next_states = np.array([item[3] for item in batch])
+        _ongoings = np.array([item[4] for item in batch])
+
+        if pytorchify:
+            _states = torch.FloatTensor(_states).to(self.device)
+            _next_states = torch.FloatTensor(_next_states).to(self.device)
+            _rewards = torch.FloatTensor(_rewards).to(self.device)
+            _actions = torch.LongTensor(_actions).to(self.device)
+            # which type should finished be ?
+            _ongoings = torch.FloatTensor(_ongoings).to(self.device)
+        return_vals = [_states, _actions, _rewards, _next_states, _ongoings]
+
+        if self.num_masks > 1:
+            _masks = [item[5] for item in batch]
+            if pytorchify:
+                _masks = torch.FloatTensor(_masks).to(self.device)
+            return_vals.append(_masks)
+        return_vals.append(batch_indexes)
+        return return_vals
+
+    def sample_random(self, batch_size, pytorchify=True):
+        assert self.ready(batch_size), 'not enough samples in replay buffer'
+        batch_indexes = self.random_state.randint(0, len(self.states), batch_size)
+        return self.sample(batch_indexes, pytorchify)
+
+    def sample_ordered(self, start_index, batch_size=32, pytorchify=True):
+        #assert self.ready(batch_size), 'not enough samples in replay buffer'
+        #assert(start_index < len(self.rewards)-1), 'start index too high'
+        batch_indexes = np.arange(start_index, min(start_index+batch_size, len(self.states)), dtype=np.int)
+        return self.sample(batch_indexes, pytorchify)
+
+    def load(self, filename):
+        f = open(filename, 'rb')
+        tmp_dict = pickle.load(f)
+        f.close()
+        self.__dict__.update(tmp_dict)
+
+    def save(self, filename):
         f = open(filename, 'wb')
         pickle.dump(self.__dict__, f, 2)
         f.close()
 
-def test_buffer():
-    replay_buffer = ReplayBuffer(max_buffer_size=10, history_size=4, min_sampling_size=2,
-                                  num_masks=0, bernoulli_probability=1.0, device='cpu', random_seed=293,
-                                 to_storage_function=to_simple_storage_state,
-                                 from_storage_function=from_simple_storage_state)
+def test_against_simple():
+    from env import Environment
 
-    print('episodes', replay_buffer.episodes)
-    # episode 1
-    replay_buffer.add_init_state([0,1,2,3])
-    replay_buffer.add_experience(next_state=4, action=1, reward=1, finished=False)
-    replay_buffer.add_experience(next_state=5, action=1, reward=0, finished=False)
-    replay_buffer.add_experience(next_state=6, action=1, reward=1, finished=False)
-    replay_buffer.add_experience(next_state=7, action=1, reward=1, finished=False)
-    replay_buffer.add_experience(next_state=8, action=1, reward=1, finished=True)
-    # episode 2
-    print('episodes', replay_buffer.episodes)
-    print('-----------')
-    replay_buffer.add_init_state([10,11,12,13])
-    replay_buffer.add_experience(next_state=14, action=2, reward=1, finished=False)
-    replay_buffer.add_experience(next_state=15, action=2, reward=1, finished=False)
-    replay_buffer.add_experience(next_state=16, action=2, reward=0, finished=False)
-    replay_buffer.add_experience(next_state=17, action=2, reward=1, finished=False)
-    replay_buffer.add_experience(next_state=18, action=2, reward=1, finished=False)
-    print('episodes', replay_buffer.episodes)
-    print('-----------')
-    s,a,r,ns,f,bi = replay_buffer.sample_ordered(0,3,False)
-    # episode 3
-    replay_buffer.add_init_state([20,21,22,23])
-    replay_buffer.add_experience(next_state=24, action=3, reward=0, finished=True)
-    print('episodes', replay_buffer.episodes)
-    print('-----------')
-    # episode 4
-    replay_buffer.add_init_state([30,31,32,33])
-    replay_buffer.add_experience(next_state=34, action=4, reward=0, finished=False)
-    replay_buffer.add_experience(next_state=35, action=4, reward=0, finished=False)
-    replay_buffer.add_experience(next_state=37, action=4, reward=0, finished=False)
-    replay_buffer.add_experience(next_state=38, action=4, reward=0, finished=True)
-    print('episodes', replay_buffer.episodes)
-    print('-----------')
-    s2,a2,r2,ns2,f2,bi2 = replay_buffer.sample_ordered(8,3,False)
-    assert ns2[-1][-1] == 38
-    assert ns2[-1][0] == 34
-    assert s2[-1][-1] == 37
-    assert s2[-1][0] == 33
+    BUFFER_SIZE = 20
+    HISTORY_SIZE = 4
+    MIN_HISTORY_TO_LEARN = 10
+    BERNOULLI_PROBABILITY = 1.0
+    DEVICE = 'cpu'
+    N_ENSEMBLE = 1
+    RANDOM_SEED = 39
+    BATCH_SIZE = 12
 
+    replay_buffer = ReplayBuffer(max_buffer_size=BUFFER_SIZE,
+                           history_size=HISTORY_SIZE,
+                           min_sampling_size=MIN_HISTORY_TO_LEARN,
+                           num_masks=N_ENSEMBLE,
+                           bernoulli_probability=BERNOULLI_PROBABILITY,
+                           device=DEVICE, random_seed=RANDOM_SEED)
+
+    simple_replay_buffer = SimpleReplayBuffer(max_buffer_size=BUFFER_SIZE,
+                           history_size=HISTORY_SIZE,
+                           min_sampling_size=MIN_HISTORY_TO_LEARN,
+                           num_masks=N_ENSEMBLE,
+                           bernoulli_probability=BERNOULLI_PROBABILITY,
+                           device=DEVICE, random_seed=RANDOM_SEED)
+
+    env = Environment('roms/breakout.bin')
+    rs = np.random.RandomState(2949)
+    finished = True
+    for i in range(100000):
+        if finished:
+            state = env.reset()
+            replay_buffer.add_init_state(state)
+        action = rs.randint(0,4)
+        next_state, reward, finished = env.step(action)
+        replay_buffer.add_experience(next_state[-1], action, reward, finished)
+        simple_replay_buffer.add_experience(state, action, reward, next_state, finished)
+        state = next_state
+        if replay_buffer.ready(BATCH_SIZE):
+            rb_states, rb_actions, rb_rewards, rb_next_states, rb_ongoings, rb_batch_indexes = replay_buffer.sample_random(BATCH_SIZE, pytorchify=False)
+            srb_states, srb_actions, srb_rewards, srb_next_states, srb_ongoings, srb_batch_indexes = simple_replay_buffer.sample_random(BATCH_SIZE, pytorchify=False)
+            assert rb_states.sum() == srb_states.sum()
+            assert rb_next_states.sum() == srb_next_states.sum()
+            assert rb_actions.sum() == srb_actions.sum()
+            assert rb_rewards.sum() == srb_rewards.sum()
+            assert rb_ongoings.sum() == srb_ongoings.sum()
+            assert rb_batch_indexes.sum() == srb_batch_indexes.sum()
 
 if __name__ == '__main__':
-    test_buffer()
+    test_against_simple()
+
+#
+#def test_buffer():
+#    replay_buffer = ReplayBuffer(max_buffer_size=10, history_size=4, min_sampling_size=2,
+#                                  num_masks=0, bernoulli_probability=1.0, device='cpu', random_seed=293,
+#                                 to_storage_function=to_simple_storage_state,
+#                                 from_storage_function=from_simple_storage_state)
+#
+#    print('episodes', replay_buffer.episodes)
+#    # episode 1
+#    replay_buffer.add_init_state([0,1,2,3])
+#    replay_buffer.add_experience(next_state=4, action=1, reward=1, finished=False)
+#    replay_buffer.add_experience(next_state=5, action=1, reward=0, finished=False)
+#    replay_buffer.add_experience(next_state=6, action=1, reward=1, finished=False)
+#    replay_buffer.add_experience(next_state=7, action=1, reward=1, finished=False)
+#    replay_buffer.add_experience(next_state=8, action=1, reward=1, finished=True)
+#    # episode 2
+#    print('episodes', replay_buffer.episodes)
+#    print('-----------')
+#    replay_buffer.add_init_state([10,11,12,13])
+#    replay_buffer.add_experience(next_state=14, action=2, reward=1, finished=False)
+#    replay_buffer.add_experience(next_state=15, action=2, reward=1, finished=False)
+#    replay_buffer.add_experience(next_state=16, action=2, reward=0, finished=False)
+#    replay_buffer.add_experience(next_state=17, action=2, reward=1, finished=False)
+#    replay_buffer.add_experience(next_state=18, action=2, reward=1, finished=False)
+#    print('episodes', replay_buffer.episodes)
+#    print('-----------')
+#    s,a,r,ns,f,bi = replay_buffer.sample_ordered(0,3,False)
+#    # episode 3
+#    replay_buffer.add_init_state([20,21,22,23])
+#    replay_buffer.add_experience(next_state=24, action=3, reward=0, finished=True)
+#    print('episodes', replay_buffer.episodes)
+#    print('-----------')
+#    # episode 4
+#    replay_buffer.add_init_state([30,31,32,33])
+#    replay_buffer.add_experience(next_state=34, action=4, reward=0, finished=False)
+#    replay_buffer.add_experience(next_state=35, action=4, reward=0, finished=False)
+#    replay_buffer.add_experience(next_state=37, action=4, reward=0, finished=False)
+#    replay_buffer.add_experience(next_state=38, action=4, reward=0, finished=True)
+#    print('episodes', replay_buffer.episodes)
+#    print('-----------')
+#    s2,a2,r2,ns2,f2,bi2 = replay_buffer.sample_ordered(8,3,False)
+#    assert ns2[-1][-1] == 38
+#    assert ns2[-1][0] == 34
+#    assert s2[-1][-1] == 37
+#    assert s2[-1][0] == 33
 
 

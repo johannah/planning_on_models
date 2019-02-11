@@ -144,9 +144,9 @@ def run_training_episode(epoch_num, total_steps):
     #board_logger.scalar_summary('reward per step', total_steps, episodic_reward)
     #board_logger.scalar_summary('time per episode', epoch_num, ep_time)
     #board_logger.scalar_summary('steps per episode', epoch_num, total_steps-start_steps)
+    print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
+    print("time for episode", ep_time)
     if not epoch_num%10:
-        print("EPISODE:%s HEAD %s REWARD:%s ------ ep %04d total %010d steps"%(epoch_num, active_head, episodic_reward, total_steps-start_steps, total_steps))
-        print("time for episode", ep_time)
         # TODO plot title
         plot_dict_losses({'episode steps':{'index':np.arange(epoch_num+1), 'val':episode_step}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
         plot_dict_losses({'episode head':{'index':np.arange(epoch_num+1), 'val':episode_head}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
@@ -174,14 +174,14 @@ if __name__ == '__main__':
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'_ROMSBreakout_BT9_MyRP', # start files with name
+        "NAME":'_ROMSBreakout_BT9_LR', # start files with name
         "N_ENSEMBLE":9,
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        "MIN_HISTORY_TO_LEARN":1000, # in environment frames
+        "MIN_HISTORY_TO_LEARN":10000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000,
-        "ADAM_LEARNING_RATE":0.00015,
+        "ADAM_LEARNING_RATE":0.00001,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.00001,
         "RMS_DECAY":0.95,
@@ -199,7 +199,7 @@ if __name__ == '__main__':
         "EPSILON_DECAY":1000000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
-        "SEED":18, # Learning rate for Adam
+        "SEED":11, # Learning rate for Adam
         "RANDOM_HEAD":-1,
         "FAKE_ACTION":-3,
         "FAKE_REWARD":-5,
@@ -222,7 +222,7 @@ if __name__ == '__main__':
         model_base_filedir = os.path.split(args.model_loadpath)[0]
         last_save = model_dict['cnt']
         info['loaded_from'] = args.model_loadpath
-        epoch_start = model_dict['epoch']
+        epoch_start = model_dict['epoch']+1
         steps = model_dict['steps']
         episode_step = model_dict['episode_step']
         episode_head = model_dict['episode_head']
@@ -285,6 +285,7 @@ if __name__ == '__main__':
         opt.load_state_dict(model_dict['optimizer'])
         print("loaded model state_dicts")
         if args.buffer_loadpath == '':
+            print("NOT LOADING BUFFER")
             args.buffer_loadpath = args.model_loadpath.replace('.pkl', '_train_buffer.pkl')
             print("auto loading buffer from:%s" %args.buffer_loadpath)
             rbuffer.load(args.buffer_loadpath)
