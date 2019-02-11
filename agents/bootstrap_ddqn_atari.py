@@ -277,6 +277,14 @@ if __name__ == '__main__':
     #                    centered=info["RMS_CENTERED"],
     #                    alpha=info["RMS_DECAY"])
 
+    rbuffer = ReplayBuffer(max_buffer_size=info['BUFFER_SIZE'],
+                           history_size=info['HISTORY_SIZE'],
+                           min_sampling_size=info['MIN_HISTORY_TO_LEARN'],
+                           num_masks=info['N_ENSEMBLE'],
+                           bernoulli_probability=info['BERNOULLI_PROBABILITY'],
+                           device=info['DEVICE'])
+
+
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???
         # TODO - what about target net update cnt
@@ -288,15 +296,12 @@ if __name__ == '__main__':
             print("NOT LOADING BUFFER")
             args.buffer_loadpath = args.model_loadpath.replace('.pkl', '_train_buffer.pkl')
             print("auto loading buffer from:%s" %args.buffer_loadpath)
-            rbuffer.load(args.buffer_loadpath)
-
-    rbuffer = ReplayBuffer(max_buffer_size=info['BUFFER_SIZE'],
-                           history_size=info['HISTORY_SIZE'],
-                           min_sampling_size=info['MIN_HISTORY_TO_LEARN'],
-                           num_masks=info['N_ENSEMBLE'],
-                           bernoulli_probability=info['BERNOULLI_PROBABILITY'],
-                           device=info['DEVICE'])
-
+            try:
+                rbuffer.load(args.buffer_loadpath)
+            except Exception as e:
+                print(e)
+                print('not able to load from buffer: %s. exit() to continue with empty buffer' %args.buffer_loadpath)
+                embed()
 
     random_state = np.random.RandomState(info["SEED"])
     #board_logger = TensorBoardLogger(model_base_filedir)
