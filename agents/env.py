@@ -121,7 +121,7 @@ class Environment(object):
                 break
 
         self.steps +=1
-        if self.steps > self.max_steps:
+        if self.steps >= self.max_steps:
             self.end = True
         self.frame_queue.append(self._get_current_frame())
         self.total_reward += reward

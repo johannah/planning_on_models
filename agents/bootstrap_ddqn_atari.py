@@ -178,7 +178,7 @@ if __name__ == '__main__':
         "N_ENSEMBLE":9,
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        "MIN_HISTORY_TO_LEARN":10000, # in environment frames
+        "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000,
         "ADAM_LEARNING_RATE":0.00001,
@@ -199,7 +199,7 @@ if __name__ == '__main__':
         "EPSILON_DECAY":1000000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
-        "SEED":11, # Learning rate for Adam
+        "SEED":101,
         "RANDOM_HEAD":-1,
         "FAKE_ACTION":-3,
         "FAKE_REWARD":-5,
