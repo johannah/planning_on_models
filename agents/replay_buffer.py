@@ -1,6 +1,11 @@
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import torch
 import numpy as np
+import time
 import pickle
+import os
 from IPython import embed
 
 def to_simple_storage_state(state):
@@ -154,16 +159,19 @@ class ReplayBuffer(object):
         return self.sample(batch_indexes, pytorchify)
 
     def sample_ordered(self, start_index, batch_size=32, pytorchify=True):
-        #assert self.ready(batch_size), 'not enough samples in replay buffer'
-        #assert(start_index < len(self.rewards)-1), 'start index too high'
+        assert self.ready(batch_size), 'not enough samples in replay buffer'
+        assert(start_index < len(self.rewards)-1), 'start index too high'
         batch_indexes = np.arange(start_index, min(start_index+batch_size, len(self.rewards)), dtype=np.int)
         return self.sample(batch_indexes, pytorchify)
 
     def load(self, filename):
+        st = time.time()
+        print("Buffer loading from %s. This may take some time" %filename)
         f = open(filename, 'rb')
         tmp_dict = pickle.load(f)
         f.close()
         self.__dict__.update(tmp_dict)
+        print("buffer finished loading from %s after %s seconds" %(filename, time.time()-st))
 
     def save(self, filename):
         st = time.time()
@@ -172,6 +180,47 @@ class ReplayBuffer(object):
         pickle.dump(self.__dict__, f, 2)
         f.close()
         print("FINISHED replay buffer saving after %s seconds" %time.time()-st)
+
+    def plot_buffer(self, buffer_filepath, plot_end_minus=1000, make_gif=True, make_gif_min=-2000, overwrite_imgs=False):
+        img_filepath = buffer_filepath.replace('.pkl', '_plot')
+        if not os.path.exists(img_filepath):
+            print("making img directory: %s" %img_filepath)
+            os.makedirs(img_filepath)
+
+        if plot_end_minus > 0:
+            start_index = len(self.rewards)-plot_end_minus
+            start_index = max(0,start_index)
+        else:
+            start_index = 0
+        batch_size = len(self.rewards)-start_index
+        if self.num_masks > 1:
+            states, actions, rewards, next_states, ongoings, _, batch_index = self.sample_ordered(start_index, batch_size=batch_size, pytorchify=False)
+        else:
+            states, actions, rewards, next_states, ongoings, batch_index = self.sample_ordered(start_index, batch_size=batch_size, pytorchify=False)
+
+        episode_reward = 0
+        for ss in range(len(ongoings)):
+            step = self.episode_steps[batch_index[ss]]
+            episode = self.episode_indexes[batch_index[ss]]
+            ipath = os.path.join(img_filepath, "E%05d_%05d.png" %(episode, step))
+            episode_reward += rewards[ss]
+            if not os.path.exists(ipath) or overwrite_imgs:
+                title = 'EP:%05d ST%05d A%s R:%03d' %(episode, step, actions[ss], episode_reward)
+                if not bool(ongoings[ss]):
+                    title+= " FINISHED"
+                plt.figure()
+                plt.title(title)
+                plt.imshow(states[ss][-1])
+                plt.savefig(ipath)
+                plt.close()
+            if not bool(ongoings[ss]):
+                print(" episode: %s rewards: %s "%(episode, episode_reward))
+                if make_gif and episode_reward > make_gif_min:
+                    print("making gif")
+                    spath = os.path.join(img_filepath, 'E%05d*.png' %episode)
+                    gpath = os.path.join(img_filepath, '_E%05d_R%04d.gif' %(episode, episode_reward))
+                    os.system("convert %s %s " %(spath,gpath))
+                episode_reward = 0
 
 class SimpleReplayBuffer(object):
     def __init__(self, max_buffer_size=1e6, history_size=4, min_sampling_size=1000,
@@ -199,10 +248,10 @@ class SimpleReplayBuffer(object):
         # this state can be indexed - must be before state - index is to
         # last needed index for "state"
         if self.num_masks > 1:
-            self.states.append((state,action,reward,next_state,not finished))
-        else:
             mask = self.mask_state.binomial(1, self.bernoulli_probability, self.num_masks).astype(np.uint8)
             self.states.append((state,action,reward,next_state,not finished,mask))
+        else:
+            self.states.append((state,action,reward,next_state,not finished))
         if finished:
             self.episode_num+=1
             print("finished episode", self.episode_num)
@@ -323,52 +372,21 @@ def test_against_simple():
             assert rb_batch_indexes.sum() == srb_batch_indexes.sum()
 
 if __name__ == '__main__':
-    test_against_simple()
-
-#
-#def test_buffer():
-#    replay_buffer = ReplayBuffer(max_buffer_size=10, history_size=4, min_sampling_size=2,
-#                                  num_masks=0, bernoulli_probability=1.0, device='cpu', random_seed=293,
-#                                 to_storage_function=to_simple_storage_state,
-#                                 from_storage_function=from_simple_storage_state)
-#
-#    print('episodes', replay_buffer.episodes)
-#    # episode 1
-#    replay_buffer.add_init_state([0,1,2,3])
-#    replay_buffer.add_experience(next_state=4, action=1, reward=1, finished=False)
-#    replay_buffer.add_experience(next_state=5, action=1, reward=0, finished=False)
-#    replay_buffer.add_experience(next_state=6, action=1, reward=1, finished=False)
-#    replay_buffer.add_experience(next_state=7, action=1, reward=1, finished=False)
-#    replay_buffer.add_experience(next_state=8, action=1, reward=1, finished=True)
-#    # episode 2
-#    print('episodes', replay_buffer.episodes)
-#    print('-----------')
-#    replay_buffer.add_init_state([10,11,12,13])
-#    replay_buffer.add_experience(next_state=14, action=2, reward=1, finished=False)
-#    replay_buffer.add_experience(next_state=15, action=2, reward=1, finished=False)
-#    replay_buffer.add_experience(next_state=16, action=2, reward=0, finished=False)
-#    replay_buffer.add_experience(next_state=17, action=2, reward=1, finished=False)
-#    replay_buffer.add_experience(next_state=18, action=2, reward=1, finished=False)
-#    print('episodes', replay_buffer.episodes)
-#    print('-----------')
-#    s,a,r,ns,f,bi = replay_buffer.sample_ordered(0,3,False)
-#    # episode 3
-#    replay_buffer.add_init_state([20,21,22,23])
-#    replay_buffer.add_experience(next_state=24, action=3, reward=0, finished=True)
-#    print('episodes', replay_buffer.episodes)
-#    print('-----------')
-#    # episode 4
-#    replay_buffer.add_init_state([30,31,32,33])
-#    replay_buffer.add_experience(next_state=34, action=4, reward=0, finished=False)
-#    replay_buffer.add_experience(next_state=35, action=4, reward=0, finished=False)
-#    replay_buffer.add_experience(next_state=37, action=4, reward=0, finished=False)
-#    replay_buffer.add_experience(next_state=38, action=4, reward=0, finished=True)
-#    print('episodes', replay_buffer.episodes)
-#    print('-----------')
-#    s2,a2,r2,ns2,f2,bi2 = replay_buffer.sample_ordered(8,3,False)
-#    assert ns2[-1][-1] == 38
-#    assert ns2[-1][0] == 34
-#    assert s2[-1][-1] == 37
-#    assert s2[-1][0] == 33
-
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument("-t", '--test', action='store_true', default=False)
+    parser.add_argument("-b", '--buffer_loadpath', default='')
+    parser.add_argument("-p", '--plot', action='store_true', default=True)
+    parser.add_argument("-o", '--overwrite_imgs', action='store_true', default=False, help='overwrite images if they already exist')
+    parser.add_argument("-mg", '--make_gif', action='store_true', default=True, help='make a gif of each episode')
+    parser.add_argument("-em", '--plot_end_minus', type=int, default=1000, help='limit plotting to the last x steps')
+    parser.add_argument("-gm", '--make_gif_min', type=int, default=-2000, help='only make a gif if the episode reward is greater than this number')
+    args = parser.parse_args()
+    if args.test:
+        test_against_simple()
+    else:
+        if args.buffer_loadpath != '':
+            rbuffer = ReplayBuffer()
+            rbuffer.load(args.buffer_loadpath)
+            rbuffer.plot_buffer(args.buffer_loadpath, plot_end_minus=args.plot_end_minus, make_gif=args.make_gif, make_gif_min=args.make_gif_min, overwrite_imgs=args.overwrite_imgs)
 
