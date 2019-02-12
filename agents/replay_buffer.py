@@ -171,15 +171,14 @@ class ReplayBuffer(object):
         tmp_dict = pickle.load(f)
         f.close()
         self.__dict__.update(tmp_dict)
-        print("buffer finished loading from %s after %s seconds" %(filename, time.time()-st))
+        print("buffer finished loading from %s" %(filename))
 
     def save(self, filename):
-        st = time.time()
         print("replay buffer saving: %s" %filename)
         f = open(filename, 'wb')
         pickle.dump(self.__dict__, f, 2)
         f.close()
-        print("FINISHED replay buffer saving after %s seconds" %time.time()-st)
+        print("FINISHED replay buffer saving")
 
     def plot_buffer(self, buffer_filepath, plot_end_minus=1000, make_gif=True, make_gif_min=-2000, overwrite_imgs=False):
         img_filepath = buffer_filepath.replace('.pkl', '_plot')
