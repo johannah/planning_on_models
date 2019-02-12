@@ -87,7 +87,8 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
         save_checkpoint(state, filename)
         buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
-        rbuffer.save(buff_filename)
+        print("SKIPPING SAVE OF BUFFER")
+        #rbuffer.save(buff_filename)
         return last_save
     else: return last_save
 
@@ -163,7 +164,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadpath', default='', help='.pkl model file full path')
-    parser.add_argument('-b', '--buffer_loadpath', default='', help='.npz model file full path')
+    parser.add_argument('-b', '--buffer_loadpath', default='', help='.pkl replay buffer file full path')
     args = parser.parse_args()
     if args.cuda:
         device = 'cuda'
