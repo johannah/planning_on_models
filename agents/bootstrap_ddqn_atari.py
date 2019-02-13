@@ -183,8 +183,7 @@ if __name__ == '__main__':
         "LEARN_EVERY_STEPS":1, # should be 1, but is 4 in fg91
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        #"MIN_HISTORY_TO_LEARN":50000, # in environment frames
-        "MIN_HISTORY_TO_LEARN":50, # in environment frames
+        "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000,
         "ADAM_LEARNING_RATE":0.00001,
