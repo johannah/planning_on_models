@@ -88,6 +88,8 @@ class ReplayBuffer(object):
         self.evict()
 
     def ready(self, batch_size):
+        # is our replay buffer bigger than the min sampling size?
+        # is it also bigger than the batch size requested
         compare = max(batch_size, self.min_sampling_size)
         return compare < len(self.rewards)
 

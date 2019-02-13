@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+from IPython import embed
 #The first convolution layer convolves the input with 32 filters of size 8 (stride 4),
 #the second layer has 64 layers of size 4
 #(stride 2), the final convolution layer has 64 filters of size 3 (stride
@@ -36,6 +36,28 @@ class CoreNet(nn.Module):
         x = x.view(-1, reshape)
         return x
 
+class DuelingHeadNet(nn.Module):
+    def __init__(self, n_actions=4):
+        super(DuelingHeadNet, self).__init__()
+        mult = 64*7*7
+        self.split_size = 512
+        self.fc1 = nn.Linear(mult, self.split_size*2)
+        self.value = nn.Linear(self.split_size, 1)
+        self.advantage = nn.Linear(self.split_size, n_actions)
+        self.fc1.bias.data.fill_(0.)
+        self.value.bias.data.fill_(0.)
+        self.advantage.bias.data.fill_(0.)
+
+    def forward(self, x):
+        #x1,x2 = torch.split(F.relu(self.fc1(x)), 2, dim=1)
+        x1,x2 = torch.split(F.relu(self.fc1(x)), self.split_size, dim=1)
+        value = self.value(x1)
+        advantage = self.advantage(x2)
+        # value is shape [batch_size, 1]
+        # advantage is shape [batch_size, n_actions]
+        q = value + torch.sub(advantage, torch.mean(advantage, dim=1, keepdim=True))
+        return q
+
 class HeadNet(nn.Module):
     def __init__(self, n_actions=4):
         super(HeadNet, self).__init__()
@@ -51,10 +73,15 @@ class HeadNet(nn.Module):
         return x
 
 class EnsembleNet(nn.Module):
-    def __init__(self, n_ensemble, n_actions, network_output_size, num_channels):
+    def __init__(self, n_ensemble, n_actions, network_output_size, num_channels, dueling=False):
         super(EnsembleNet, self).__init__()
         self.core_net = CoreNet(network_output_size=network_output_size, num_channels=num_channels)
-        self.net_list = nn.ModuleList([HeadNet(n_actions=n_actions) for k in range(n_ensemble)])
+        self.dueling = dueling
+        if self.dueling:
+            print("using dueling dqn")
+            self.net_list = nn.ModuleList([DuelingHeadNet(n_actions=n_actions) for k in range(n_ensemble)])
+        else:
+            self.net_list = nn.ModuleList([HeadNet(n_actions=n_actions) for k in range(n_ensemble)])
 
     def _core(self, x):
         return self.core_net(x)
@@ -69,8 +96,6 @@ class EnsembleNet(nn.Module):
             core_cache = self._core(x)
             net_heads = self._heads(core_cache)
             return net_heads
-
-
 
 class NetWithPrior(nn.Module):
     def __init__(self, net, prior, prior_scale=1.):
