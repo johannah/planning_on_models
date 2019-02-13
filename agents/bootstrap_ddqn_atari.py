@@ -24,6 +24,13 @@ import config
 from ae_utils import save_checkpoint
 from dqn_utils import seed_everything, write_info_file
 
+def one_hot(x, n):
+    assert x.dim() == 2
+    one_hot_x = torch.zeros(x.size(0), n).cuda()
+    one_hot_x.scatter_(1, x, 1)
+    return one_hot_x
+
+
 def train_batch(cnt):
     st = time.time()
     # min history to learn is 200,000 frames in dqn
@@ -35,21 +42,37 @@ def train_batch(cnt):
         states, actions, rewards, next_states, ongoing_flags, masks, _ = samples
 
         opt.zero_grad()
-        q_values = policy_net(states, None)
-        next_q_values = policy_net(next_states, None)
-        next_q_state_values = target_net(next_states, None)
+        #next_q_vals = self.target_q_values(next_states)
+        #if self.double_dqn:
+        #    next_actions = self.online_q_values(next_states).max(1, True)[1]
+        #    next_actions = utils.one_hot(next_actions, self.num_actions)
+        #    next_qs = (next_q_vals * next_actions).sum(1)
+        #else:
+        #    next_qs = next_q_vals.max(1)[0] # max returns a pair
+        #targets = rewards + gamma * next_qs * non_end
+        q_policy_vals = policy_net(states, None)
+        #next_q_state_values = target_net(next_states, None)
+        next_q_target_vals = target_net(next_states, None)
+        next_q_policy_vals = policy_net(next_states, None)
+        actions_oh = one_hot(actions[:,None], env.num_actions)
         cnt_losses = []
         for k in range(info['N_ENSEMBLE']):
             #TODO finish masking
             total_used = 1.0
             #total_used = torch.sum(mask_pt[:, k])
             if total_used > 0.0:
-                q_value = q_values[k].gather(1, actions[:,None]).squeeze(1)
-                next_q_value = next_q_state_values[k].gather(1, next_q_values[k].max(1)[1].unsqueeze(1)).squeeze(1)
-                expected_q_value = rewards + (info["GAMMA"] * next_q_value * ongoing_flags)
-                #loss = (q_value-expected_q_value.detach()).pow(2).mean()
-                # TODO do mask
-                loss = F.smooth_l1_loss(q_value, expected_q_value.detach())
+                next_q_vals = next_q_target_vals[k].data
+                if info['DOUBLE_DQN']:
+                    next_actions = next_q_policy_vals[k].data.max(1, True)[1]
+                    next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
+                    #next_actions = one_hot(next_actions, env.num_actions)
+                    #next_qs = (next_q_vals * next_actions).sum(1)
+                else:
+                    next_qs = next_q_vals.max(1)[0] # max returns a pair
+
+                targets = rewards + info['GAMMA'] * next_qs * ongoing_flags
+                preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
+                loss = F.smooth_l1_loss(preds, targets)
                 cnt_losses.append(loss)
                 losses[k] = loss.cpu().detach().item()
 
@@ -175,20 +198,21 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/breakout.bin', # gym prefix
+        "GAME":'roms/pong.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'_ROMSBreakout_BT9_LR', # start files with name
+        "NAME":'_d3Pong_BT9', # start files with name
         "DUELING":True,
+        "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
-        "LEARN_EVERY_STEPS":1, # should be 1, but is 4 in fg91
+        "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000,
-        "ADAM_LEARNING_RATE":0.00001,
+        "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
-        "RMS_LEARNING_RATE": 0.00001,
+        "RMS_LEARNING_RATE": 0.0001,
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
         "RMS_EPSILON":0.00001,
