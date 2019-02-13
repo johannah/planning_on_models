@@ -162,6 +162,7 @@ def run_training_episode(epoch_num, total_steps):
     episode_loss.append(np.mean(losses))
     episode_reward.append(episodic_reward)
     episode_times.append(ep_time)
+    episode_relative_times.append(time.time()-info['START_TIME'])
     avg_rewards.append(np.mean(episode_reward[-100:]))
 
     #board_logger.scalar_summary('%s head reward per episode'%active_head, epoch_num, episodic_reward)
@@ -175,6 +176,7 @@ def run_training_episode(epoch_num, total_steps):
     if not epoch_num%10:
         # TODO plot title
         plot_dict_losses({'episode steps':{'index':np.arange(epoch_num+1), 'val':episode_step}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
+        plot_dict_losses({'episode steps':{'index':np.arange(epoch_num+1), 'val':episode_relative_times}}, name=os.path.join(model_base_filedir, 'episode_relative_times.png'), rolling_length=10)
         plot_dict_losses({'episode head':{'index':np.arange(epoch_num+1), 'val':episode_head}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
         plot_dict_losses({'steps loss':{'index':steps, 'val':episode_loss}}, name=os.path.join(model_base_filedir, 'steps_loss.png'))
         plot_dict_losses({'steps reward':{'index':steps, 'val':episode_reward}},  name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
@@ -233,6 +235,7 @@ if __name__ == '__main__':
         "FAKE_ACTION":-3,
         "FAKE_REWARD":-5,
         "NETWORK_INPUT_SIZE":(84,84),
+        "START_TIME":time.time()
         }
 
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
@@ -270,6 +273,7 @@ if __name__ == '__main__':
         episode_loss = []
         episode_reward = []
         episode_times = []
+        episode_relative_times = []
         avg_rewards = []
 
 
