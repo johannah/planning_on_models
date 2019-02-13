@@ -1,3 +1,4 @@
+from __future__ import print_function
 """
 Implementation of DeepMind's Deep Q-Learning by Fabio M. Graetz, 2018
 If you have questions or suggestions, write me a mail fabiograetzatgooglemaildotcom
@@ -9,7 +10,6 @@ import tensorflow as tf
 import numpy as np
 import imageio
 from skimage.transform import resize
-
 class ProcessFrame:
     """Resizes and converts RGB Atari frames to grayscale"""
     def __init__(self, frame_height=84, frame_width=84):
@@ -98,7 +98,8 @@ class DQN:
             kernel_initializer=tf.variance_scaling_initializer(scale=2), name='value')
 
         # Combining value and advantage into Q-values as described above
-        self.q_values = self.value + tf.subtract(self.advantage, tf.reduce_mean(self.advantage, axis=1, keepdims=True))
+        #self.q_values = self.value + tf.subtract(self.advantage, tf.reduce_mean(self.advantage, axis=1, keepdims=True))
+        self.q_values = self.value + tf.subtract(self.advantage, tf.reduce_mean(self.advantage, axis=1, keep_dims=True))
         self.best_action = tf.argmax(self.q_values, 1)
 
         # The next lines perform the parameter update. This will be explained in detail later.
@@ -340,8 +341,10 @@ def generate_gif(frame_number, frames_for_gif, reward, path):
         frames_for_gif[idx] = resize(frame_idx, (420, 320, 3),
                                      preserve_range=True, order=0).astype(np.uint8)
 
-    imageio.mimsave(f'{path}{"ATARI_frame_{0}_reward_{1}.gif".format(frame_number, reward)}',
-                    frames_for_gif, duration=1/30)
+
+    imageio.mimsave(os.path.join(path, "ATARI_frame_%05d_reward_%s.gif"%(frame_number, reward)), frames_for_gif, duration=1/30)
+    #imageio.mimsave('{path}{"ATARI_frame_{0}_reward_{1}.gif".format(frame_number, reward)}',
+    #                frames_for_gif, duration=1/30)
 
 class Atari:
     """Wrapper for the environment provided by gym"""
@@ -368,7 +371,7 @@ class Atari:
         if evaluation:
             for _ in range(random.randint(1, self.no_op_steps)):
                 frame, _, _, _ = self.env.step(1) # Action 'Fire'
-        processed_frame = self.frame_processor.process(sess, frame)   # (★★★)
+        processed_frame = self.frame_processor.process(sess, frame)
         self.state = np.repeat(processed_frame, self.agent_history_length, axis=2)
 
         return terminal_life_lost
@@ -380,7 +383,7 @@ class Atari:
             action: Integer, action the agent performs
         Performs an action and observes the reward and terminal state from the environment
         """
-        new_frame, reward, terminal, info = self.env.step(action)  # (5★)
+        new_frame, reward, terminal, info = self.env.step(action)
 
         if info['ale.lives'] < self.last_lives:
             terminal_life_lost = True
@@ -388,15 +391,15 @@ class Atari:
             terminal_life_lost = terminal
         self.last_lives = info['ale.lives']
 
-        processed_new_frame = self.frame_processor.process(sess, new_frame)   # (6★)
-        new_state = np.append(self.state[:, :, 1:], processed_new_frame, axis=2) # (6★)
+        processed_new_frame = self.frame_processor.process(sess, new_frame)   #
+        new_state = np.append(self.state[:, :, 1:], processed_new_frame, axis=2) #
         self.state = new_state
 
         return processed_new_frame, reward, terminal, terminal_life_lost, new_frame
 
 def train():
     """Contains the training and evaluation loops"""
-    my_replay_memory = ReplayMemory(size=MEMORY_SIZE, batch_size=BS)   # (★)
+    my_replay_memory = ReplayMemory(size=MEMORY_SIZE, batch_size=BS)
     network_updater = TargetNetworkUpdater(MAIN_DQN_VARS, TARGET_DQN_VARS)
     action_getter = ActionGetter(atari.env.action_space.n,
                                  replay_memory_start_size=REPLAY_MEMORY_START_SIZE,
@@ -419,15 +422,13 @@ def train():
                 terminal_life_lost = atari.reset(sess)
                 episode_reward_sum = 0
                 for _ in range(MAX_EPISODE_LENGTH):
-                    # (4★)
                     action = action_getter.get_action(sess, frame_number, atari.state, MAIN_DQN)
-                    # (5★)
                     processed_new_frame, reward, terminal, terminal_life_lost, _ = atari.step(sess, action)
                     frame_number += 1
                     epoch_frame += 1
                     episode_reward_sum += reward
 
-                    # (7★) Store transition in the replay memory
+                    # Store transition in the replay memory
                     my_replay_memory.add_experience(action=action,
                                                     frame=processed_new_frame[:, :, 0],
                                                     reward=reward,
@@ -435,10 +436,10 @@ def train():
 
                     if frame_number % UPDATE_FREQ == 0 and frame_number > REPLAY_MEMORY_START_SIZE:
                         loss = learn(sess, my_replay_memory, MAIN_DQN, TARGET_DQN,
-                                     BS, gamma = DISCOUNT_FACTOR) # (8★)
+                                     BS, gamma = DISCOUNT_FACTOR) #
                         loss_list.append(loss)
                     if frame_number % NETW_UPDATE_FREQ == 0 and frame_number > REPLAY_MEMORY_START_SIZE:
-                        network_updater.update_networks(sess) # (9★)
+                        network_updater.update_networks(sess)
 
                     if terminal:
                         terminal = False
@@ -462,8 +463,7 @@ def train():
 
                     print(len(rewards), frame_number, np.mean(rewards[-100:]))
                     with open('rewards.dat', 'a') as reward_file:
-                        print(len(rewards), frame_number,
-                              np.mean(rewards[-100:]), file=reward_file)
+                        print(len(rewards), frame_number, np.mean(rewards[-100:]), file=reward_file)
 
             ########################
             ###### Evaluation ######
@@ -504,7 +504,7 @@ def train():
                 print("No evaluation game finished")
 
             #Save the network parameters
-            saver.save(sess, PATH+'/my_model', global_step=frame_number)
+            saver.save(sess, os.path.join(PATH, 'my_model'), global_step=frame_number)
             frames_for_gif = []
 
             # Show the evaluation score in tensorboard
@@ -554,8 +554,12 @@ if __name__ == '__main__':
     PATH = "output/"                 # Gifs and checkpoints will be saved here
     SUMMARIES = "summaries"          # logdir for tensorboard
     RUNID = 'run_1'
-    os.makedirs(PATH, exist_ok=True)
-    os.makedirs(os.path.join(SUMMARIES, RUNID), exist_ok=True)
+    #os.makedirs(PATH, exist_ok=True)
+    #os.makedirs(os.path.join(SUMMARIES, RUNID), exist_ok=True)
+    if not os.path.exists(PATH):
+        os.makedirs(PATH)
+    if not os.path.exists(os.path.join(SUMMARIES, RUNID)):
+        os.makedirs(os.path.join(SUMMARIES, RUNID))
     SUMM_WRITER = tf.summary.FileWriter(os.path.join(SUMMARIES, RUNID))
 
     atari = Atari(ENV_NAME, NO_OP_STEPS)
@@ -568,9 +572,9 @@ if __name__ == '__main__':
 
     # main DQN and target DQN networks:
     with tf.variable_scope('mainDQN'):
-        MAIN_DQN = DQN(atari.env.action_space.n, HIDDEN, LEARNING_RATE)   # (★★)
+        MAIN_DQN = DQN(atari.env.action_space.n, HIDDEN, LEARNING_RATE)   #
     with tf.variable_scope('targetDQN'):
-        TARGET_DQN = DQN(atari.env.action_space.n, HIDDEN)               # (★★)
+        TARGET_DQN = DQN(atari.env.action_space.n, HIDDEN)               #
 
     init = tf.global_variables_initializer()
     saver = tf.train.Saver()
