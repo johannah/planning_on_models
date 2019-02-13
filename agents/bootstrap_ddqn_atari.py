@@ -24,30 +24,55 @@ import config
 from ae_utils import save_checkpoint
 from dqn_utils import seed_everything, write_info_file
 
+def one_hot(x, n):
+    assert x.dim() == 2
+    one_hot_x = torch.zeros(x.size(0), n).cuda()
+    one_hot_x.scatter_(1, x, 1)
+    return one_hot_x
+
+
 def train_batch(cnt):
     st = time.time()
     # min history to learn is 200,000 frames in dqn
     losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
     if rbuffer.ready(info['BATCH_SIZE']):
+        if not cnt%1000:
+            print('training', cnt)
         samples = rbuffer.sample_random(info['BATCH_SIZE'], pytorchify=True)
         states, actions, rewards, next_states, ongoing_flags, masks, _ = samples
 
         opt.zero_grad()
-        q_values = policy_net(states, None)
-        next_q_values = policy_net(next_states, None)
-        next_q_state_values = target_net(next_states, None)
+        #next_q_vals = self.target_q_values(next_states)
+        #if self.double_dqn:
+        #    next_actions = self.online_q_values(next_states).max(1, True)[1]
+        #    next_actions = utils.one_hot(next_actions, self.num_actions)
+        #    next_qs = (next_q_vals * next_actions).sum(1)
+        #else:
+        #    next_qs = next_q_vals.max(1)[0] # max returns a pair
+        #targets = rewards + gamma * next_qs * non_end
+        q_policy_vals = policy_net(states, None)
+        #next_q_state_values = target_net(next_states, None)
+        next_q_target_vals = target_net(next_states, None)
+        next_q_policy_vals = policy_net(next_states, None)
+        actions_oh = one_hot(actions[:,None], env.num_actions)
         cnt_losses = []
         for k in range(info['N_ENSEMBLE']):
             #TODO finish masking
             total_used = 1.0
             #total_used = torch.sum(mask_pt[:, k])
             if total_used > 0.0:
-                q_value = q_values[k].gather(1, actions[:,None]).squeeze(1)
-                next_q_value = next_q_state_values[k].gather(1, next_q_values[k].max(1)[1].unsqueeze(1)).squeeze(1)
-                expected_q_value = rewards + (info["GAMMA"] * next_q_value * ongoing_flags)
-                #loss = (q_value-expected_q_value.detach()).pow(2).mean()
-                # TODO do mask
-                loss = F.smooth_l1_loss(q_value, expected_q_value.detach())
+                next_q_vals = next_q_target_vals[k].data
+                if info['DOUBLE_DQN']:
+                    next_actions = next_q_policy_vals[k].data.max(1, True)[1]
+                    next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
+                    #next_actions = one_hot(next_actions, env.num_actions)
+                    #next_qs = (next_q_vals * next_actions).sum(1)
+                else:
+                    next_qs = next_q_vals.max(1)[0] # max returns a pair
+
+                targets = rewards + info['GAMMA'] * next_qs * ongoing_flags
+                preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
+                loss = F.smooth_l1_loss(preds, targets)
                 cnt_losses.append(loss)
                 losses[k] = loss.cpu().detach().item()
 
@@ -57,10 +82,6 @@ def train_batch(cnt):
             if param.grad is not None:
                 param.grad.data *=1.0/float(info['N_ENSEMBLE'])
         opt.step()
-        if not cnt%info['TARGET_UPDATE']:
-            print("++++++++++++++++++++++++++++++++++++++++++++++++")
-            print('updating target network at %s'%cnt)
-            target_net.load_state_dict(policy_net.state_dict())
     #board_logger.scalar_summary('batch train time per cnt', cnt, time.time()-st)
     #board_logger.scalar_summary('loss per cnt', cnt, np.mean(losses))
     return np.mean(losses)
@@ -87,7 +108,8 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
         filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
         save_checkpoint(state, filename)
         buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
-        rbuffer.save(buff_filename)
+        print("SKIPPING SAVE OF BUFFER")
+        #rbuffer.save(buff_filename)
         return last_save
     else: return last_save
 
@@ -118,15 +140,19 @@ def run_training_episode(epoch_num, total_steps):
             #vals = policy_net(_Spt)
             #action = np.argmax(vals.cpu().data.numpy(),-1)[0]
         #board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
-        bfa = time.time()
         _S_prime, reward, finished = env.step(action)
         rbuffer.add_experience(next_state=_S_prime[-1], action=action, reward=reward, finished=finished)
-        #board_logger.scalar_summary('time take_step_and_add per step', total_steps, time.time()-bfa)
-        losses.append(train_batch(total_steps))
+        if not total_steps%info['LEARN_EVERY_STEPS']:
+            losses.append(train_batch(total_steps))
+        else:
+            losses.append(0)
+        if (not (total_steps%info['TARGET_UPDATE']) and (total_steps > info['MIN_HISTORY_TO_LEARN'])):
+            print("++++++++++++++++++++++++++++++++++++++++++++++++")
+            print('updating target network at %s'%total_steps)
+            target_net.load_state_dict(policy_net.state_dict())
         _S = _S_prime
         episodic_reward += reward
         total_steps+=1
-        eet = time.time()
     stop = time.time()
     ep_time =  stop - start
 
@@ -163,7 +189,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadpath', default='', help='.pkl model file full path')
-    parser.add_argument('-b', '--buffer_loadpath', default='', help='.npz model file full path')
+    parser.add_argument('-b', '--buffer_loadpath', default='', help='.pkl replay buffer file full path')
     args = parser.parse_args()
     if args.cuda:
         device = 'cuda'
@@ -172,18 +198,21 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/breakout.bin', # gym prefix
+        "GAME":'roms/pong.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'_ROMSBreakout_BT9_LR', # start files with name
+        "NAME":'_d3Pong_BT9', # start files with name
+        "DUELING":True,
+        "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
+        "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000,
-        "ADAM_LEARNING_RATE":0.00001,
+        "ADAM_LEARNING_RATE":0.00025,
         "ADAM_EPSILON":1.5e-4,
-        "RMS_LEARNING_RATE": 0.00001,
+        "RMS_LEARNING_RATE": 0.0001,
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
         "RMS_EPSILON":0.00001,
@@ -258,14 +287,15 @@ if __name__ == '__main__':
     action_space = np.arange(env.num_actions)
     heads = list(range(info['N_ENSEMBLE']))
     seed_everything(info["SEED"])
+
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
-                                      num_channels=info['HISTORY_SIZE']).to(info['DEVICE'])
+                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
     target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
-                                      num_channels=info['HISTORY_SIZE']).to(info['DEVICE'])
+                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
 
 
     opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'], eps=info['ADAM_EPSILON'])

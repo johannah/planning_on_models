@@ -29,8 +29,9 @@ class Environment(object):
                  no_op_start=30,
                  rand_seed=393,
                  dead_as_eoe=True,
-                 max_steps=18000):
-        self.max_steps = 18000
+                 max_steps=18000,
+                 autofire=False):
+        self.max_steps = max_steps
         self.random_state = np.random.RandomState(rand_seed+15)
         self.ale = self._init_ale(rand_seed, rom_file)
         # normally (160, 210)
