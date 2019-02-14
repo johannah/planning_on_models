@@ -32,14 +32,6 @@ def train_batch(cnt):
         states, actions, rewards, next_states, ongoing_flags, masks, _ = samples
 
         opt.zero_grad()
-        #next_q_vals = self.target_q_values(next_states)
-        #if self.double_dqn:
-        #    next_actions = self.online_q_values(next_states).max(1, True)[1]
-        #    next_actions = utils.one_hot(next_actions, self.num_actions)
-        #    next_qs = (next_q_vals * next_actions).sum(1)
-        #else:
-        #    next_qs = next_q_vals.max(1)[0] # max returns a pair
-        #targets = rewards + gamma * next_qs * non_end
         q_policy_vals = policy_net(states, None)
         #next_q_state_values = target_net(next_states, None)
         next_q_target_vals = target_net(next_states, None)
@@ -54,8 +46,6 @@ def train_batch(cnt):
                 if info['DOUBLE_DQN']:
                     next_actions = next_q_policy_vals[k].data.max(1, True)[1]
                     next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
-                    #next_actions = one_hot(next_actions, env.num_actions)
-                    #next_qs = (next_q_vals * next_actions).sum(1)
                 else:
                     next_qs = next_q_vals.max(1)[0] # max returns a pair
 
