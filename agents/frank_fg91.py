@@ -25,7 +25,7 @@ import torch.optim as optim
 import datetime
 import time
 from replay_buffer import ReplayBuffer
-from dqn_model import EnsembleNet
+from dqn_model import EnsembleNet, weights_init
 from dqn_utils import seed_everything, write_info_file
 #from env import Environment
 from glob import glob
@@ -202,6 +202,104 @@ class ActionGetter:
         if np.random.rand(1) < eps:
             return np.random.randint(0, self.n_actions)
         return session.run(main_dqn.best_action, feed_dict={main_dqn.input:[state]})[0]
+
+class ActionGetter:
+    """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
+    def __init__(self, n_actions, eps_initial=1, eps_final=0.1, eps_final_frame=0.01,
+                 eps_evaluation=0.0, eps_annealing_frames=100000,
+                 replay_memory_start_size=50000, max_frames=25000000, random_seed=122):
+        """
+        Args:
+            n_actions: Integer, number of possible actions
+            eps_initial: Float, Exploration probability for the first
+                replay_memory_start_size frames
+            eps_final: Float, Exploration probability after
+                replay_memory_start_size + eps_annealing_frames frames
+            eps_final_frame: Float, Exploration probability after max_frames frames
+            eps_evaluation: Float, Exploration probability during evaluation
+            eps_annealing_frames: Int, Number of frames over which the
+                exploration probabilty is annealed from eps_initial to eps_final
+            replay_memory_start_size: Integer, Number of frames during
+                which the agent only explores
+            max_frames: Integer, Total number of frames shown to the agent
+        """
+        self.n_actions = n_actions
+        self.eps_initial = eps_initial
+        self.eps_final = eps_final
+        self.eps_final_frame = eps_final_frame
+        self.eps_evaluation = eps_evaluation
+        self.eps_annealing_frames = eps_annealing_frames
+        self.replay_memory_start_size = replay_memory_start_size
+        self.max_frames = max_frames
+        self.random_state = np.random.RandomState(random_seed)
+
+        # Slopes and intercepts for exploration decrease
+        self.slope = -(self.eps_initial - self.eps_final)/self.eps_annealing_frames
+        self.intercept = self.eps_initial - self.slope*self.replay_memory_start_size
+        self.slope_2 = -(self.eps_final - self.eps_final_frame)/(self.max_frames - self.eps_annealing_frames - self.replay_memory_start_size)
+        self.intercept_2 = self.eps_final_frame - self.slope_2*self.max_frames
+
+    def pt_get_action(self, frame_number, state, active_head=None, evaluation=False):
+        """
+        Args:
+            session: A tensorflow session object
+            frame_number: Integer, number of the current frame
+            state: A (84, 84, 4) sequence of frames of an Atari game in grayscale
+            main_dqn: A DQN object
+            evaluation: A boolean saying whether the agent is being evaluated
+        Returns:
+            An integer between 0 and n_actions - 1 determining the action the agent perfoms next
+        """
+        if evaluation:
+            eps = self.eps_evaluation
+        elif frame_number < self.replay_memory_start_size:
+            eps = self.eps_initial
+        elif frame_number >= self.replay_memory_start_size and frame_number < self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope*frame_number + self.intercept
+        elif frame_number >= self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope_2*frame_number + self.intercept_2
+
+        if self.random_state.rand(1) < eps:
+            return self.random_state.randint(0, self.n_actions)
+
+        else:
+            if active_head is not None:
+                state = torch.transpose(torch.Tensor(state),2,0)[None,:].to(info['DEVICE'])
+                vals = policy_net(state, active_head)
+                action = torch.argmax(vals, dim=1).item()
+                return action
+            else:
+                # vote
+                state = torch.transpose(torch.Tensor(state),2,0)[None,:].to(info['DEVICE'])
+                vals = policy_net(state, None)
+                acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
+                action = most_common(acts)
+                return action
+
+    def get_action(self, session, frame_number, state, main_dqn, evaluation=False):
+        """
+        Args:
+            session: A tensorflow session object
+            frame_number: Integer, number of the current frame
+            state: A (84, 84, 4) sequence of frames of an Atari game in grayscale
+            main_dqn: A DQN object
+            evaluation: A boolean saying whether the agent is being evaluated
+        Returns:
+            An integer between 0 and n_actions - 1 determining the action the agent perfoms next
+        """
+        if evaluation:
+            eps = self.eps_evaluation
+        elif frame_number < self.replay_memory_start_size:
+            eps = self.eps_initial
+        elif frame_number >= self.replay_memory_start_size and frame_number < self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope*frame_number + self.intercept
+        elif frame_number >= self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope_2*frame_number + self.intercept_2
+
+        if self.random_state.rand(1) < eps:
+            return self.random_state.randint(0, self.n_actions)
+        return session.run(main_dqn.best_action, feed_dict={main_dqn.input:[state]})[0]
+
 
 
 #def handle_checkpoint(last_save, cnt, epoch, last_mean):
@@ -456,9 +554,10 @@ def generate_gif(frame_number, frames_for_gif, reward, path):
                                      preserve_range=True, order=0).astype(np.uint8)
 
 
-    gif_fname = os.path.join(path, "ATARI_frame_%05d_reward_%04d.gif"%(frame_number, int(reward)))
-    print("WRITING GIF", gif_fname)
-    imageio.mimsave(gif_fname, frames_for_gif, duration=1/30)
+    if reward > 5:
+        gif_fname = os.path.join(path, "ATARI_frame_%010d_reward_%04d.gif"%(frame_number, int(reward)))
+        print("WRITING GIF", gif_fname)
+        imageio.mimsave(gif_fname, frames_for_gif, duration=1/30)
     #imageio.mimsave('{path}{"ATARI_frame_{0}_reward_{1}.gif".format(frame_number, reward)}',
     #                frames_for_gif, duration=1/30)
 
@@ -552,10 +651,7 @@ def train():
                 active_head = heads[0]
                 epoch_num += 1
                 for totf in range(MAX_EPISODE_LENGTH):
-                    action = action_getter.get_action(sess, frame_number, atari.state, MAIN_DQN)
-                    #state = torch.transpose(torch.Tensor(atari.state),2,0)[None,:].to(info['DEVICE'])
-                    #vals = policy_net(state, active_head)
-                    #action = torch.argmax(vals, dim=1).item()
+                    action = action_getter.pt_get_action(frame_number, state=atari.state, active_head=active_head)
                     processed_new_frame, reward, terminal, terminal_life_lost, _ = atari.step(sess, action)
                     frame_number += 1
                     epoch_frame += 1
@@ -569,9 +665,9 @@ def train():
 
                     if frame_number % info['LEARN_EVERY_STEPS'] == 0 and frame_number > info['MIN_HISTORY_TO_LEARN']:
                         _states, _actions, _rewards, _next_states, _terminal_flags = my_replay_memory.get_minibatch()
-                        tfloss = learn(sess, MAIN_DQN, TARGET_DQN, _states, _actions, _rewards, _next_states, _terminal_flags)
+                        #tfloss = learn(sess, MAIN_DQN, TARGET_DQN, _states, _actions, _rewards, _next_states, _terminal_flags)
                         ptloss = ptlearn(sess, _states, _actions, _rewards, _next_states, _terminal_flags)
-                        tfloss_list.append(tfloss)
+                        #tfloss_list.append(tfloss)
                         ptloss_list.append(ptloss)
                     if frame_number % NETW_UPDATE_FREQ == 0 and frame_number >  info['MIN_HISTORY_TO_LEARN']:
                         #network_updater.update_networks(sess)
@@ -613,9 +709,15 @@ def train():
                     # Scalar summaries for tensorboard
                     if frame_number > REPLAY_MEMORY_START_SIZE:
                         summ = sess.run(PERFORMANCE_SUMMARIES,
-                                        feed_dict={TFLOSS_PH:np.mean(tfloss_list),
+                                        feed_dict={
                                                    PTLOSS_PH:np.mean(ptloss_list),
                                                    REWARD_PH:np.mean(rewards[-100:])})
+
+
+                        #summ = sess.run(PERFORMANCE_SUMMARIES,
+                        #                feed_dict={TFLOSS_PH:np.mean(tfloss_list),
+                        #                           PTLOSS_PH:np.mean(ptloss_list),
+                        #                           REWARD_PH:np.mean(rewards[-100:])})
 
                         SUMM_WRITER.add_summary(summ, frame_number)
                         tfloss_list = []
@@ -646,18 +748,10 @@ def train():
                 # Fire (action 1), when a life was lost or the game just started,
                 # so that the agent does not stand around doing nothing. When playing
                 # with other environments, you might want to change this...
-                if terminal_life_lost:
-                    action = 1
-                else:
-                    state = torch.transpose(torch.Tensor(atari.state),2,0)[None,:].to(info['DEVICE'])
-                    vals = policy_net(state, None)
-                    acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
-                    action = most_common(acts)
-                    if not evaluate_frame_number % 100:
-                        print("EVAL")
-                        print(acts)
-                        print(vals)
-                        print(action)
+                action = 1 if terminal_life_lost else action_getter.pt_get_action(frame_number,
+                                                                               atari.state,
+                                                                                 active_head=None,
+                                                                               evaluation=True)
 
                 #action = 1 if terminal_life_lost else action_getter.get_action(sess, frame_number,
                 #                                                               atari.state,
@@ -708,7 +802,7 @@ if __name__ == '__main__':
         #"GAME":'roms/pong.bin', # gym prefix
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'_FFRANKBreakout_BT1', # start files with name
+        "NAME":'_FRANKBreakout_9PTA', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":1,
@@ -717,7 +811,7 @@ if __name__ == '__main__':
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":500000,
+        "CHECKPOINT_EVERY_STEPS":200000,
         "ADAM_LEARNING_RATE":0.00001 ,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.0001,
@@ -859,6 +953,7 @@ if __name__ == '__main__':
                                       n_actions=atari.env.action_space.n,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+    policy_net.apply(weights_init)
     target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=atari.env.action_space.n,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
@@ -917,8 +1012,8 @@ if __name__ == '__main__':
 
     # Scalar summaries for tensorboard: loss, average reward and evaluation score
     with tf.name_scope('Performance'):
-        TFLOSS_PH = tf.placeholder(tf.float32, shape=None, name='tfloss_summary')
-        TFLOSS_SUMMARY = tf.summary.scalar('tfloss', TFLOSS_PH)
+        #TFLOSS_PH = tf.placeholder(tf.float32, shape=None, name='tfloss_summary')
+        #TFLOSS_SUMMARY = tf.summary.scalar('tfloss', TFLOSS_PH)
         PTLOSS_PH = tf.placeholder(tf.float32, shape=None, name='ptloss_summary')
         PTLOSS_SUMMARY = tf.summary.scalar('ptloss', PTLOSS_PH)
         REWARD_PH = tf.placeholder(tf.float32, shape=None, name='reward_summary')
@@ -926,7 +1021,8 @@ if __name__ == '__main__':
         EVAL_SCORE_PH = tf.placeholder(tf.float32, shape=None, name='evaluation_summary')
         EVAL_SCORE_SUMMARY = tf.summary.scalar('evaluation_score', EVAL_SCORE_PH)
 
-    PERFORMANCE_SUMMARIES = tf.summary.merge([TFLOSS_SUMMARY, PTLOSS_SUMMARY, REWARD_SUMMARY])
+    PERFORMANCE_SUMMARIES = tf.summary.merge([PTLOSS_SUMMARY, REWARD_SUMMARY])
+    #PERFORMANCE_SUMMARIES = tf.summary.merge([TFLOSS_SUMMARY, PTLOSS_SUMMARY, REWARD_SUMMARY])
 
     # Histogramm summaries for tensorboard: parameters
     with tf.name_scope('Parameters'):
@@ -950,30 +1046,3 @@ if __name__ == '__main__':
         elif ENV_NAME == 'PongDeterministic-v4':
             trained_path = "trained/pong/"
             save_file = "my_model-3217770.meta"
-
-#        action_getter = ActionGetter(atari.env.action_space.n,
-#                                     replay_memory_start_size=REPLAY_MEMORY_START_SIZE,
-#                                     max_frames=MAX_FRAMES)
-#
-#        with tf.Session() as sess:
-#            saver = tf.train.import_meta_graph(trained_path+save_file)
-#            saver.restore(sess,tf.train.latest_checkpoint(trained_path))
-#            frames_for_gif = []
-#            terminal_live_lost = atari.reset(sess, evaluation = True)
-#            episode_reward_sum = 0
-#            while True:
-#                atari.env.render()
-#                action = 1 if terminal_live_lost else action_getter.get_action(sess, 0, atari.state,
-#                                                                               MAIN_DQN,
-#                                                                               evaluation = True)
-#                processed_new_frame, reward, terminal, terminal_live_lost, new_frame = atari.step(sess, action)
-#                episode_reward_sum += reward
-#                frames_for_gif.append(new_frame)
-#                if terminal == True:
-#                    break
-#
-#            atari.env.close()
-#            print("The total reward is {}".format(episode_reward_sum))
-#            print("Creating gif...")
-#            generate_gif(0, frames_for_gif, episode_reward_sum, gif_path)
-#            print("Gif created, check the folder {}".format(gif_path))
