@@ -42,7 +42,6 @@ what is happening to the gradients in multple head situation. how should we
 distinguish the multiple head effect from the effect of episilon greedy ?
 Check the rainbow way of calculating loss
 """
-
 class ProcessFrame:
     """Resizes and converts RGB Atari frames to grayscale"""
     def __init__(self, frame_height=84, frame_width=84):
@@ -69,86 +68,6 @@ class ProcessFrame:
             A processed (84, 84, 1) frame in grayscale
         """
         return session.run(self.processed, feed_dict={self.frame:frame})
-
-class DQN:
-    """Implements a Deep Q Network"""
-
-    # pylint: disable=too-many-instance-attributes
-
-    def __init__(self, n_actions, hidden=1024, learning_rate=0.00001,
-                 frame_height=84, frame_width=84, agent_history_length=4):
-        """
-        Args:
-            n_actions: Integer, number of possible actions
-            hidden: Integer, Number of filters in the final convolutional layer.
-                    This is different from the DeepMind implementation
-            learning_rate: Float, Learning rate for the Adam optimizer
-            frame_height: Integer, Height of a frame of an Atari game
-            frame_width: Integer, Width of a frame of an Atari game
-            agent_history_length: Integer, Number of frames stacked together to create a state
-        """
-        self.n_actions = n_actions
-        self.hidden = hidden
-        self.learning_rate = learning_rate
-        self.frame_height = frame_height
-        self.frame_width = frame_width
-        self.agent_history_length = agent_history_length
-
-        self.input = tf.placeholder(shape=[None, self.frame_height,
-                                           self.frame_width, self.agent_history_length],
-                                    dtype=tf.float32)
-        # Normalizing the input
-        self.inputscaled = self.input/255
-
-        # Convolutional layers
-        self.conv1 = tf.layers.conv2d(
-            inputs=self.inputscaled, filters=32, kernel_size=[8, 8], strides=4,
-            kernel_initializer=tf.variance_scaling_initializer(scale=2),
-            padding="valid", activation=tf.nn.relu, use_bias=False, name='conv1')
-        self.conv2 = tf.layers.conv2d(
-            inputs=self.conv1, filters=64, kernel_size=[4, 4], strides=2,
-            kernel_initializer=tf.variance_scaling_initializer(scale=2),
-            padding="valid", activation=tf.nn.relu, use_bias=False, name='conv2')
-        self.conv3 = tf.layers.conv2d(
-            inputs=self.conv2, filters=64, kernel_size=[3, 3], strides=1,
-            kernel_initializer=tf.variance_scaling_initializer(scale=2),
-            padding="valid", activation=tf.nn.relu, use_bias=False, name='conv3')
-        self.conv4 = tf.layers.conv2d(
-            inputs=self.conv3, filters=hidden, kernel_size=[7, 7], strides=1,
-            kernel_initializer=tf.variance_scaling_initializer(scale=2),
-            padding="valid", activation=tf.nn.relu, use_bias=False, name='conv4')
-
-        # Splitting into value and advantage stream
-        self.valuestream, self.advantagestream = tf.split(self.conv4, 2, 3)
-        self.valuestream = tf.layers.flatten(self.valuestream)
-        self.advantagestream = tf.layers.flatten(self.advantagestream)
-        self.advantage = tf.layers.dense(
-            inputs=self.advantagestream, units=self.n_actions,
-            kernel_initializer=tf.variance_scaling_initializer(scale=2), name="advantage")
-        self.value = tf.layers.dense(
-            inputs=self.valuestream, units=1,
-            kernel_initializer=tf.variance_scaling_initializer(scale=2), name='value')
-
-        # Combining value and advantage into Q-values as described above
-        #self.q_values = self.value + tf.subtract(self.advantage, tf.reduce_mean(self.advantage, axis=1, keepdims=True))
-        self.q_values = self.value + tf.subtract(self.advantage, tf.reduce_mean(self.advantage, axis=1, keep_dims=True))
-        self.best_action = tf.argmax(self.q_values, 1)
-
-        # The next lines perform the parameter update. This will be explained in detail later.
-
-        # targetQ according to Bellman equation:
-        # Q = r + gamma*max Q', calculated in the function learn()
-        self.target_q = tf.placeholder(shape=[None], dtype=tf.float32)
-        # Action that was performed
-        self.action = tf.placeholder(shape=[None], dtype=tf.int32)
-        # Q value of the action that was performed
-        self.Q = tf.reduce_sum(tf.multiply(self.q_values, tf.one_hot(self.action, self.n_actions, dtype=tf.float32)), axis=1)
-
-        # Parameter updates
-        self.loss = tf.reduce_mean(tf.losses.huber_loss(labels=self.target_q, predictions=self.Q))
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-        self.update = self.optimizer.minimize(self.loss)
-
 
 class ActionGetter:
     """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
@@ -246,36 +165,6 @@ class ActionGetter:
         if self.random_state.rand(1) < eps:
             return self.random_state.randint(0, self.n_actions)
         return session.run(main_dqn.best_action, feed_dict={main_dqn.input:[state]})[0]
-
-
-
-#def handle_checkpoint(last_save, cnt, epoch, last_mean):
-#    if (cnt-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
-#        print("checkpoint")
-#        last_save = cnt
-#        state = {'info':info,
-#                 'optimizer':opt.state_dict(),
-#                 'cnt':cnt,
-#                 'epoch':epoch,
-#                 'policy_net_state_dict':policy_net.state_dict(),
-#                 'target_net_state_dict':target_net.state_dict(),
-#                 'last_mean':last_mean,
-#                 'steps':steps,
-#                 'episode_step':episode_step,
-#                 'episode_head':episode_head,
-#                 'episode_loss':episode_loss,
-#                 'episode_reward':episode_reward,
-#                 'episode_times':episode_times,
-#                 'avg_rewards':avg_rewards,
-#                 }
-#        filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
-#        save_checkpoint(state, filename)
-#        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer.pkl"%cnt)
-#        print("SKIPPING SAVE OF BUFFER")
-#        #rbuffer.save(buff_filename)
-#        return last_save
-#    else: return last_save
-
 
 class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
@@ -457,7 +346,7 @@ def learn(session, main_dqn, target_dqn, states, actions, rewards, new_states, t
     #print('loss', loss)
     return loss
 
-def ptlearn(session, states, actions, rewards, next_states, terminal_flags):
+def ptlearn(states, actions, rewards, next_states, terminal_flags):
     """
     Args:
         session: A tensorflow sesson object
@@ -472,9 +361,6 @@ def ptlearn(session, states, actions, rewards, next_states, terminal_flags):
     target Q-value that the prediction Q-value is regressed to.
     Then a parameter update is performed on the main DQN.
     """
-    # Draw a minibatch from the replay memory
-    #states, actions, rewards, next_states, terminal_flags = replay_memory.get_minibatch()
-    #ongoing_flags = [not x for x in terminal_flags]
     states = torch.Tensor(states).transpose(1,3).to(info['DEVICE'])
     next_states = torch.Tensor(next_states).transpose(1,3).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
@@ -501,60 +387,84 @@ def ptlearn(session, states, actions, rewards, next_states, terminal_flags):
             if info['DOUBLE_DQN']:
                 next_actions = next_q_policy_vals[k].data.max(1, True)[1]
                 next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
-                #next_actions = one_hot(next_actions, env.num_actions)
-                #next_qs = (next_q_vals * next_actions).sum(1)
             else:
                 next_qs = next_q_vals.max(1)[0] # max returns a pair
 
-            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
-            #print('pt target', targets)
-            #print('pt next qs', next_qs)
             preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
-            loss =F.smooth_l1_loss(preds, targets, reduction='mean')
-
+            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
+            # clip loss from original lua code - unstable, maybe i am doing
+            # something try
+            # https://stackoverflow.com/questions/36462962/loss-clipping-in-tensor-flow-on-deepminds-dqn
+            #loss = torch.clamp(targets-preds, -1, 1)
+            #loss = torch.mean(loss**2)
+            loss = F.smooth_l1_loss(preds, targets, reduction='mean')
             cnt_losses.append(loss)
+            #loss.backward(retain_graph=True)
             losses[k] = loss.cpu().detach().item()
 
-    all_loss = torch.stack(cnt_losses).sum()
-    all_loss.backward()
-    #for param in policy_net.core_net.parameters():
-    #    if param.grad is not None:
-    #        param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+    loss = sum(cnt_losses)/info['N_ENSEMBLE']
+    loss.backward()
+    # with one head - at beginning, loss is 0.114
+    """"
+    # WITH one head in a model that seems to work -
+    print(np.sum(losses), core_sum, heads_sum)
+    0.15649263560771942 tensor(-53.9158) tensor(-135.9045)
+    0.07511568069458008 tensor(49.5142) tensor(-44.2417)
+    0.063167504966259 tensor(-59.0345) tensor(-99.5942)
+    0.03253338485956192 tensor(89.4640) tensor(-28.0189)
+    0.04259048029780388 tensor(68.2152) tensor(-2.7756)
+    0.04358198121190071 tensor(397.2363) tensor(153.4211)
+    0.04792924225330353 tensor(327.2467) tensor(132.6360)
+    """
+    """
+     with 9 heads and no k scaling
+    print(np.sum(losses), core_sum, heads_sum)
+    2.2094377912580967 tensor(2607.5942) tensor(-273.4381)
+    1.598130401223898 tensor(1483.8365) tensor(-466.0103)
+    1.2488596090115607 tensor(731.1756) tensor(-450.2681)
+    0.77371034771204 tensor(195.8453) tensor(-720.5662)
+    0.7554639400914311 tensor(1115.9290) tensor(-190.6120)
+    0.7469962313771248 tensor(1518.5344) tensor(288.0397)
+    0.7440020181238651 tensor(1687.2618) tensor(826.8621)
+    1.1307623535394669 tensor(3049.7002) tensor(2555.6411)
+    1.331430234014988 tensor(3869.8418) tensor(3364.0515)
+    1.6879942370578647 tensor(4534.9482) tensor(4111.5322)
+    """
+    """
+
+     with 9 heads and 1/k scaling of grads
+    print(np.sum(losses), core_sum, heads_sum, core_k_sum)
+    2.6111491434276104 tensor(2617.0588) tensor(-419.1773) tensor(290.7843)
+    1.6717215571552515 tensor(1495.3574) tensor(-692.1512) tensor(166.1508)
+    1.2669921685010195 tensor(143.8809) tensor(-1116.1006) tensor(15.9868)
+    0.6811386086046696 tensor(63.4201) tensor(-776.9857) tensor(7.0467)
+    0.7174982316792011 tensor(247.4868) tensor(-515.8655) tensor(27.4985)
+    0.46023492119275033 tensor(1212.9198) tensor(87.3714) tensor(134.7689)
+    0.63468979857862 tensor(1709.7010) tensor(830.2244) tensor(189.9668)
+    1.2908978443592787 tensor(3511.1318) tensor(2659.7249) tensor(390.1258)
+    1.4473802708089352 tensor(4192.8340) tensor(3365.2498) tensor(465.8704)
+    """
+    core_sum = 0
+    core_k_sum = 0
+    heads_sum = 0
+
+    for param in policy_net.core_net.parameters():
+        if param.grad is not None:
+            core_sum += param.grad.data.sum()
+            # divide grads in core
+            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+            core_k_sum += param.grad.data.sum()
+    for head_net in policy_net.net_list:
+        for param in head_net.parameters():
+            if param.grad is not None:
+                #param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+                heads_sum += param.grad.data.sum()
     #nn.utils.clip_grad_norm_(policy_net.parameters(), 1)
+    #print(np.sum(losses), core_sum, heads_sum, core_k_sum)
     opt.step()
     #board_logger.scalar_summary('batch train time per cnt', cnt, time.time()-st)
     #board_logger.scalar_summary('loss per cnt', cnt, np.mean(losses))
     return np.mean(losses)
-
-class TargetNetworkUpdater:
-    """Copies the parameters of the main DQN to the target DQN"""
-    def __init__(self, main_dqn_vars, target_dqn_vars):
-        """
-        Args:
-            main_dqn_vars: A list of tensorflow variables belonging to the main DQN network
-            target_dqn_vars: A list of tensorflow variables belonging to the target DQN network
-        """
-        self.main_dqn_vars = main_dqn_vars
-        self.target_dqn_vars = target_dqn_vars
-
-    def _update_target_vars(self):
-        update_ops = []
-        for i, var in enumerate(self.main_dqn_vars):
-            copy_op = self.target_dqn_vars[i].assign(var.value())
-            update_ops.append(copy_op)
-        return update_ops
-
-    def update_networks(self, sess):
-        """
-        Args:
-            sess: A Tensorflow session object
-        Assigns the values of the parameters of the main network to the
-        parameters of the target network
-        """
-        update_ops = self._update_target_vars()
-        for copy_op in update_ops:
-            sess.run(copy_op)
-
 
 def generate_gif(frame_number, frames_for_gif, reward, path):
     """
@@ -640,7 +550,7 @@ def train():
                                  replay_memory_start_size=REPLAY_MEMORY_START_SIZE,
                                  max_frames=MAX_FRAMES, eps_annealing_frames=info['EPSILON_DECAY'])
 
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.1)
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.05)
     #sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         #sess.run(init)
@@ -680,7 +590,7 @@ def train():
                     if frame_number % info['LEARN_EVERY_STEPS'] == 0 and frame_number > info['MIN_HISTORY_TO_LEARN']:
                         _states, _actions, _rewards, _next_states, _terminal_flags = my_replay_memory.get_minibatch()
                         #tfloss = learn(sess, MAIN_DQN, TARGET_DQN, _states, _actions, _rewards, _next_states, _terminal_flags)
-                        ptloss = ptlearn(sess, _states, _actions, _rewards, _next_states, _terminal_flags)
+                        ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags)
                         #tfloss_list.append(tfloss)
                         ptloss_list.append(ptloss)
                     if frame_number % NETW_UPDATE_FREQ == 0 and frame_number >  info['MIN_HISTORY_TO_LEARN']:
@@ -815,14 +725,15 @@ if __name__ == '__main__':
         #"GAME":'roms/pong.bin', # gym prefix
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'FRANKBreakout_1PTA_init', # start files with name
+        "NAME":'DEBUGFRANKBreakout_9PTA_init', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
-        "N_ENSEMBLE":1,
+        "N_ENSEMBLE":9,
         "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
-        "MIN_HISTORY_TO_LEARN":50000, # in environment frames
+        #"MIN_HISTORY_TO_LEARN":50000, # in environment frames
+        "MIN_HISTORY_TO_LEARN":500, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":200000,
         "ADAM_LEARNING_RATE":0.00001 ,
@@ -970,7 +881,7 @@ if __name__ == '__main__':
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
 
-    policy_net.apply(weights_init)
+   # policy_net.apply(weights_init)
     target_net.load_state_dict(policy_net.state_dict())
 
     opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])

@@ -36,12 +36,14 @@ class CoreNet(nn.Module):
         # TODO - should we have this init during PRIOR code?
         self.conv2 = nn.Conv2d(32, 64, 4, 2)
         self.conv3 = nn.Conv2d(64, 64, 3, 1)
+        self.conv1.apply(weights_init)
+        self.conv2.apply(weights_init)
+        self.conv3.apply(weights_init)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        #embed
         # size after conv3
         reshape = 64*7*7
         x = x.view(-1, reshape)
@@ -55,9 +57,9 @@ class DuelingHeadNet(nn.Module):
         self.fc1 = nn.Linear(mult, self.split_size*2)
         self.value = nn.Linear(self.split_size, 1)
         self.advantage = nn.Linear(self.split_size, n_actions)
-        #self.fc1.bias.data.fill_(0.)
-        #self.value.bias.data.fill_(0.)
-        #self.advantage.bias.data.fill_(0.)
+        self.fc1.apply(weights_init)
+        self.value.apply(weights_init)
+        self.advantage.apply(weights_init)
 
     def forward(self, x):
         #x1,x2 = torch.split(F.relu(self.fc1(x)), 2, dim=1)
@@ -75,6 +77,8 @@ class HeadNet(nn.Module):
         mult = 64*7*7
         self.fc1 = nn.Linear(mult, 512)
         self.fc2 = nn.Linear(512, n_actions)
+        self.fc1.apply(weights_init)
+        self.fc2.apply(weights_init)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
