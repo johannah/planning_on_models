@@ -34,6 +34,15 @@ from lstm_utils import plot_dict_losses
 import config
 from ae_utils import save_checkpoint
 
+
+"""
+TODO -
+does our network perform well when there is only one head? if this is the case,
+what is happening to the gradients in multple head situation. how should we
+distinguish the multiple head effect from the effect of episilon greedy ?
+Check the rainbow way of calculating loss
+"""
+
 class ProcessFrame:
     """Resizes and converts RGB Atari frames to grayscale"""
     def __init__(self, frame_height=84, frame_width=84):
@@ -354,6 +363,74 @@ class ReplayMemory:
 
         return np.transpose(self.states, axes=(0, 2, 3, 1)), self.actions[self.indices], self.rewards[self.indices], np.transpose(self.new_states, axes=(0, 2, 3, 1)), self.terminal_flags[self.indices]
 
+###############################################
+# from rainbow code
+
+def assert_eq(real, expected):
+    assert real == expected, '%s (true) vs %s (expected)' % (real, expected)
+
+def one_hot(x, n):
+    assert x.dim() == 2
+    one_hot_x = torch.zeros(x.size(0), n).cuda()
+    one_hot_x.scatter_(1, x, 1)
+    return one_hot_x
+
+def target_q_values(states):
+    q_vals = target_net(torch.Variable(states, volatile=True), None).data
+    return q_vals
+
+def online_q_values(states):
+    q_vals = policy_net(torch.Variable(states, volatile=True), None).data
+    return q_vals
+
+def compute_targets(rewards, next_states, non_ends, gamma):
+    """Compute batch of targets for dqn
+    params:
+        rewards: Tensor [batch]
+        next_states: Tensor [batch, channel, w, h]
+        non_ends: Tensor [batch]
+        gamma: float
+    """
+    next_q_vals = target_q_values(next_states)
+    if info['DOUBLE_DQN']:
+        next_actions = online_q_values(next_states).max(1, True)[1]
+        next_actions = one_hot(next_actions, atari.env.action_space.n)
+        next_qs = (next_q_vals * next_actions).sum(1)
+    else:
+        next_qs = next_q_vals.max(1)[0] # max returns a pair
+
+    targets = rewards + gamma * next_qs * non_ends
+    return targets
+
+def rainbow_loss(states, actions, targets):
+    """
+    params:
+        states: Variable [batch, channel, w, h]
+        actions: Variable [batch, num_actions] one hot encoding
+        targets: Variable [batch]
+    """
+    assert_eq(actions.shape[1], atari.env.action_space.n)
+    qs = policy_net(states)
+    preds = (qs * actions).sum(1)
+    err = nn.functional.smooth_l1_loss(preds, targets)
+    return err
+
+#################################
+
+def rainbow_learn(session, states, actions, rewards, next_states, terminal_flags):
+    opt.zero_grad()
+    states = torch.Tensor(states).transpose(1,3).to(info['DEVICE'])
+    next_states = torch.Tensor(next_states).transpose(1,3).to(info['DEVICE'])
+    rewards = torch.Tensor(rewards).to(info['DEVICE'])
+    actions = torch.LongTensor(actions).to(info['DEVICE'])
+    ongoing_flags = [not x for x in terminal_flags]
+    ongoing_flags = torch.Tensor(ongoing_flags.astype(np.int)).to(info['DEVICE'])
+    targets = compute_targets(rewards, next_states, ongoing_flags, info['GAMMA'])
+    loss = rainbow_loss(states, actions, targets)
+    loss.backward()
+    opt.step()
+
+
 def learn(session, main_dqn, target_dqn, states, actions, rewards, new_states, terminal_flags):
     # Draw a minibatch from the replay memory
     #states, actions, rewards, new_states, terminal_flags = replay_memory.get_minibatch()
@@ -501,13 +578,14 @@ def generate_gif(frame_number, frames_for_gif, reward, path):
 
 class Atari:
     """Wrapper for the environment provided by gym"""
-    def __init__(self, envName, no_op_steps=10, agent_history_length=4):
+    def __init__(self, envName, no_op_steps=10, agent_history_length=4, random_seed=293):
         self.env = gym.make(envName)
         self.frame_processor = ProcessFrame()
         self.state = None
         self.last_lives = 0
         self.no_op_steps = no_op_steps
         self.agent_history_length = agent_history_length
+        self.random_seed = np.random.RandomState(random_seed)
 
     def reset(self, sess, evaluation=False):
         """
@@ -522,7 +600,7 @@ class Atari:
         terminal_life_lost = True # Set to true so that the agent starts
                                   # with a 'FIRE' action when evaluating
         if evaluation:
-            for _ in range(random.randint(1, self.no_op_steps)):
+            for _ in range(self.random_seed.randint(1, self.no_op_steps)):
                 frame, _, _, _ = self.env.step(1) # Action 'Fire'
         processed_frame = self.frame_processor.process(sess, frame)
         self.state = np.repeat(processed_frame, self.agent_history_length, axis=2)
