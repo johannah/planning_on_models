@@ -145,13 +145,13 @@ class ReplayBuffer(object):
             _actions = torch.LongTensor(_actions).to(self.device)
             # which type should finished be ?
             _ongoings = torch.FloatTensor(_ongoings).to(self.device)
-        return_vals = [_states, _actions, _rewards, _next_states, _ongoings]
+        return_vals = [_states, _actions, _rewards, _next_states, _ongoings, '']
 
         if self.num_masks > 1:
             _masks = np.array([self.masks[i] for i in batch_indexes])
             if pytorchify:
                 _masks = torch.FloatTensor(_masks).to(self.device)
-            return_vals.append(_masks)
+            return_vals[-1] = _masks
         return_vals.append(batch_indexes)
         return return_vals
 

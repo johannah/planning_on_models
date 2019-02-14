@@ -965,13 +965,13 @@ if __name__ == '__main__':
                                       n_actions=atari.env.action_space.n,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
-    policy_net.apply(weights_init)
     target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=atari.env.action_space.n,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
-    target_net.load_state_dict(policy_net.state_dict())
 
+    policy_net.apply(weights_init)
+    target_net.load_state_dict(policy_net.state_dict())
 
     opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
 

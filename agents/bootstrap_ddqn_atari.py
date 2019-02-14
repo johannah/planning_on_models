@@ -12,7 +12,7 @@ import torch.optim as optim
 import datetime
 import time
 from replay_buffer import ReplayBuffer
-from dqn_model import EnsembleNet
+from dqn_model import EnsembleNet, weights_init
 from dqn_utils import seed_everything, write_info_file
 from env import Environment
 from glob import glob
@@ -96,22 +96,19 @@ def handle_checkpoint(last_save, cnt, epoch, last_mean):
 def run_training_episode(epoch_num, total_steps):
     finished = False
     start = time.time()
-    episodic_losses = []
     start_steps = total_steps
     episodic_reward = 0.0
     _S = env.reset()
     rbuffer.add_init_state(_S)
-    episode_actions = []
     policy_net.train()
     random_state.shuffle(heads)
     active_head = heads[0]
     losses = []
     while not finished:
-        est = time.time()
-        with torch.no_grad():
-            _Spt = torch.Tensor(_S[None]).to(info['DEVICE'])
-            vals = policy_net(_Spt, active_head)
-            action = torch.argmax(vals, dim=1).item()
+        #with torch.no_grad():
+            #_Spt = torch.Tensor(_S[None]).to(info['DEVICE'])
+            #vals = policy_net(_Spt, active_head)
+            #action = torch.argmax(vals, dim=1).item()
             ## always do this calculation - as it is used for debugging
             #vals = policy_net(_Spt, None)
             #acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
@@ -119,6 +116,7 @@ def run_training_episode(epoch_num, total_steps):
             #vals = policy_net(_Spt)
             #action = np.argmax(vals.cpu().data.numpy(),-1)[0]
         #board_logger.scalar_summary('time get action per step', total_steps, time.time()-est)
+        action = action_getter.pt_get_action(total_steps, state=_S[None], active_head=active_head)
         _S_prime, reward, finished = env.step(action)
         rbuffer.add_experience(next_state=_S_prime[-1], action=action, reward=reward, finished=finished)
         if not total_steps%info['LEARN_EVERY_STEPS']:
@@ -165,6 +163,83 @@ def run_training_episode(epoch_num, total_steps):
         print('avg reward', avg_rewards[-1])
     return episodic_reward, total_steps, ep_time
 
+def most_common(lst):
+    data = Counter(lst)
+    return data.most_common(1)[0][0]
+
+
+class ActionGetter():
+    """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
+    def __init__(self, n_actions, eps_initial=1, eps_final=0.1, eps_final_frame=0.01,
+                 eps_evaluation=0.0, eps_annealing_frames=100000,
+                 replay_memory_start_size=50000, max_frames=25000000, random_seed=122):
+        """
+        Args:
+            n_actions: Integer, number of possible actions
+            eps_initial: Float, Exploration probability for the first
+                replay_memory_start_size frames
+            eps_final: Float, Exploration probability after
+                replay_memory_start_size + eps_annealing_frames frames
+            eps_final_frame: Float, Exploration probability after max_frames frames
+            eps_evaluation: Float, Exploration probability during evaluation
+            eps_annealing_frames: Int, Number of frames over which the
+                exploration probabilty is annealed from eps_initial to eps_final
+            replay_memory_start_size: Integer, Number of frames during
+                which the agent only explores
+            max_frames: Integer, Total number of frames shown to the agent
+        """
+        self.n_actions = n_actions
+        self.eps_initial = eps_initial
+        self.eps_final = eps_final
+        self.eps_final_frame = eps_final_frame
+        self.eps_evaluation = eps_evaluation
+        self.eps_annealing_frames = eps_annealing_frames
+        self.replay_memory_start_size = replay_memory_start_size
+        self.max_frames = max_frames
+        self.random_state = np.random.RandomState(random_seed)
+
+        # Slopes and intercepts for exploration decrease
+        self.slope = -(self.eps_initial - self.eps_final)/self.eps_annealing_frames
+        self.intercept = self.eps_initial - self.slope*self.replay_memory_start_size
+        self.slope_2 = -(self.eps_final - self.eps_final_frame)/(self.max_frames - self.eps_annealing_frames - self.replay_memory_start_size)
+        self.intercept_2 = self.eps_final_frame - self.slope_2*self.max_frames
+
+    def pt_get_action(self, frame_number, state, active_head=None, evaluation=False):
+        """
+        Args:
+            session: A tensorflow session object
+            frame_number: Integer, number of the current frame
+            state: A (84, 84, 4) sequence of frames of an Atari game in grayscale
+            main_dqn: A DQN object
+            evaluation: A boolean saying whether the agent is being evaluated
+        Returns:
+            An integer between 0 and n_actions - 1 determining the action the agent perfoms next
+        """
+        if evaluation:
+            eps = self.eps_evaluation
+        elif frame_number < self.replay_memory_start_size:
+            eps = self.eps_initial
+        elif frame_number >= self.replay_memory_start_size and frame_number < self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope*frame_number + self.intercept
+        elif frame_number >= self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope_2*frame_number + self.intercept_2
+
+        if self.random_state.rand(1) < eps:
+            return self.random_state.randint(0, self.n_actions)
+        else:
+            with torch.no_grad():
+                state = torch.Tensor(state).to(info['DEVICE'])
+                vals = policy_net(state, active_head)
+                if active_head is not None:
+                    action = torch.argmax(vals, dim=1).item()
+                    return action
+                else:
+                    # vote
+                    acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
+                    action = most_common(acts)
+                    return action
+
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
@@ -179,19 +254,19 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/pong.bin', # gym prefix
+        "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'_d3Pong_BT9', # start files with name
+        "NAME":'_d3Breakout_BT1_eps', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
-        "N_ENSEMBLE":9,
+        "N_ENSEMBLE":1,
         "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "BUFFER_SIZE":1e6, # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000,
-        "ADAM_LEARNING_RATE":0.00025,
+        "ADAM_LEARNING_RATE":0.00001,
         "ADAM_EPSILON":1.5e-4,
         "RMS_LEARNING_RATE": 0.0001,
         "RMS_DECAY":0.95,
@@ -207,6 +282,7 @@ if __name__ == '__main__':
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.1,
         "EPSILON_DECAY":1000000,
+        "MAX_FRAMES":30000000,
         "GAMMA":.99, # Gamma weight in Q update
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":101,
@@ -216,6 +292,7 @@ if __name__ == '__main__':
         "NETWORK_INPUT_SIZE":(84,84),
         "START_TIME":time.time()
         }
+
 
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
     info['args'] = args
@@ -280,9 +357,15 @@ if __name__ == '__main__':
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
 
+    policy_net.apply(weights_init)
+    target_net.load_state_dict(policy_net.state_dict())
 
     opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'], eps=info['ADAM_EPSILON'])
 
+
+    action_getter = ActionGetter(env.num_actions,
+                                 replay_memory_start_size=info['MIN_HISTORY_TO_LEARN'],
+                                 max_frames=info['MAX_FRAMES'], eps_annealing_frames=info['EPSILON_DECAY'])
     #opt = optim.RMSprop(policy_net.parameters(),
     #                    lr=info["RMS_LEARNING_RATE"],
     #                    momentum=info["RMS_MOMENTUM"],
