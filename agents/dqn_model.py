@@ -8,6 +8,24 @@ from IPython import embed
 #the second layer has 64 layers of size 4
 #(stride 2), the final convolution layer has 64 filters of size 3 (stride
 #1). This is followed by a fully-connected hidden layer of 512 units.
+
+
+
+
+
+# init func used by hengyaun
+def weights_init(m):
+    """custom weights initialization"""
+    classtype = m.__class__
+    if classtype == nn.Linear or classtype == nn.Conv2d:
+        m.weight.data.normal_(0.0, 0.02)
+    elif classtype == nn.BatchNorm2d:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+    else:
+        print '%s is not initialized.' % classtype
+
+
 class CoreNet(nn.Module):
     def __init__(self, network_output_size=84, num_channels=4):
         super(CoreNet, self).__init__()
