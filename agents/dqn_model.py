@@ -16,14 +16,14 @@ class CoreNet(nn.Module):
         # params from ddqn appendix
         self.conv1 = nn.Conv2d(self.num_channels, 32, 8, 4)
         # TODO - should we have this init during PRIOR code?
-        torch.nn.init.kaiming_uniform_(self.conv1.weight, nonlinearity='relu')
+        #torch.nn.init.kaiming_normal_(self.conv1.weight, nonlinearity='relu')
         self.conv2 = nn.Conv2d(32, 64, 4, 2)
-        torch.nn.init.kaiming_uniform_(self.conv2.weight, nonlinearity='relu')
+        #torch.nn.init.kaiming_normal_(self.conv2.weight, nonlinearity='relu')
         self.conv3 = nn.Conv2d(64, 64, 3, 1)
-        torch.nn.init.kaiming_uniform_(self.conv3.weight, nonlinearity='relu')
-        self.conv1.bias.data.fill_(0.)
-        self.conv2.bias.data.fill_(0.)
-        self.conv3.bias.data.fill_(0.)
+        #torch.nn.init.kaiming_normal_(self.conv3.weight, nonlinearity='relu')
+        #self.conv1.bias.data.fill_(0.)
+        #self.conv2.bias.data.fill_(0.)
+        #self.conv3.bias.data.fill_(0.)
         #self.conv3 = nn.Conv2d(16, 16, 3, 1, padding=(1, 1))
 
     def forward(self, x):
@@ -44,9 +44,9 @@ class DuelingHeadNet(nn.Module):
         self.fc1 = nn.Linear(mult, self.split_size*2)
         self.value = nn.Linear(self.split_size, 1)
         self.advantage = nn.Linear(self.split_size, n_actions)
-        self.fc1.bias.data.fill_(0.)
-        self.value.bias.data.fill_(0.)
-        self.advantage.bias.data.fill_(0.)
+        #self.fc1.bias.data.fill_(0.)
+        #self.value.bias.data.fill_(0.)
+        #self.advantage.bias.data.fill_(0.)
 
     def forward(self, x):
         #x1,x2 = torch.split(F.relu(self.fc1(x)), 2, dim=1)

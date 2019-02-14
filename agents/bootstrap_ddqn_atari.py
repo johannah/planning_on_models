@@ -12,24 +12,14 @@ import torch.optim as optim
 import datetime
 import time
 from replay_buffer import ReplayBuffer
-#from experience_handler import experience_replay
-#from prepare_atari import DMAtariEnv
 from dqn_model import EnsembleNet
-from dqn_utils import handle_step, seed_everything, write_info_file
+from dqn_utils import seed_everything, write_info_file
 from env import Environment
 from glob import glob
 sys.path.append('../models')
 from lstm_utils import plot_dict_losses
 import config
 from ae_utils import save_checkpoint
-from dqn_utils import seed_everything, write_info_file
-
-def one_hot(x, n):
-    assert x.dim() == 2
-    one_hot_x = torch.zeros(x.size(0), n).cuda()
-    one_hot_x.scatter_(1, x, 1)
-    return one_hot_x
-
 
 def train_batch(cnt):
     st = time.time()
@@ -54,7 +44,6 @@ def train_batch(cnt):
         #next_q_state_values = target_net(next_states, None)
         next_q_target_vals = target_net(next_states, None)
         next_q_policy_vals = policy_net(next_states, None)
-        actions_oh = one_hot(actions[:,None], env.num_actions)
         cnt_losses = []
         for k in range(info['N_ENSEMBLE']):
             #TODO finish masking
