@@ -23,7 +23,7 @@ def weights_init(m):
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
     else:
-        print '%s is not initialized.' % classtype
+        print('%s is not initialized.' %classtype)
 
 
 class CoreNet(nn.Module):
@@ -34,15 +34,8 @@ class CoreNet(nn.Module):
         # params from ddqn appendix
         self.conv1 = nn.Conv2d(self.num_channels, 32, 8, 4)
         # TODO - should we have this init during PRIOR code?
-        #torch.nn.init.kaiming_normal_(self.conv1.weight, nonlinearity='relu')
         self.conv2 = nn.Conv2d(32, 64, 4, 2)
-        #torch.nn.init.kaiming_normal_(self.conv2.weight, nonlinearity='relu')
         self.conv3 = nn.Conv2d(64, 64, 3, 1)
-        #torch.nn.init.kaiming_normal_(self.conv3.weight, nonlinearity='relu')
-        #self.conv1.bias.data.fill_(0.)
-        #self.conv2.bias.data.fill_(0.)
-        #self.conv3.bias.data.fill_(0.)
-        #self.conv3 = nn.Conv2d(16, 16, 3, 1, padding=(1, 1))
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -82,8 +75,6 @@ class HeadNet(nn.Module):
         mult = 64*7*7
         self.fc1 = nn.Linear(mult, 512)
         self.fc2 = nn.Linear(512, n_actions)
-        self.fc1.bias.data.fill_(0.)
-        self.fc2.bias.data.fill_(0.)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))

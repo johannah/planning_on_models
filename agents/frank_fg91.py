@@ -34,9 +34,6 @@ from lstm_utils import plot_dict_losses
 import config
 from ae_utils import save_checkpoint
 
-
-
-
 class ProcessFrame:
     """Resizes and converts RGB Atari frames to grayscale"""
     def __init__(self, frame_height=84, frame_width=84):
@@ -621,7 +618,7 @@ def most_common(lst):
 def train():
     """Contains the training and evaluation loops"""
     my_replay_memory = ReplayMemory(size=MEMORY_SIZE, batch_size=info['BATCH_SIZE'])
-    network_updater = TargetNetworkUpdater(MAIN_DQN_VARS, TARGET_DQN_VARS)
+    #network_updater = TargetNetworkUpdater(MAIN_DQN_VARS, TARGET_DQN_VARS)
     action_getter = ActionGetter(atari.env.action_space.n,
                                  replay_memory_start_size=REPLAY_MEMORY_START_SIZE,
                                  max_frames=MAX_FRAMES)
@@ -629,7 +626,7 @@ def train():
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.1)
     #sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
-        sess.run(init)
+        #sess.run(init)
 
         frame_number = 0
         rewards = []
@@ -670,11 +667,10 @@ def train():
                         #tfloss_list.append(tfloss)
                         ptloss_list.append(ptloss)
                     if frame_number % NETW_UPDATE_FREQ == 0 and frame_number >  info['MIN_HISTORY_TO_LEARN']:
-                        #network_updater.update_networks(sess)
                         print("++++++++++++++++++++++++++++++++++++++++++++++++")
                         print('updating target network at %s'%frame_number)
                         target_net.load_state_dict(policy_net.state_dict())
-                        network_updater.update_networks(sess)
+                        #network_updater.update_networks(sess)
 
                     if terminal:
                         terminal = False
@@ -802,7 +798,7 @@ if __name__ == '__main__':
         #"GAME":'roms/pong.bin', # gym prefix
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'_FRANKBreakout_9PTA', # start files with name
+        "NAME":'FRANKBreakout_1PTA_init', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":1,
@@ -991,24 +987,24 @@ if __name__ == '__main__':
                                                                     atari.env.unwrapped.get_action_meanings()))
 
     # main DQN and target DQN networks:
-    with tf.variable_scope('mainDQN'):
-        MAIN_DQN = DQN(atari.env.action_space.n, HIDDEN, info['ADAM_LEARNING_RATE'])   #
-    with tf.variable_scope('targetDQN'):
-        TARGET_DQN = DQN(atari.env.action_space.n, HIDDEN)               #
+    #with tf.variable_scope('mainDQN'):
+    #    MAIN_DQN = DQN(atari.env.action_space.n, HIDDEN, info['ADAM_LEARNING_RATE'])   #
+    #with tf.variable_scope('targetDQN'):
+    #    TARGET_DQN = DQN(atari.env.action_space.n, HIDDEN)               #
 
-    init = tf.global_variables_initializer()
-    saver = tf.train.Saver()
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3)
+    #init = tf.global_variables_initializer()
+    #saver = tf.train.Saver()
+    #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3)
     #sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-    init = tf.global_variables_initializer()
+    #init = tf.global_variables_initializer()
     #saver = tf.train.Saver()
 
 
-    MAIN_DQN_VARS = tf.trainable_variables(scope='mainDQN')
-    TARGET_DQN_VARS = tf.trainable_variables(scope='targetDQN')
+    #MAIN_DQN_VARS = tf.trainable_variables(scope='mainDQN')
+    #TARGET_DQN_VARS = tf.trainable_variables(scope='targetDQN')
 
-    LAYER_IDS = ["conv1", "conv2", "conv3", "conv4", "denseAdvantage",
-                 "denseAdvantageBias", "denseValue", "denseValueBias"]
+    #LAYER_IDS = ["conv1", "conv2", "conv3", "conv4", "denseAdvantage",
+    #             "denseAdvantageBias", "denseValue", "denseValueBias"]
 
     # Scalar summaries for tensorboard: loss, average reward and evaluation score
     with tf.name_scope('Performance'):
@@ -1025,13 +1021,13 @@ if __name__ == '__main__':
     #PERFORMANCE_SUMMARIES = tf.summary.merge([TFLOSS_SUMMARY, PTLOSS_SUMMARY, REWARD_SUMMARY])
 
     # Histogramm summaries for tensorboard: parameters
-    with tf.name_scope('Parameters'):
-        ALL_PARAM_SUMMARIES = []
-        for i, Id in enumerate(LAYER_IDS):
-            with tf.name_scope('mainDQN/'):
-                MAIN_DQN_KERNEL = tf.summary.histogram(Id, tf.reshape(MAIN_DQN_VARS[i], shape=[-1]))
-            ALL_PARAM_SUMMARIES.extend([MAIN_DQN_KERNEL])
-    PARAM_SUMMARIES = tf.summary.merge(ALL_PARAM_SUMMARIES)
+    #with tf.name_scope('Parameters'):
+    #    ALL_PARAM_SUMMARIES = []
+    #    for i, Id in enumerate(LAYER_IDS):
+    #        with tf.name_scope('mainDQN/'):
+    #            MAIN_DQN_KERNEL = tf.summary.histogram(Id, tf.reshape(MAIN_DQN_VARS[i], shape=[-1]))
+    #        ALL_PARAM_SUMMARIES.extend([MAIN_DQN_KERNEL])
+    #PARAM_SUMMARIES = tf.summary.merge(ALL_PARAM_SUMMARIES)
 
     if TRAIN:
         train()
