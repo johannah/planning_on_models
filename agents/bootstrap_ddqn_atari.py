@@ -6,6 +6,7 @@ from IPython import embed
 import math
 #from logger import TensorBoardLogger
 import torch
+torch.set_num_threads(3)
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim

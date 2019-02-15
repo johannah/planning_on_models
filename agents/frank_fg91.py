@@ -19,6 +19,7 @@ from collections import Counter
 import math
 #from logger import TensorBoardLogger
 import torch
+torch.set_num_threads(2)
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -397,6 +398,7 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags):
             # https://stackoverflow.com/questions/36462962/loss-clipping-in-tensor-flow-on-deepminds-dqn
             #loss = torch.clamp(targets-preds, -1, 1)
             #loss = torch.mean(loss**2)
+            #loss = F.smooth_l1_loss(preds, targets, reduction='mean')
             loss = F.smooth_l1_loss(preds, targets, reduction='mean')
             cnt_losses.append(loss)
             #loss.backward(retain_graph=True)
@@ -725,7 +727,7 @@ if __name__ == '__main__':
         #"GAME":'roms/pong.bin', # gym prefix
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'DEBUGFRANKBreakout_9PTA_init', # start files with name
+        "NAME":'Dbug_multi_FRANKBreakout_9PTA_init', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
