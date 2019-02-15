@@ -4,14 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from IPython import embed
+
 #The first convolution layer convolves the input with 32 filters of size 8 (stride 4),
 #the second layer has 64 layers of size 4
 #(stride 2), the final convolution layer has 64 filters of size 3 (stride
 #1). This is followed by a fully-connected hidden layer of 512 units.
-
-
-
-
 
 # init func used by hengyaun
 def weights_init(m):
