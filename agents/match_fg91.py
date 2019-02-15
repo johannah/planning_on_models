@@ -65,8 +65,6 @@ def plot_dict_losses(plot_dict, name='loss_example.png', rolling_length=4, plot_
     plt.savefig(name)
     plt.close()
 
-
-
 def process_frame(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     output = cv2.resize(gray, info['NETWORK_INPUT_SIZE'])
@@ -133,7 +131,7 @@ class ActionGetter:
 
         else:
             #state = torch.transpose(torch.Tensor(state),2,0)[None,:].to(info['DEVICE'])
-            state = torch.Tensor(state.astype(np.float32)/255)[None,:].to(info['DEVICE'])
+            state = torch.Tensor(state.astype(np.float32)/255.)[None,:].to(info['DEVICE'])
             vals = policy_net(state, active_head)
             if active_head is not None:
                 action = torch.argmax(vals, dim=1).item()
@@ -263,8 +261,8 @@ class ReplayMemory:
         return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices]
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags):
-    states = torch.Tensor(states.astype(np.float32)/255.0).to(info['DEVICE'])
-    next_states = torch.Tensor(next_states).to(info['DEVICE'])
+    states = torch.Tensor(states.astype(np.float)/255.).to(info['DEVICE'])
+    next_states = torch.Tensor(next_states.astype(np.float)/255.).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
@@ -543,7 +541,7 @@ if __name__ == '__main__':
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
         #"NAME":'Dbug_multi_FRANKBreakout_9PTA_init', # start files with name
-        "NAME":'matchFRANK9_allpt', # start files with name
+        "NAME":'matchFRANK9_allptwd255', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
