@@ -1,4 +1,7 @@
-from __future__ import print_function
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+#from __future__ import print_function
 """
 Implementation of DeepMind's Deep Q-Learning by Fabio M. Graetz, 2018
 If you have questions or suggestions, write me a mail fabiograetzatgooglemaildotcom
@@ -25,13 +28,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 import datetime
 import time
-from replay_buffer import ReplayBuffer
+#from replay_buffer import ReplayBuffer
 from dqn_model import EnsembleNet, weights_init
 from dqn_utils import seed_everything, write_info_file
 #from env import Environment
 from glob import glob
 sys.path.append('../models')
-from lstm_utils import plot_dict_losses
 import config
 from ae_utils import save_checkpoint
 import cv2
@@ -43,6 +45,28 @@ what is happening to the gradients in multple head situation. how should we
 distinguish the multiple head effect from the effect of episilon greedy ?
 Check the rainbow way of calculating loss
 """
+
+def rolling_average(a, n=5) :
+    if n == 0:
+        return a
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+
+def plot_dict_losses(plot_dict, name='loss_example.png', rolling_length=4, plot_title=''):
+    f,ax=plt.subplots(1,1,figsize=(6,6))
+    for n in plot_dict.keys():
+        print('plotting', n)
+        ax.plot(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), lw=1)
+        ax.scatter(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), label=n, s=3)
+    ax.legend()
+    if plot_title != '':
+        plt.title(plot_title)
+    plt.savefig(name)
+    plt.close()
+
+
+
 def process_frame(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     output = cv2.resize(gray, info['NETWORK_INPUT_SIZE'])
@@ -294,7 +318,7 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags):
     opt.step()
     return np.mean(losses)
 
-def generate_gif(frame_number, frames_for_gif, reward, path):
+def generate_gif(frame_number, frames_for_gif, reward):
     """
         Args:
             frame_number: Integer, determining the number of the current frame
@@ -308,7 +332,7 @@ def generate_gif(frame_number, frames_for_gif, reward, path):
 
 
     if reward > 5:
-        gif_fname = os.path.join(path, "ATARI_frame_%010d_reward_%04d.gif"%(frame_number, int(reward)))
+        gif_fname = os.path.join(model_base_filedir, "ATARI_frame_%010d_reward_%04d.gif"%(frame_number, int(reward)))
         print("WRITING GIF", gif_fname)
         imageio.mimsave(gif_fname, frames_for_gif, duration=1/30)
 
@@ -366,16 +390,6 @@ def most_common(lst):
 
 def train_and_eval():
     """Contains the training and evaluation loops"""
-    my_replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
-                                    frame_height=info['NETWORK_INPUT_SIZE'][0],
-                                    frame_width=info['NETWORK_INPUT_SIZE'][1],
-                                    agent_history_length=info['HISTORY_SIZE'],
-                                    random_seed=info['SEED']+10)
-
-    action_getter = ActionGetter(atari.env.action_space.n,
-                                 replay_memory_start_size=info['MIN_HISTORY_TO_LEARN'],
-                                 max_frames=info['MAX_FRAMES'], eps_annealing_frames=info['EPSILON_DECAY'])
-
     frame_number = 0
     rewards = []
     ptloss_list = []
@@ -459,7 +473,7 @@ def train_and_eval():
         eval_episode(frame_number)
 
 
-def eval(frame_number):
+def eval_episode(frame_number):
     #########################
     ####### Evaluation ######
     #########################
@@ -467,6 +481,8 @@ def eval(frame_number):
     frames_for_gif = []
     eval_rewards = []
     evaluate_frame_number = 0
+    state = atari.reset()
+    terminal_life_lost = True
 
     for _ in range(EVAL_STEPS):
         if terminal:
@@ -486,7 +502,7 @@ def eval(frame_number):
         next_state, processed_new_frame, reward, terminal, terminal_life_lost, new_frame  = output
         evaluate_frame_number += 1
         episode_reward_sum += reward
-        if args.make_gif:
+        if args.gif:
             frames_for_gif.append(new_frame)
         if terminal:
             eval_rewards.append(episode_reward_sum)
@@ -495,7 +511,7 @@ def eval(frame_number):
 
     print("Evaluation score:\n", np.mean(eval_rewards))
     try:
-        generate_gif(frame_number, frames_for_gif, eval_rewards[0], SPATH)
+        generate_gif(frame_number, frames_for_gif, eval_rewards[0])
     except IndexError:
         print("No evaluation game finished")
 
@@ -512,6 +528,7 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
+    parser.add_argument('-g', '--gif', action='store_true', default=True)
     parser.add_argument('-l', '--model_loadpath', default='', help='.pkl model file full path')
     parser.add_argument('-b', '--buffer_loadpath', default='', help='.pkl replay buffer file full path')
     args = parser.parse_args()
@@ -531,6 +548,7 @@ if __name__ == '__main__':
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
         "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
+        "EVAL_FREQUENCY":200000,
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE_FREQUENCY":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
@@ -548,7 +566,6 @@ if __name__ == '__main__':
         "HISTORY_SIZE":4, # how many past frames to use for state input
         "PRINT_EVERY":1, # How often to print statistics
         "MAX_EPISODE_LENGTH_STEPS":18000,
-        "EVAL_FREQUENCY":200000,
         "MAX_FRAMES":300000000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
@@ -668,5 +685,16 @@ if __name__ == '__main__':
     PERFORMANCE_SUMMARIES = tf.summary.merge([PTLOSS_SUMMARY, REWARD_SUMMARY])
 
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.05)
+    my_replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
+                                    frame_height=info['NETWORK_INPUT_SIZE'][0],
+                                    frame_width=info['NETWORK_INPUT_SIZE'][1],
+                                    agent_history_length=info['HISTORY_SIZE'],
+                                    random_seed=info['SEED']+10)
+
+    action_getter = ActionGetter(atari.env.action_space.n,
+                                 replay_memory_start_size=info['MIN_HISTORY_TO_LEARN'],
+                                 max_frames=info['MAX_FRAMES'], eps_annealing_frames=info['EPSILON_DECAY'])
+
+
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         train_and_eval()
