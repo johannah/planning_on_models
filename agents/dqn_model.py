@@ -16,6 +16,7 @@ def weights_init(m):
     classtype = m.__class__
     if classtype == nn.Linear or classtype == nn.Conv2d:
         m.weight.data.normal_(0.0, 0.02)
+        m.bias.data.fill_(0)
     elif classtype == nn.BatchNorm2d:
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
@@ -59,7 +60,6 @@ class DuelingHeadNet(nn.Module):
         self.advantage.apply(weights_init)
 
     def forward(self, x):
-        #x1,x2 = torch.split(F.relu(self.fc1(x)), 2, dim=1)
         x1,x2 = torch.split(F.relu(self.fc1(x)), self.split_size, dim=1)
         value = self.value(x1)
         advantage = self.advantage(x2)
