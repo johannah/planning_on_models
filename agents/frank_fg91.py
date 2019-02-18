@@ -107,11 +107,11 @@ class ActionGetter:
             self.slope_2 = -(self.eps_final - self.eps_final_frame)/(self.max_steps - self.eps_annealing_frames - self.replay_memory_start_size)
             self.intercept_2 = self.eps_final_frame - self.slope_2*self.max_steps
 
-    def pt_get_action(self, frame_number, state, active_head=None, evaluation=False):
+    def pt_get_action(self, step_number, state, active_head=None, evaluation=False):
         """
         Args:
             session: A tensorflow session object
-            frame_number: Integer, number of the current frame
+            step_number: Integer, number of the current frame
             state: A (84, 84, 4) sequence of frames of an Atari game in grayscale
             main_dqn: A DQN object
             evaluation: A boolean saying whether the agent is being evaluated
@@ -120,14 +120,14 @@ class ActionGetter:
         """
         if evaluation:
             eps = self.eps_evaluation
-        elif frame_number < self.replay_memory_start_size:
+        elif step_number < self.replay_memory_start_size:
             eps = self.eps_initial
         elif self.eps_annealing_frames > 0:
             # TODO check this
-            if frame_number >= self.replay_memory_start_size and frame_number < self.replay_memory_start_size + self.eps_annealing_frames:
-                eps = self.slope*frame_number + self.intercept
-            elif frame_number >= self.replay_memory_start_size + self.eps_annealing_frames:
-                eps = self.slope_2*frame_number + self.intercept_2
+            if step_number >= self.replay_memory_start_size and step_number < self.replay_memory_start_size + self.eps_annealing_frames:
+                eps = self.slope*step_number + self.intercept
+            elif step_number >= self.replay_memory_start_size + self.eps_annealing_frames:
+                eps = self.slope_2*step_number + self.intercept_2
         else:
             eps = 0
         if self.random_state.rand() < eps:
@@ -144,11 +144,11 @@ class ActionGetter:
                 action = most_common(acts)
                 return eps, action
 
-    def get_action(self, session, frame_number, state, main_dqn, evaluation=False):
+    def get_action(self, session, step_number, state, main_dqn, evaluation=False):
         """
         Args:
             session: A tensorflow session object
-            frame_number: Integer, number of the current frame
+            step_number: Integer, number of the current frame
             state: A (84, 84, 4) sequence of frames of an Atari game in grayscale
             main_dqn: A DQN object
             evaluation: A boolean saying whether the agent is being evaluated
@@ -157,12 +157,12 @@ class ActionGetter:
         """
         if evaluation:
             eps = self.eps_evaluation
-        elif frame_number < self.replay_memory_start_size:
+        elif step_number < self.replay_memory_start_size:
             eps = self.eps_initial
-        elif frame_number >= self.replay_memory_start_size and frame_number < self.replay_memory_start_size + self.eps_annealing_frames:
-            eps = self.slope*frame_number + self.intercept
-        elif frame_number >= self.replay_memory_start_size + self.eps_annealing_frames:
-            eps = self.slope_2*frame_number + self.intercept_2
+        elif step_number >= self.replay_memory_start_size and step_number < self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope*step_number + self.intercept
+        elif step_number >= self.replay_memory_start_size + self.eps_annealing_frames:
+            eps = self.slope_2*step_number + self.intercept_2
 
         if self.random_state.rand(1) < eps:
             return self.random_state.randint(0, self.n_actions)
@@ -359,7 +359,6 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags):
     target Q-value that the prediction Q-value is regressed to.
     Then a parameter update is performed on the main DQN.
     """
-    #print(states.max(), states.min())
     states = torch.Tensor(states.astype(np.float)).transpose(1,3).to(info['DEVICE'])
     next_states = torch.Tensor(next_states.astype(np.float)).transpose(1,3).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
@@ -420,10 +419,10 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags):
     opt.step()
     return np.mean(losses)
 
-def generate_gif(frame_number, frames_for_gif, reward):
+def generate_gif(step_number, frames_for_gif, reward):
     """
         Args:
-            frame_number: Integer, determining the number of the current frame
+            step_number: Integer, determining the number of the current frame
             frames_for_gif: A sequence of (210, 160, 3) frames of an Atari game in RGB
             reward: Integer, Total reward of the episode that es ouputted as a gif
     """
@@ -433,7 +432,7 @@ def generate_gif(frame_number, frames_for_gif, reward):
 
 
     if reward > 5:
-        gif_fname = os.path.join(model_base_filedir, "ATARI_frame_%010d_reward_%04d.gif"%(frame_number, int(reward)))
+        gif_fname = os.path.join(model_base_filedir, "ATARI_frame_%010d_reward_%04d.gif"%(step_number, int(reward)))
         print("WRITING GIF", gif_fname)
         imageio.mimsave(gif_fname, frames_for_gif, duration=1/30)
 
@@ -495,7 +494,7 @@ def most_common(lst):
 
 def train():
     """Contains the training and evaluation loops"""
-    frame_number = 0
+    step_number = 0
     rewards = []
     ptloss_list = []
     eval_rewards = []
@@ -503,14 +502,14 @@ def train():
 
     eps_list = []
     epoch_num = 0
-    while frame_number < info['MAX_STEPS']:
+    while step_number < info['MAX_STEPS']:
         ########################
         ####### Training #######
         ########################
         epoch_frame = 0
         while epoch_frame < info['EVAL_FREQUENCY']:
             terminal_life_lost = atari.reset(sess)
-            start_steps = frame_number
+            start_steps = step_number
             st = time.time()
             episode_reward_sum = 0
             random_state.shuffle(heads)
@@ -518,10 +517,10 @@ def train():
             epoch_num += 1
             ep_eps_list = []
             for totf in range(info['MAX_EPISODE_LENGTH']):
-                eps,action = action_getter.pt_get_action(frame_number, state=atari.state, active_head=active_head)
+                eps,action = action_getter.pt_get_action(step_number, state=atari.state, active_head=active_head)
                 ep_eps_list.append(eps)
                 processed_new_frame, reward, terminal, terminal_life_lost, _ = atari.step(sess, action)
-                frame_number += 1
+                step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
 
@@ -531,15 +530,15 @@ def train():
                                                 reward=reward,
                                                 terminal=terminal_life_lost)
 
-                if frame_number % info['LEARN_EVERY_STEPS'] == 0 and frame_number > info['MIN_HISTORY_TO_LEARN']:
+                if step_number % info['LEARN_EVERY_STEPS'] == 0 and step_number > info['MIN_HISTORY_TO_LEARN']:
                     _states, _actions, _rewards, _next_states, _terminal_flags = my_replay_memory.get_minibatch()
                     #tfloss = learn(sess, MAIN_DQN, TARGET_DQN, _states, _actions, _rewards, _next_states, _terminal_flags)
                     ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags)
                     #tfloss_list.append(tfloss)
                     ptloss_list.append(ptloss)
-                if frame_number % info['TARGET_UPDATE'] == 0 and frame_number >  info['MIN_HISTORY_TO_LEARN']:
+                if step_number % info['TARGET_UPDATE'] == 0 and step_number >  info['MIN_HISTORY_TO_LEARN']:
                     print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                    print('updating target network at %s'%frame_number)
+                    print('updating target network at %s'%step_number)
                     target_net.load_state_dict(policy_net.state_dict())
                     #network_updater.update_networks(sess)
 
@@ -551,9 +550,9 @@ def train():
             et = time.time()
             ep_time = et-st
             rewards.append(episode_reward_sum)
-            #print(epoch_num, "FRAME NUM", frame_number, episode_reward_sum)
-            steps.append(frame_number)
-            episode_step.append(frame_number-start_steps)
+            #print(epoch_num, "FRAME NUM", step_number, episode_reward_sum)
+            steps.append(step_number)
+            episode_step.append(step_number-start_steps)
             episode_head.append(active_head)
             eps_list.append(np.mean(ep_eps_list))
             episode_loss.append(np.mean(ptloss_list))
@@ -577,24 +576,24 @@ def train():
             # Output the progress:
             if not epoch_num % 10:
                 # Scalar summaries for tensorboard
-                if frame_number > info['MIN_HISTORY_TO_LEARN']:
+                if step_number > info['MIN_HISTORY_TO_LEARN']:
                     summ = sess.run(PERFORMANCE_SUMMARIES,
                                     feed_dict={
                                                PTLOSS_PH:np.mean(ptloss_list),
                                                REWARD_PH:np.mean(rewards[-100:])})
 
-                    SUMM_WRITER.add_summary(summ, frame_number)
+                    SUMM_WRITER.add_summary(summ, step_number)
                     ptloss_list = []
 
-                    print("Adding tensorboard", len(rewards), frame_number, np.mean(rewards[-100:]))
+                    print("Adding tensorboard", len(rewards), step_number, np.mean(rewards[-100:]))
                     with open('rewards.dat', 'a') as reward_file:
-                        print(len(rewards), frame_number, np.mean(rewards[-100:]), file=reward_file)
-        avg_eval_reward = evaluate(frame_number)
+                        print(len(rewards), step_number, np.mean(rewards[-100:]), file=reward_file)
+        avg_eval_reward = evaluate(step_number)
         eval_rewards.append(avg_eval_reward)
-        eval_steps.append(frame_number)
+        eval_steps.append(step_number)
         plot_dict_losses({'eval rewards':{'index':eval_steps, 'val':eval_rewards}}, name=os.path.join(model_base_filedir, 'eval_rewards_steps.png'), rolling_length=0)
 
-def evaluate(frame_number):
+def evaluate(step_number):
     print("""
          #########################
          ####### Evaluation ######
@@ -604,7 +603,7 @@ def evaluate(frame_number):
     gif = True
     frames_for_gif = []
     eval_rewards = []
-    evaluate_frame_number = 0
+    evaluate_step_number = 0
     # only run one
     for i in range(info['NUM_EVAL_EPISODES']):
         terminal_life_lost = atari.reset(sess, evaluation=True)
@@ -612,10 +611,10 @@ def evaluate(frame_number):
         terminal = False
         episode_steps = 0
         while (not terminal) and (episode_steps < info['MAX_EPISODE_LENGTH']):
-            eps,action = action_getter.pt_get_action(frame_number, atari.state, active_head=None, evaluation=True)
+            eps,action = action_getter.pt_get_action(step_number, atari.state, active_head=None, evaluation=True)
 
             processed_new_frame, reward, terminal, terminal_life_lost, new_frame = atari.step(sess, action)
-            evaluate_frame_number += 1
+            evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
             if gif:
@@ -628,16 +627,16 @@ def evaluate(frame_number):
 
     print("Evaluation score:\n", np.mean(eval_rewards))
     try:
-        generate_gif(frame_number, frames_for_gif, eval_rewards[0])
+        generate_gif(step_number, frames_for_gif, eval_rewards[0])
     except IndexError:
         print("No evaluation game finished")
 
     # Show the evaluation score in tensorboard
     summ = sess.run(EVAL_SCORE_SUMMARY, feed_dict={EVAL_SCORE_PH:np.mean(eval_rewards)})
-    SUMM_WRITER.add_summary(summ, frame_number)
+    SUMM_WRITER.add_summary(summ, step_number)
     efile = os.path.join(model_base_filedir, 'rewardsEval.dat')
     with open(efile, 'a') as eval_reward_file:
-        print(frame_number, np.mean(eval_rewards), file=eval_reward_file)
+        print(step_number, np.mean(eval_rewards), file=eval_reward_file)
     return np.mean(eval_rewards)
 
 if __name__ == '__main__':
@@ -780,7 +779,14 @@ if __name__ == '__main__':
 
     target_net.load_state_dict(policy_net.state_dict())
 
-    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    #opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    opt = optim.RMSprop(policy_net.parameters(),
+                        lr=info["RMS_LEARNING_RATE"],
+                        momentum=info["RMS_MOMENTUM"],
+                        eps=info["RMS_EPSILON"],
+                        centered=info["RMS_CENTERED"],
+                        alpha=info["RMS_DECAY"])
+#
     random_state = np.random.RandomState(info["SEED"])
     #board_logger = TensorBoardLogger(model_base_filedir)
     last_target_update = 0

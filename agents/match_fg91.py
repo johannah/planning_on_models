@@ -241,20 +241,13 @@ class ReplayMemory:
         return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices]
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags):
-    #states = torch.Tensor(states.astype(np.float)/255.0).to(info['DEVICE'])
-    #next_states = torch.Tensor(next_states.astype(np.float)/255.0).to(info['DEVICE'])
     states = torch.Tensor(states.astype(np.float)).to(info['DEVICE'])
     next_states = torch.Tensor(next_states.astype(np.float)).to(info['DEVICE'])
-    #print('Ls',states.max(), states.min())
-    #print('Lns',next_states.max(), next_states.min())
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
     # min history to learn is 200,000 frames in dqn
     losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
-    #samples = rbuffer.sample_random(info['BATCH_SIZE'], pytorchify=True)
-    #states, actions, rewards, next_states, ongoing_flags, masks, _ = samples
-
     opt.zero_grad()
     q_policy_vals = policy_net(states, None)
     #next_q_state_values = target_net(next_states, None)
@@ -352,6 +345,7 @@ def train_and_eval():
             epoch_num += 1
             #plot_states = []
             #plot_color_states = []
+            life_lost = False
             for totf in range(info['MAX_EPISODE_LENGTH_STEPS']):
                 if life_lost:
                     action = 1
@@ -452,7 +446,7 @@ def evaluate(step_number):
         episode_reward_sum = 0
         terminal = False
         episode_steps = 0
-        while not terminal or episode_steps < info['MAX_STEPS']:
+        while not terminal or episode_steps < info['MAX_EPISODE_LENGTH']:
             # Fire (action 1), when a life was lost or the game just started,
             # so that the agent does not stand around doing nothing. When playing
             # with other environments, you might want to change this...
@@ -513,8 +507,8 @@ if __name__ == '__main__':
         "DEVICE":device,
         #"NAME":'Dbug_multi_FRANKBreakout_9PTA_init', # start files with name
         #"NAME":'matchROMSFRANK9', # start files with name
-        "NAME":'DEBUGmatchRMSROMSFRANK9', # start files with name
-        #"NAME":'DEBUGmatch9', # start files with name
+        #"NAME":'DEBUGmatchROMSFRANK9', # start files with name
+        "NAME":'DEBUG', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
@@ -554,7 +548,8 @@ if __name__ == '__main__':
         "CLIP_GRAD":1, # Gradient clipping setting
         "SEED":101,
         "RANDOM_HEAD":-1,
-        "MAX_STEPS":18000,
+        "MAX_STEPS":int(200e6),
+        "MAX_EPISODE_LENGTH":18000,
         "FAKE_ACTION":-3,
         "FAKE_REWARD":-5,
         "NETWORK_INPUT_SIZE":(84,84),
@@ -637,13 +632,13 @@ if __name__ == '__main__':
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
 
     target_net.load_state_dict(policy_net.state_dict())
-    #opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
-    opt = optim.RMSprop(policy_net.parameters(),
-                        lr=info["RMS_LEARNING_RATE"],
-                        momentum=info["RMS_MOMENTUM"],
-                        eps=info["RMS_EPSILON"],
-                        centered=info["RMS_CENTERED"],
-                        alpha=info["RMS_DECAY"])
+    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    #opt = optim.RMSprop(policy_net.parameters(),
+    #                    lr=info["RMS_LEARNING_RATE"],
+    #                    momentum=info["RMS_MOMENTUM"],
+    #                    eps=info["RMS_EPSILON"],
+    #                    centered=info["RMS_CENTERED"],
+    #                    alpha=info["RMS_DECAY"])
 #    rbuffer = ReplayBuffer(max_buffer_size=info['BUFFER_SIZE'],
 #                           history_size=info['HISTORY_SIZE'],
 #                           min_sampling_size=info['MIN_HISTORY_TO_LEARN'],
