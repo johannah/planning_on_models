@@ -359,7 +359,7 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags):
     target Q-value that the prediction Q-value is regressed to.
     Then a parameter update is performed on the main DQN.
     """
-    print(states.max(), states.min())
+    #print(states.max(), states.min())
     states = torch.Tensor(states.astype(np.float)).transpose(1,3).to(info['DEVICE'])
     next_states = torch.Tensor(next_states.astype(np.float)).transpose(1,3).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
