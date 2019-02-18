@@ -452,7 +452,7 @@ def evaluate(step_number):
         episode_reward_sum = 0
         terminal = False
         episode_steps = 0
-        while not terminal and episode_steps < info['MAX_STEPS']:
+        while not terminal or episode_steps < info['MAX_STEPS']:
             # Fire (action 1), when a life was lost or the game just started,
             # so that the agent does not stand around doing nothing. When playing
             # with other environments, you might want to change this...
@@ -513,14 +513,13 @@ if __name__ == '__main__':
         "DEVICE":device,
         #"NAME":'Dbug_multi_FRANKBreakout_9PTA_init', # start files with name
         #"NAME":'matchROMSFRANK9', # start files with name
-        "NAME":'DEBUGmatchROMSFRANK9', # start files with name
+        "NAME":'DEBUGmatchRMSROMSFRANK9', # start files with name
         #"NAME":'DEBUGmatch9', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
         "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
         "EVAL_FREQUENCY":500000,
-        #"EVAL_FREQUENCY":5000,
         "NUM_EVAL_EPISODES":1,
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head
         "TARGET_UPDATE_FREQUENCY":10000, # TARGET_UPDATE how often to use replica target
@@ -638,13 +637,13 @@ if __name__ == '__main__':
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
 
     target_net.load_state_dict(policy_net.state_dict())
-    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
-    #opt = optim.RMSprop(policy_net.parameters(),
-    #                    lr=info["RMS_LEARNING_RATE"],
-    #                    momentum=info["RMS_MOMENTUM"],
-    #                    eps=info["RMS_EPSILON"],
-    #                    centered=info["RMS_CENTERED"],
-    #                    alpha=info["RMS_DECAY"])
+    #opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    opt = optim.RMSprop(policy_net.parameters(),
+                        lr=info["RMS_LEARNING_RATE"],
+                        momentum=info["RMS_MOMENTUM"],
+                        eps=info["RMS_EPSILON"],
+                        centered=info["RMS_CENTERED"],
+                        alpha=info["RMS_DECAY"])
 #    rbuffer = ReplayBuffer(max_buffer_size=info['BUFFER_SIZE'],
 #                           history_size=info['HISTORY_SIZE'],
 #                           min_sampling_size=info['MIN_HISTORY_TO_LEARN'],
