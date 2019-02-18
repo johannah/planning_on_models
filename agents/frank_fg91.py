@@ -74,7 +74,7 @@ class ActionGetter:
     """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
     def __init__(self, n_actions, eps_initial=1, eps_final=0.1, eps_final_frame=0.01,
                  eps_evaluation=0.0, eps_annealing_frames=100000,
-                 replay_memory_start_size=50000, max_frames=25000000, random_seed=122):
+                 replay_memory_start_size=50000, max_steps=25000000, random_seed=122):
         """
         Args:
             n_actions: Integer, number of possible actions
@@ -97,15 +97,15 @@ class ActionGetter:
         self.eps_evaluation = eps_evaluation
         self.eps_annealing_frames = eps_annealing_frames
         self.replay_memory_start_size = replay_memory_start_size
-        self.max_frames = max_frames
+        self.max_steps = max_steps
         self.random_state = np.random.RandomState(random_seed)
 
         # Slopes and intercepts for exploration decrease
         if self.eps_annealing_frames > 0:
             self.slope = -(self.eps_initial - self.eps_final)/self.eps_annealing_frames
             self.intercept = self.eps_initial - self.slope*self.replay_memory_start_size
-            self.slope_2 = -(self.eps_final - self.eps_final_frame)/(self.max_frames - self.eps_annealing_frames - self.replay_memory_start_size)
-            self.intercept_2 = self.eps_final_frame - self.slope_2*self.max_frames
+            self.slope_2 = -(self.eps_final - self.eps_final_frame)/(self.max_steps - self.eps_annealing_frames - self.replay_memory_start_size)
+            self.intercept_2 = self.eps_final_frame - self.slope_2*self.max_steps
 
     def pt_get_action(self, frame_number, state, active_head=None, evaluation=False):
         """
@@ -133,7 +133,7 @@ class ActionGetter:
         if self.random_state.rand() < eps:
             return eps, self.random_state.randint(0, self.n_actions)
         else:
-            state = torch.transpose(torch.Tensor(state.astype(np.float)/255.0),2,0)[None,:].to(info['DEVICE'])
+            state = torch.transpose(torch.Tensor(state.astype(np.float)),2,0)[None,:].to(info['DEVICE'])
             vals = policy_net(state, active_head)
             if active_head is not None:
                 action = torch.argmax(vals, dim=1).item()
@@ -342,11 +342,6 @@ def learn(session, main_dqn, target_dqn, states, actions, rewards, new_states, t
                           feed_dict={main_dqn.input:states,
                                      main_dqn.target_q:target_q,
                                      main_dqn.action:actions})
-    #print('q_vals', q_vals)
-    #print('doubleg', double_q)
-    #print('tf targetq', target_q)
-    #print('tf doubleq', double_q)
-    #print('loss', loss)
     return loss
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags):
@@ -364,16 +359,14 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags):
     target Q-value that the prediction Q-value is regressed to.
     Then a parameter update is performed on the main DQN.
     """
-    states = torch.Tensor(states.astype(np.float)/255.0).transpose(1,3).to(info['DEVICE'])
-    next_states = torch.Tensor(next_states.astype(np.float)/255.0).transpose(1,3).to(info['DEVICE'])
+    print(states.max(), states.min())
+    states = torch.Tensor(states.astype(np.float)).transpose(1,3).to(info['DEVICE'])
+    next_states = torch.Tensor(next_states.astype(np.float)).transpose(1,3).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
     # min history to learn is 200,000 frames in dqn
     losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
-    #samples = rbuffer.sample_random(info['BATCH_SIZE'], pytorchify=True)
-    #states, actions, rewards, next_states, ongoing_flags, masks, _ = samples
-
     opt.zero_grad()
     q_policy_vals = policy_net(states, None)
     #next_q_state_values = target_net(next_states, None)
@@ -423,11 +416,8 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags):
     #        if param.grad is not None:
     #            #param.grad.data *=1.0/float(info['N_ENSEMBLE'])
     #            heads_sum += param.grad.data.sum()
-    #nn.utils.clip_grad_norm_(policy_net.parameters(), 1)
-    #print(np.sum(losses), core_sum, heads_sum, core_k_sum)
+    nn.utils.clip_grad_norm_(policy_net.parameters(), 5)
     opt.step()
-    #board_logger.scalar_summary('batch train time per cnt', cnt, time.time()-st)
-    #board_logger.scalar_summary('loss per cnt', cnt, np.mean(losses))
     return np.mean(losses)
 
 def generate_gif(frame_number, frames_for_gif, reward):
@@ -513,7 +503,7 @@ def train():
 
     eps_list = []
     epoch_num = 0
-    while frame_number < info['MAX_FRAMES']:
+    while frame_number < info['MAX_STEPS']:
         ########################
         ####### Training #######
         ########################
@@ -620,21 +610,19 @@ def evaluate(frame_number):
         terminal_life_lost = atari.reset(sess, evaluation=True)
         episode_reward_sum = 0
         terminal = False
-        while not terminal:
-            # Fire (action 1), when a life was lost or the game just started,
-            # so that the agent does not stand around doing nothing. When playing
-            # with other environments, you might want to change this...
-            if terminal_life_lost:
-                action = 1
-                eps = 0
-            else:
-                eps,action = action_getter.pt_get_action(frame_number, atari.state, active_head=None, evaluation=True)
+        episode_steps = 0
+        while (not terminal) and (episode_steps < info['MAX_EPISODE_LENGTH']):
+            eps,action = action_getter.pt_get_action(frame_number, atari.state, active_head=None, evaluation=True)
 
             processed_new_frame, reward, terminal, terminal_life_lost, new_frame = atari.step(sess, action)
             evaluate_frame_number += 1
+            episode_steps +=1
             episode_reward_sum += reward
             if gif:
                 frames_for_gif.append(new_frame)
+            if not episode_steps%100:
+                print('eval', episode_steps, episode_reward_sum)
+
         eval_rewards.append(episode_reward_sum)
         gif = False # Save only the first game of the evaluation as a gif
 
@@ -668,7 +656,8 @@ if __name__ == '__main__':
     info = {
         "GAME":'Breakout', # gym prefix
         "DEVICE":device,
-        "NAME":'Dbug_multi_FRANKBreakout_9PTA_init_EPS2550BIAS', # start files with name
+        #"NAME":'Dbug_multi_FRANKBreakout_9PTA_init_EPS0BIAS', # start files with name
+        "NAME":'DEBUGAtari', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
@@ -677,6 +666,7 @@ if __name__ == '__main__':
         "TARGET_UPDATE":10000, # TARGET_UPDATE how often to use replica target
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "EPS_INITIAL":1.0,
+        #"EPS_FINAL":0.01,
         "EPS_FINAL":0.1,
         "EPS_EVAL":0.0,
         "EPS_ANNEALING_FRAMES":1000000,
@@ -708,7 +698,7 @@ if __name__ == '__main__':
         "FAKE_REWARD":-5,
         "NETWORK_INPUT_SIZE":(84,84),
         "START_TIME":time.time(),
-        "MAX_FRAMES":int(200e6),
+        "MAX_STEPS":int(50e6),
         "MAX_EPISODE_LENGTH":18000, # Equivalent of 5 minutes of gameplay at 60 frames per second
         }
 
@@ -804,7 +794,7 @@ if __name__ == '__main__':
                                  eps_annealing_frames=info['EPS_ANNEALING_FRAMES'],
                                  eps_evaluation=info['EPS_EVAL'],
                                  replay_memory_start_size=info['MIN_HISTORY_TO_LEARN'],
-                                 max_frames=info['MAX_FRAMES'])
+                                 max_steps=info['MAX_STEPS'])
 
 
     # Scalar summaries for tensorboard: loss, average reward and evaluation score

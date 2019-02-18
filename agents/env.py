@@ -5,7 +5,7 @@ import numpy as np
 from atari_py.ale_python_interface import ALEInterface
 #from skimage.transform import resize
 #from skimage.color import rgb2gray
-#from IPython import embed
+from IPython import embed
 #from imageio import imwrite
 
 # glb_counter = 0
@@ -15,10 +15,9 @@ from atari_py.ale_python_interface import ALEInterface
 
 def cv_preprocess_frame(observ, output_size):
     gray = cv2.cvtColor(observ, cv2.COLOR_RGB2GRAY)
+    #output = cv2.resize(gray[34:,-16], (output_size, output_size))
     output = cv2.resize(gray, (output_size, output_size))
-    output = output.astype(np.float32, copy=False)/255.0
     return output
-
 
 class Environment(object):
     def __init__(self,
@@ -28,7 +27,7 @@ class Environment(object):
                  frame_size=84,
                  no_op_start=30,
                  rand_seed=393,
-                 dead_as_eoe=True,
+                 dead_as_end=True,
                  max_steps=18000,
                  autofire=False):
         self.max_steps = max_steps
@@ -41,7 +40,7 @@ class Environment(object):
         self.num_frames = num_frames
         self.frame_size = frame_size
         self.no_op_start = no_op_start
-        self.dead_as_eoe = dead_as_eoe
+        self.dead_as_end = dead_as_end
 
         self.clipped_reward = 0
         self.total_reward = 0
@@ -79,6 +78,8 @@ class Environment(object):
 
     def reset(self):
         self.steps = 0
+        self.plot_frames = []
+        self.gray_plot_frames = []
         for _ in range(self.num_frames - 1):
             self.frame_queue.append(
                 np.zeros((self.frame_size, self.frame_size), dtype=np.uint8))
@@ -96,6 +97,10 @@ class Environment(object):
             self.ale.act(0)
 
         self.frame_queue.append(self._get_current_frame())
+        self.plot_frames.append(self.prev_screen)
+        a = np.array(self.frame_queue)
+        out = np.concatenate((a[0],a[1],a[2],a[3]),axis=0).T
+        self.gray_plot_frames.append(out)
         assert not self.ale.game_over()
         self.end = False
         return np.array(self.frame_queue)
@@ -111,29 +116,39 @@ class Environment(object):
         clipped_reward = 0
         old_lives = self.ale.lives()
 
-        for _ in range(self.frame_skip):
-            self.prev_screen = self.ale.getScreenRGB()
+        for i in range(self.frame_skip):
+            if i == self.frame_skip - 1:
+                self.prev_screen = self.ale.getScreenRGB()
             r = self.ale.act(self.actions[action_idx])
             reward += r
             clipped_reward += np.sign(r)
-            dead = (self.ale.lives() < old_lives)
-            if self.ale.game_over() or (self.dead_as_eoe and dead):
-                self.end = True
-                break
+        dead = (self.ale.lives() < old_lives)
+        if self.dead_as_end and dead:
+            lives_dead = True
+        else:
+            lives_dead = False
 
+        if self.ale.game_over():
+            self.end = True
+            lives_dead = True
         self.steps +=1
         if self.steps >= self.max_steps:
             self.end = True
+            lives_dead = True
         self.frame_queue.append(self._get_current_frame())
         self.total_reward += reward
         self.clipped_reward += clipped_reward
-        return np.array(self.frame_queue), clipped_reward, self.end
+        a = np.array(self.frame_queue)
+        self.prev_screen = self.ale.getScreenRGB()
+        self.gray_plot_frames.append(np.concatenate((a[0],a[1],a[2],a[3]),axis=0))
+        self.plot_frames.append(self.prev_screen)
+        return np.array(self.frame_queue), clipped_reward, lives_dead, self.end
 
 
 if __name__ == '__main__':
 
     import time
-    env = Environment('roms/breakout.bin', 4, 4, 84, 30, 33, False)
+    env = Environment('roms/breakout.bin', 4, 4, 84, 30, 33, True)
     print('starting with game over?', env.ale.game_over())
     random_state = np.random.RandomState(304)
 
@@ -144,12 +159,14 @@ if __name__ == '__main__':
     for t in times:
         action = random_state.randint(0, env.num_actions)
         st = time.time()
-        state, reward, end, _ = env.step(action)
+        state, reward, end, do_reset = env.step(action)
         total_reward += reward
         times[i] = time.time()-st
         i += 1
         if end:
-            print("RESET")
+            print(i,"END")
+        if do_reset:
+            print(i,"RESET")
             state = env.reset()
     print('total_reward:', total_reward)
     print('total steps:', i)

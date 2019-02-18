@@ -229,6 +229,7 @@ class ActionGetter():
             return self.random_state.randint(0, self.n_actions)
         else:
             with torch.no_grad():
+                embed()
                 state = torch.Tensor(state).to(info['DEVICE'])
                 vals = policy_net(state, active_head)
                 if active_head is not None:
