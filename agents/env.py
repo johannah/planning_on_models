@@ -28,9 +28,9 @@ class Environment(object):
                  no_op_start=30,
                  rand_seed=393,
                  dead_as_end=True,
-                 max_steps=18000,
+                 max_episode_steps=18000,
                  autofire=False):
-        self.max_steps = max_steps
+        self.max_episode_steps = max_episode_steps
         self.random_state = np.random.RandomState(rand_seed+15)
         self.ale = self._init_ale(rand_seed, rom_file)
         # normally (160, 210)
@@ -78,6 +78,7 @@ class Environment(object):
 
     def reset(self):
         self.steps = 0
+        self.end = False
         self.plot_frames = []
         self.gray_plot_frames = []
         for _ in range(self.num_frames - 1):
@@ -101,8 +102,8 @@ class Environment(object):
         a = np.array(self.frame_queue)
         out = np.concatenate((a[0],a[1],a[2],a[3]),axis=0).T
         self.gray_plot_frames.append(out)
-        assert not self.ale.game_over()
-        self.end = False
+        if self.ale.game_over():
+            print("Unexpected game over in reset", self.reset())
         return np.array(self.frame_queue)
 
     def step(self, action_idx):
@@ -132,7 +133,7 @@ class Environment(object):
             self.end = True
             lives_dead = True
         self.steps +=1
-        if self.steps >= self.max_steps:
+        if self.steps >= self.max_episode_steps:
             self.end = True
             lives_dead = True
         self.frame_queue.append(self._get_current_frame())
