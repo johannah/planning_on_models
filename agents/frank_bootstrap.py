@@ -130,7 +130,7 @@ class ActionGetter:
             return eps, self.random_state.randint(0, self.n_actions)
         else:
             #state = torch.transpose(torch.Tensor(state.astype(np.float)),2,0)[None,:].to(info['DEVICE'])
-            state = torch.Tensor(state.astype(np.float))[None,:].to(info['DEVICE'])
+            state = torch.Tensor(state.astype(np.float)/255.)[None,:].to(info['DEVICE'])
             vals = policy_net(state, active_head)
             if active_head is not None:
                 action = torch.argmax(vals, dim=1).item()
@@ -279,8 +279,8 @@ class ReplayMemory:
         return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
-    states = torch.Tensor(states.astype(np.float)).to(info['DEVICE'])
-    next_states = torch.Tensor(next_states.astype(np.float)).to(info['DEVICE'])
+    states = torch.Tensor(states.astype(np.float)/255.).to(info['DEVICE'])
+    next_states = torch.Tensor(next_states.astype(np.float)/255.).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
@@ -457,7 +457,7 @@ def evaluate(step_number):
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
-            frames_for_gif.append(next_state[-1])
+            frames_for_gif.append(env.ale.getScreenRGB())
             if not episode_steps%100:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
@@ -491,16 +491,16 @@ if __name__ == '__main__':
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'FRANKbootstrap', # start files with name
+        "NAME":'FRANKbootstrap_norm', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
         "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
-        "BERNOULLI_PROBABILITY": 0.9, # Probability of experience to go to each head - if 1, every experience goes to every head
+        "BERNOULLI_PROBABILITY": 1., # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "EPS_INITIAL":1.0,
-        "EPS_FINAL":0.01,
+        "EPS_FINAL":0.1,
         "EPS_EVAL":0.0,
         "EPS_ANNEALING_FRAMES":int(1e6),
         "EPS_FINAL_FRAME":0.01,
@@ -508,7 +508,7 @@ if __name__ == '__main__':
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000,
         "EVAL_FREQUENCY":250000,
-        "ADAM_LEARNING_RATE":0.00001 ,
+        "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
@@ -528,7 +528,7 @@ if __name__ == '__main__':
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
         "MAX_EPISODE_STEPS":18000, # Equivalent of 5 minutes of gameplay at 60 frames per second
         "FRAME_SKIP":4,
-        "MAX_NO_OP_FRAMES":1,
+        "MAX_NO_OP_FRAMES":30,
         "DEAD_AS_END":True,
         }
 
@@ -617,13 +617,13 @@ if __name__ == '__main__':
 
     target_net.load_state_dict(policy_net.state_dict())
     # create optimizer
-    opt = optim.RMSprop(policy_net.parameters(),
-                        lr=info["RMS_LEARNING_RATE"],
-                        momentum=info["RMS_MOMENTUM"],
-                        eps=info["RMS_EPSILON"],
-                        centered=info["RMS_CENTERED"],
-                        alpha=info["RMS_DECAY"])
-    #opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    #opt = optim.RMSprop(policy_net.parameters(),
+    #                    lr=info["RMS_LEARNING_RATE"],
+    #                    momentum=info["RMS_MOMENTUM"],
+    #                    eps=info["RMS_EPSILON"],
+    #                    centered=info["RMS_CENTERED"],
+    #                    alpha=info["RMS_DECAY"])
+    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
 
     if args.model_loadpath is not '':
         # what about random states - they will be wrong now???
