@@ -383,7 +383,7 @@ def train(step_number, last_save):
                 # Store transition in the replay memory
                 replay_memory.add_experience(action=action,
                                                 frame=next_state[-1],
-                                                reward=reward,
+                                                reward=np.sign(reward),
                                                 terminal=life_lost)
 
                 step_number += 1
@@ -438,9 +438,9 @@ def evaluate(step_number):
          ####### Evaluation ######
          #########################
          """)
-    frames_for_gif = []
     eval_rewards = []
     evaluate_step_number = 0
+    frames_for_gif = []
     # only run one
     for i in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
@@ -457,11 +457,12 @@ def evaluate(step_number):
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
-            frames_for_gif.append(env.ale.getScreenRGB())
+            if not i:
+                # only save first
+                frames_for_gif.append(env.ale.getScreenRGB())
             if not episode_steps%100:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
-
         eval_rewards.append(episode_reward_sum)
 
     print("Evaluation score:\n", np.mean(eval_rewards))

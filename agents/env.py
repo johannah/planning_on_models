@@ -42,7 +42,6 @@ class Environment(object):
         self.no_op_start = no_op_start
         self.dead_as_end = dead_as_end
 
-        self.clipped_reward = 0
         self.total_reward = 0
         screen_width, screen_height = self.ale.getScreenDims()
         #self.prev_screen = np.zeros(
@@ -87,7 +86,6 @@ class Environment(object):
 
         # steps are in steps the agent sees
         self.ale.reset_game()
-        self.clipped_reward = 0
         self.total_reward = 0
         self.prev_screen = np.zeros(self.prev_screen.shape, dtype=np.uint8)
 
@@ -114,7 +112,6 @@ class Environment(object):
         """
         assert not self.end
         reward = 0
-        clipped_reward = 0
         old_lives = self.ale.lives()
 
         for i in range(self.frame_skip):
@@ -122,7 +119,6 @@ class Environment(object):
                 self.prev_screen = self.ale.getScreenRGB()
             r = self.ale.act(self.actions[action_idx])
             reward += r
-            clipped_reward += np.sign(r)
         dead = (self.ale.lives() < old_lives)
         if self.dead_as_end and dead:
             lives_dead = True
@@ -138,12 +134,11 @@ class Environment(object):
             lives_dead = True
         self.frame_queue.append(self._get_current_frame())
         self.total_reward += reward
-        self.clipped_reward += clipped_reward
         a = np.array(self.frame_queue)
         self.prev_screen = self.ale.getScreenRGB()
         self.gray_plot_frames.append(np.concatenate((a[0],a[1],a[2],a[3]),axis=0))
         self.plot_frames.append(self.prev_screen)
-        return np.array(self.frame_queue), clipped_reward, lives_dead, self.end
+        return np.array(self.frame_queue), reward, lives_dead, self.end
 
 
 if __name__ == '__main__':
