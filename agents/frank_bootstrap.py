@@ -6,7 +6,6 @@ If you have questions or suggestions, write me a mail fabiograetzatgooglemaildot
 import os
 import tensorflow as tf
 import numpy as np
-import imageio
 from skimage.transform import resize
 import sys
 import numpy as np
@@ -23,8 +22,9 @@ import datetime
 import time
 #from replay_buffer import ReplayBuffer
 from dqn_model import EnsembleNet
-from dqn_utils import seed_everything, write_info_file
+from dqn_utils import seed_everything, write_info_file, generate_gif
 from env import Environment
+from replay import ReplayMemory
 sys.path.append('../models')
 from lstm_utils import plot_dict_losses
 import config
@@ -34,14 +34,14 @@ def matplotlib_plot_all(p):
     epoch_num = len(p['steps'])
     epochs = np.arange(epoch_num)
     steps = p['steps']
-    plot_dict_losses({'episode steps':{'index':epochs, 'val':p['episode_step']}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
-    plot_dict_losses({'episode steps':{'index':epochs, 'val':p['episode_relative_times']}}, name=os.path.join(model_base_filedir, 'episode_relative_times.png'), rolling_length=10)
-    plot_dict_losses({'episode head':{'index':epochs,  'val':p['episode_head']}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
-    plot_dict_losses({'steps loss':{'index':steps,     'val':p['episode_loss']}}, name=os.path.join(model_base_filedir, 'steps_loss.png'))
-    plot_dict_losses({'steps eps':{'index':steps,      'val':p['eps_list']}}, name=os.path.join(model_base_filedir, 'steps_mean_eps.png'), rolling_length=0)
-    plot_dict_losses({'steps reward':{'index':steps,   'val':p['episode_reward']}},  name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
+    plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_step']}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
+    plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_relative_times']}}, name=os.path.join(model_base_filedir, 'episode_relative_times.png'), rolling_length=10)
+    plot_dict_losses({'episode head':{'index':epochs, 'val':p['episode_head']}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
+    plot_dict_losses({'steps loss':{'index':steps, 'val':p['episode_loss']}}, name=os.path.join(model_base_filedir, 'steps_loss.png'))
+    plot_dict_losses({'steps eps':{'index':steps, 'val':p['eps_list']}}, name=os.path.join(model_base_filedir, 'steps_mean_eps.png'), rolling_length=0)
+    plot_dict_losses({'steps reward':{'index':steps,'val':p['episode_reward']}},  name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
     plot_dict_losses({'episode reward':{'index':epochs, 'val':p['episode_reward']}}, name=os.path.join(model_base_filedir, 'episode_reward.png'), rolling_length=0)
-    plot_dict_losses({'episode times':{'index':epochs,  'val':p['episode_times']}}, name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
+    plot_dict_losses({'episode times':{'index':epochs,'val':p['episode_times']}}, name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
     plot_dict_losses({'steps avg reward':{'index':steps,'val':p['avg_rewards']}}, name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
     plot_dict_losses({'eval rewards':{'index':p['eval_steps'], 'val':p['eval_rewards']}}, name=os.path.join(model_base_filedir, 'eval_rewards_steps.png'), rolling_length=0)
 
@@ -65,6 +65,7 @@ def handle_checkpoint(last_save, cnt):
         print("finished checkpoint", time.time()-st)
         return last_save
     else: return last_save
+
 
 class ActionGetter:
     """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
@@ -129,8 +130,7 @@ class ActionGetter:
         if self.random_state.rand() < eps:
             return eps, self.random_state.randint(0, self.n_actions)
         else:
-            #state = torch.transpose(torch.Tensor(state.astype(np.float)),2,0)[None,:].to(info['DEVICE'])
-            state = torch.Tensor(state.astype(np.float)/255.)[None,:].to(info['DEVICE'])
+            state = torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
             vals = policy_net(state, active_head)
             if active_head is not None:
                 action = torch.argmax(vals, dim=1).item()
@@ -138,154 +138,18 @@ class ActionGetter:
             else:
                 # vote
                 acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
-                action = most_common(acts)
+                data = Counter(acts)
+                action = data.most_common(1)[0][0]
                 return eps, action
 
-class ReplayMemory:
-    """Replay Memory that stores the last size=1,000,000 transitions"""
-    def __init__(self, size=1000000, frame_height=84, frame_width=84,
-                 agent_history_length=4, batch_size=32, num_heads=1, bernoulli_probability=1.0):
-        """
-        Args:
-            size: Integer, Number of stored transitions
-            frame_height: Integer, Height of a frame of an Atari game
-            frame_width: Integer, Width of a frame of an Atari game
-            agent_history_length: Integer, Number of frames stacked together to create a state
-            batch_size: Integer, Number if transitions returned in a minibatch
-            num_heads: integer number of heads needed in mask
-            bernoulli_probability: bernoulli probability that an experience will go to a particular head
-        """
-        self.bernoulli_probability = bernoulli_probability
-        assert(self.bernoulli_probability > 0)
-        self.size = size
-        self.frame_height = frame_height
-        self.frame_width = frame_width
-        self.agent_history_length = agent_history_length
-        self.count = 0
-        self.current = 0
-        self.num_heads = num_heads
-        # Pre-allocate memory
-        self.actions = np.empty(self.size, dtype=np.int32)
-        self.rewards = np.empty(self.size, dtype=np.float32)
-        self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
-        self.terminal_flags = np.empty(self.size, dtype=np.bool)
-        self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
-
-        # Pre-allocate memory for the states and new_states in a minibatch
-        self.states = np.empty((batch_size, self.agent_history_length,
-                                self.frame_height, self.frame_width), dtype=np.uint8)
-        self.new_states = np.empty((batch_size, self.agent_history_length,
-                                    self.frame_height, self.frame_width), dtype=np.uint8)
-        self.indices = np.empty(batch_size, dtype=np.int32)
-        self.random_state = np.random.RandomState(393)
-
-    def save_buffer(self, filepath):
-        st = time.time()
-        print("starting save of buffer to %s"%filepath, st)
-        np.savez(filepath,
-                 frames=self.frames, actions=self.actions, rewards=self.rewards,
-                 terminal_flags=self.terminal_flags, masks=self.masks,
-                 count=self.count, current=self.current,
-                 agent_history_length=self.agent_history_length,
-                 frame_height=self.frame_height, frame_width=self.frame_width,
-                 num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
-                 )
-        print("finished saving buffer", time.time()-st)
-
-    def load_buffer(self, filepath):
-        st = time.time()
-        print("starting load of buffer from %s"%filepath, st)
-        npfile = np.load(filepath)
-        self.frames = npfile['frames']
-        self.actions = npfile['actions']
-        self.rewards = npfile['rewards']
-        self.terminal_flags = npfile['terminal_flags']
-        self.masks = npfile['masks']
-        self.count = npfile['count']
-        self.current = npfile['current']
-        self.agent_history_length = npfile['agent_history_length']
-        self.frame_height = npfile['frame_height']
-        self.frame_width = npfile['frame_width']
-        self.num_heads = npfile['num_heads']
-        self.bernoulli_probability = npfile['bernoulli_probability']
-
-        print("finished loading buffer", time.time()-st)
-        print("loaded buffer current is", self.current)
-
-    def add_experience(self, action, frame, reward, terminal):
-        """
-        Args:
-            action: An integer between 0 and env.action_space.n - 1
-                determining the action the agent perfomed
-            frame: A (84, 84, 1) frame of an Atari game in grayscale
-            reward: A float determining the reward the agend received for performing an action
-            terminal: A bool stating whether the episode terminated
-        """
-        if frame.shape != (self.frame_height, self.frame_width):
-            raise ValueError('Dimension of frame is wrong!')
-        self.actions[self.current] = action
-        self.frames[self.current, ...] = frame
-        self.rewards[self.current] = reward
-        self.terminal_flags[self.current] = terminal
-        mask = self.random_state.binomial(1, self.bernoulli_probability, self.num_heads)
-        self.masks[self.current] = mask
-        self.count = max(self.count, self.current+1)
-        self.current = (self.current + 1) % self.size
-
-
-    def _get_state(self, index):
-        if self.count is 0:
-            raise ValueError("The replay memory is empty!")
-        if index < self.agent_history_length - 1:
-            raise ValueError("Index must be min 3")
-        return self.frames[index-self.agent_history_length+1:index+1, ...]
-
-    def _get_valid_indices(self, batch_size):
-        if batch_size != self.indices.shape[0]:
-             self.indices = np.empty(batch_size, dtype=np.int32)
-
-        for i in range(batch_size):
-            while True:
-                index = self.random_state.randint(self.agent_history_length, self.count - 1)
-                if index < self.agent_history_length:
-                    continue
-                if index >= self.current and index - self.agent_history_length <= self.current:
-                    continue
-                # dont add if there was a terminal flag in previous
-                # history_length steps
-                if self.terminal_flags[index - self.agent_history_length:index].any():
-                    continue
-                break
-            self.indices[i] = index
-
-    def get_minibatch(self, batch_size):
-        """
-        Returns a minibatch of batch_size
-        """
-        if batch_size != self.states.shape[0]:
-            self.states = np.empty((batch_size, self.agent_history_length,
-                                    self.frame_height, self.frame_width), dtype=np.uint8)
-            self.new_states = np.empty((batch_size, self.agent_history_length,
-                                        self.frame_height, self.frame_width), dtype=np.uint8)
-
-        if self.count < self.agent_history_length:
-            raise ValueError('Not enough memories to get a minibatch')
-
-        self._get_valid_indices(batch_size)
-
-        for i, idx in enumerate(self.indices):
-            self.states[i] = self._get_state(idx - 1)
-            self.new_states[i] = self._get_state(idx)
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
-
 def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
-    states = torch.Tensor(states.astype(np.float)/255.).to(info['DEVICE'])
-    next_states = torch.Tensor(next_states.astype(np.float)/255.).to(info['DEVICE'])
+    states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
+    next_states = torch.Tensor(next_states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
     masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
-    # min history to learn is 200,000 frames in dqn
+    # min history to learn is 200,000 frames in dqn - 50000 steps
     losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
     opt.zero_grad()
     q_policy_vals = policy_net(states, None)
@@ -305,11 +169,6 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
 
             preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
             targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
-            # clip loss from original lua code - seems unstable here...
-            # https://stackoverflow.com/questions/36462962/loss-clipping-in-tensor-flow-on-deepminds-dqn
-            #loss = torch.clamp(targets-preds, -1, 1)
-            #loss = torch.mean(loss**2)
-
             l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
             full_loss = masks[:,k]*l1loss
             loss = torch.sum(full_loss/total_used)
@@ -325,32 +184,6 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
     nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
     opt.step()
     return np.mean(losses)
-
-def generate_gif(step_number, frames_for_gif, reward, name=''):
-    """
-        Args:
-            step_number: Integer, determining the number of the current frame
-            frames_for_gif: A sequence of (210, 160, 3) frames of an Atari game in RGB
-            reward: Integer, Total reward of the episode that es ouputted as a gif
-            path: String, path where gif is saved
-    """
-    if len(frames_for_gif[0].shape) == 3:
-        for idx, frame_idx in enumerate(frames_for_gif):
-            frames_for_gif[idx] = resize(frame_idx, (420, 320, 3),
-                                     preserve_range=True, order=0).astype(np.uint8)
-
-        gif_fname = os.path.join(model_base_filedir, "ATARI_frame_%010d_reward_%04d_color%s.gif"%(step_number, int(reward), name))
-    else:
-        for idx, frame_idx in enumerate(frames_for_gif):
-            frames_for_gif[idx] = resize(frame_idx, (420, 320), preserve_range=True, order=0).astype(np.uint8)
-        gif_fname = os.path.join(model_base_filedir, "ATARI_frame_%010d_reward_%04d_gray%s.gif"%(step_number, int(reward), name))
-
-    print("WRITING GIF", gif_fname)
-    imageio.mimsave(gif_fname, frames_for_gif, duration=1/30)
-
-def most_common(lst):
-    data = Counter(lst)
-    return data.most_common(1)[0][0]
 
 def train(step_number, last_save):
     """Contains the training and evaluation loops"""
@@ -413,10 +246,12 @@ def train(step_number, last_save):
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
             last_save = handle_checkpoint(last_save, step_number)
 
-            if not epoch_num%50 and step_number > info['MIN_HISTORY_TO_LEARN']:
+            if not epoch_num%info['PLOT_EVERY_EPISODES'] and step_number > info['MIN_HISTORY_TO_LEARN']:
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
+                print('last rewards', perf['episode_reward'][:-info['PLOT_EVERY_EPISODES']])
 
+                matplotlib_plot_all(perf)
                 # Scalar summaries for tensorboard
                 summ = sess.run(PERFORMANCE_SUMMARIES,
                                 feed_dict={
@@ -441,6 +276,7 @@ def evaluate(step_number):
     eval_rewards = []
     evaluate_step_number = 0
     frames_for_gif = []
+    results_for_eval = []
     # only run one
     for i in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
@@ -458,15 +294,16 @@ def evaluate(step_number):
             episode_steps +=1
             episode_reward_sum += reward
             if not i:
-                # only save first
+                # only save first episode
                 frames_for_gif.append(env.ale.getScreenRGB())
+                results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
             if not episode_steps%100:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
         eval_rewards.append(episode_reward_sum)
 
     print("Evaluation score:\n", np.mean(eval_rewards))
-    generate_gif(step_number, frames_for_gif, eval_rewards[0], name='test')
+    generate_gif(model_base_filedir, step_number, frames_for_gif, eval_rewards[0], name='test', results_for_eval)
 
     # Show the evaluation score in tensorboard
     summ = sess.run(EVAL_SCORE_SUMMARY, feed_dict={EVAL_SCORE_PH:np.mean(eval_rewards)})
@@ -500,6 +337,7 @@ if __name__ == '__main__':
         "BERNOULLI_PROBABILITY": 1., # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
+        "NORM_BY":1.0,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "EPS_INITIAL":1.0,
         "EPS_FINAL":0.1,
         "EPS_EVAL":0.0,
@@ -521,13 +359,14 @@ if __name__ == '__main__':
         "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
         "EPSILON_MIN":.1,
         "GAMMA":.99, # Gamma weight in Q update
+        "PLOT_EVERY_EPISODES": 50,
         "CLIP_GRAD":5, # Gradient clipping setting
         "SEED":101,
         "RANDOM_HEAD":-1,
         "NETWORK_INPUT_SIZE":(84,84),
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
-        "MAX_EPISODE_STEPS":18000, # Equivalent of 5 minutes of gameplay at 60 frames per second
+        "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
         "FRAME_SKIP":4,
         "MAX_NO_OP_FRAMES":30,
         "DEAD_AS_END":True,
@@ -536,6 +375,7 @@ if __name__ == '__main__':
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
     info['args'] = args
     info['load_time'] = datetime.date.today().ctime()
+    info['NORM_BY'] = float(info['NORM_BY'])
 
     # create environment
     env = Environment(rom_file=info['GAME'], frame_skip=info['FRAME_SKIP'],

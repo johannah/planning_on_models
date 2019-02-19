@@ -3,12 +3,11 @@ from collections import deque
 import cv2
 import numpy as np
 from atari_py.ale_python_interface import ALEInterface
+from IPython import embed
+
 #from skimage.transform import resize
 #from skimage.color import rgb2gray
-from IPython import embed
 #from imageio import imwrite
-
-# glb_counter = 0
 
 #def preprocess_frame(observ, output_size):
 #    return resize(rgb2gray(observ),(output_size, output_size)).astype(np.float32, copy=False)
@@ -16,7 +15,7 @@ from IPython import embed
 def cv_preprocess_frame(observ, output_size):
     gray = cv2.cvtColor(observ, cv2.COLOR_RGB2GRAY)
     #output = cv2.resize(gray[34:,-16], (output_size, output_size))
-    output = cv2.resize(gray, (output_size, output_size))
+    output = cv2.resize(gray, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
     return output
 
 class Environment(object):
