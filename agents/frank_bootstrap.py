@@ -3,10 +3,12 @@ from __future__ import print_function
 Implementation of DeepMind's Deep Q-Learning by Fabio M. Graetz, 2018
 If you have questions or suggestions, write me a mail fabiograetzatgooglemaildotcom
 """
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import os
 import tensorflow as tf
 import numpy as np
-from skimage.transform import resize
 import sys
 import numpy as np
 from IPython import embed
@@ -26,9 +28,27 @@ from dqn_utils import seed_everything, write_info_file, generate_gif
 from env import Environment
 from replay import ReplayMemory
 sys.path.append('../models')
-from lstm_utils import plot_dict_losses
 import config
 from ae_utils import save_checkpoint
+
+def rolling_average(a, n=5) :
+    if n == 0:
+        return a
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+
+def plot_dict_losses(plot_dict, name='loss_example.png', rolling_length=4, plot_title=''):
+    f,ax=plt.subplots(1,1,figsize=(6,6))
+    for n in plot_dict.keys():
+        print('plotting', n)
+        ax.plot(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), lw=1)
+        ax.scatter(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), label=n, s=3)
+    ax.legend()
+    if plot_title != '':
+        plt.title(plot_title)
+    plt.savefig(name)
+    plt.close()
 
 def matplotlib_plot_all(p):
     epoch_num = len(p['steps'])
@@ -303,7 +323,7 @@ def evaluate(step_number):
         eval_rewards.append(episode_reward_sum)
 
     print("Evaluation score:\n", np.mean(eval_rewards))
-    generate_gif(model_base_filedir, step_number, frames_for_gif, eval_rewards[0], name='test', results_for_eval)
+    generate_gif(model_base_filedir, step_number, frames_for_gif, eval_rewards[0], name='test', results=results_for_eval)
 
     # Show the evaluation score in tensorboard
     summ = sess.run(EVAL_SCORE_SUMMARY, feed_dict={EVAL_SCORE_PH:np.mean(eval_rewards)})
@@ -329,15 +349,15 @@ if __name__ == '__main__':
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'FRANKbootstrap_norm', # start files with name
+        "NAME":'FRANKbootstrap_bp', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "N_ENSEMBLE":9,
         "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
-        "BERNOULLI_PROBABILITY": 1., # Probability of experience to go to each head - if 1, every experience goes to every head
+        "BERNOULLI_PROBABILITY": 0.9, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
-        "NORM_BY":1.0,  # divide the float(of uint) by this number to normalize - max val of data is 255
+        "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "EPS_INITIAL":1.0,
         "EPS_FINAL":0.1,
         "EPS_EVAL":0.0,
