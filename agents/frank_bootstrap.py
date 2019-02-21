@@ -338,28 +338,28 @@ if __name__ == '__main__':
 
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
-        "DEVICE":device,
-        "NAME":'FRANKbootstrap_prior', # start files with name
-        "DUELING":True,
-        "DOUBLE_DQN":True,
-        "PRIOR":True,
-        "PRIOR_SCALE":10,
-        "N_ENSEMBLE":9,
-        "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
+        "DEVICE":device, #cpu vs gpu set by argument
+        "NAME":'FRANKbootstrap_fasteranneal', # start files with name
+        "DUELING":True, # use dueling dqn
+        "DOUBLE_DQN":True, # use double dqn
+        "PRIOR":False, # turn on to use randomized prior
+        "PRIOR_SCALE":10, # what to scale prior by
+        "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
+        "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "BERNOULLI_PROBABILITY": 0.9, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
-        "EPS_INITIAL":1.0,
-        "EPS_FINAL":0.01,
-        "EPS_EVAL":0.0,
-        #"EPS_ANNEALING_FRAMES":int(1e6),
-        "EPS_ANNEALING_FRAMES":0,
+        "EPS_INITIAL":1.0, # should be 1
+        "EPS_FINAL":0.01, # 0.01 in osband
+        "EPS_EVAL":0.0, # 0 in osband, .05 in others....
+        "EPS_ANNEALING_FRAMES":int(1e6), # this may have been 1e6 in osband
+        #"EPS_ANNEALING_FRAMES":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
         "EPS_FINAL_FRAME":0.01,
-        "NUM_EVAL_EPISODES":1,
+        "NUM_EVAL_EPISODES":1, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":500000,
-        "EVAL_FREQUENCY":250000,
+        "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
+        "EVAL_FREQUENCY":250000, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
@@ -369,21 +369,19 @@ if __name__ == '__main__':
         "HISTORY_SIZE":4, # how many past frames to use for state input
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
-        "EPSILON_MAX":1.0, # Epsilon greedy exploration ~prob of random action, 0. disables
-        "EPSILON_MIN":.1,
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 50,
         "CLIP_GRAD":5, # Gradient clipping setting
         "SEED":101,
-        "RANDOM_HEAD":-1,
+        "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "NETWORK_INPUT_SIZE":(84,84),
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
         "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
-        "FRAME_SKIP":4,
-        "MAX_NO_OP_FRAMES":30,
-        "DEAD_AS_END":True,
-        }
+        "FRAME_SKIP":4, # deterministic frame skips to match deepmind
+        "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
+        "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
+    }
 
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
     info['args'] = args
