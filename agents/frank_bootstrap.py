@@ -1,8 +1,4 @@
 from __future__ import print_function
-"""
-Implementation of DeepMind's Deep Q-Learning by Fabio M. Graetz, 2018
-If you have questions or suggestions, write me a mail fabiograetzatgooglemaildotcom
-"""
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -82,6 +78,7 @@ def handle_checkpoint(last_save, cnt):
 
 class ActionGetter:
     """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
+    """This class is from fg91's dqn"""
     def __init__(self, n_actions, eps_initial=1, eps_final=0.1, eps_final_frame=0.01,
                  eps_evaluation=0.0, eps_annealing_frames=100000,
                  replay_memory_start_size=50000, max_steps=25000000, random_seed=122):
@@ -262,7 +259,7 @@ def train(step_number, last_save):
             if not epoch_num%info['PLOT_EVERY_EPISODES'] and step_number > info['MIN_HISTORY_TO_LEARN']:
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
-                print('last rewards', perf['episode_reward'][:-info['PLOT_EVERY_EPISODES']])
+                print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
 
                 matplotlib_plot_all(perf)
                 # Scalar summaries for tensorboard

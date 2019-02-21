@@ -1,6 +1,8 @@
 import numpy as np
 import time
 
+# This function was mostly pulled from
+# https://github.com/fg91/Deep-Q-Learning/blob/master/DQN.ipynb
 class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
     def __init__(self, size=1000000, frame_height=84, frame_width=84,

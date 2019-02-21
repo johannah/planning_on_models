@@ -1,10 +1,13 @@
 
+# Model style from Kyle @
+# https://gist.github.com/kastnerkyle/a4498fdf431a3a6d551bcc30cd9a35a0
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from IPython import embed
 
+# from the DQN paper
 #The first convolution layer convolves the input with 32 filters of size 8 (stride 4),
 #the second layer has 64 layers of size 4
 #(stride 2), the final convolution layer has 64 filters of size 3 (stride
