@@ -5,6 +5,12 @@ import sys
 from imageio import mimsave
 from skimage.transform import resize
 
+def save_checkpoint(state, filename='model.pkl'):
+    print("starting save of model %s" %filename)
+    torch.save(state, filename)
+    print("finished save of model %s" %filename)
+
+
 def seed_everything(seed=1234):
     #random.seed(seed)
     torch.manual_seed(seed)

@@ -302,7 +302,6 @@ def right_shift(x, pad=None):
     pad = nn.ZeroPad2d((1, 0, 0, 0)) if pad is None else pad
     return pad(x)
 
-
 def save_checkpoint(state, filename='model.pkl'):
     print("starting save of model %s" %filename)
     torch.save(state, filename)

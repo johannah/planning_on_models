@@ -9,12 +9,8 @@ import matplotlib.pyplot as plt
 import os
 import tensorflow as tf
 import numpy as np
-import sys
-import numpy as np
 from IPython import embed
 from collections import Counter
-import math
-#from logger import TensorBoardLogger
 import torch
 torch.set_num_threads(2)
 import torch.nn as nn
@@ -22,14 +18,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import datetime
 import time
-#from replay_buffer import ReplayBuffer
-from dqn_model import EnsembleNet
-from dqn_utils import seed_everything, write_info_file, generate_gif
+from dqn_model import EnsembleNet, NetWithPrior
+from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint
 from env import Environment
 from replay import ReplayMemory
-sys.path.append('../models')
 import config
-from ae_utils import save_checkpoint
 
 def rolling_average(a, n=5) :
     if n == 0:
@@ -352,6 +345,8 @@ if __name__ == '__main__':
         "NAME":'FRANKbootstrap_bp', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
+        "PRIOR":True,
+        "PRIOR_SCALE":10,
         "N_ENSEMBLE":9,
         "LEARN_EVERY_STEPS":4, # should be 1, but is 4 in fg91
         "BERNOULLI_PROBABILITY": 0.9, # Probability of experience to go to each head - if 1, every experience goes to every head
@@ -359,7 +354,7 @@ if __name__ == '__main__':
         "MIN_HISTORY_TO_LEARN":50000, # in environment frames
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "EPS_INITIAL":1.0,
-        "EPS_FINAL":0.1,
+        "EPS_FINAL":0.01,
         "EPS_EVAL":0.0,
         "EPS_ANNEALING_FRAMES":int(1e6),
         "EPS_FINAL_FRAME":0.01,
@@ -475,6 +470,15 @@ if __name__ == '__main__':
                                       n_actions=env.num_actions,
                                       network_output_size=info['NETWORK_INPUT_SIZE'][0],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+    if info['PRIOR']:
+        prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
+                                      n_actions=env.num_actions,
+                                      network_output_size=info['NETWORK_INPUT_SIZE'][0],
+                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+
+        print("using randomized prior")
+        policy_net = NetWithPrior(policy_net_ensemble, prior_net_ensemble, info['PRIOR_SCALE'])
+        target_net = NetWithPrior(target_net_ensemble, prior_net_ensemble, info['PRIOR_SCALE'])
 
     target_net.load_state_dict(policy_net.state_dict())
     # create optimizer

@@ -15,8 +15,9 @@ def weights_init(m):
     """custom weights initialization"""
     classtype = m.__class__
     if classtype == nn.Linear or classtype == nn.Conv2d:
-        m.weight.data.normal_(0.0, 0.02)
-        m.bias.data.fill_(0)
+        print("No init")
+        #m.weight.data.normal_(0.0, 0.02)
+        #m.bias.data.fill_(0)
     elif classtype == nn.BatchNorm2d:
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
