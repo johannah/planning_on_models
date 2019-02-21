@@ -38,6 +38,8 @@ class ReplayMemory:
                                     self.frame_height, self.frame_width), dtype=np.uint8)
         self.indices = np.empty(batch_size, dtype=np.int32)
         self.random_state = np.random.RandomState(393)
+        if self.num_heads == 1:
+            assert(self.bernoulli_probability) = 1.0
 
     def save_buffer(self, filepath):
         st = time.time()
@@ -68,7 +70,8 @@ class ReplayMemory:
         self.frame_width = npfile['frame_width']
         self.num_heads = npfile['num_heads']
         self.bernoulli_probability = npfile['bernoulli_probability']
-
+        if self.num_heads == 1:
+            assert(self.bernoulli_probability) = 1.0
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 
