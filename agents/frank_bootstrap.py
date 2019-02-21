@@ -342,7 +342,7 @@ if __name__ == '__main__':
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
         "DEVICE":device,
-        "NAME":'FRANKbootstrap_bp', # start files with name
+        "NAME":'FRANKbootstrap_prior', # start files with name
         "DUELING":True,
         "DOUBLE_DQN":True,
         "PRIOR":True,
@@ -356,7 +356,8 @@ if __name__ == '__main__':
         "EPS_INITIAL":1.0,
         "EPS_FINAL":0.01,
         "EPS_EVAL":0.0,
-        "EPS_ANNEALING_FRAMES":int(1e6),
+        #"EPS_ANNEALING_FRAMES":int(1e6),
+        "EPS_ANNEALING_FRAMES":0,
         "EPS_FINAL_FRAME":0.01,
         "NUM_EVAL_EPISODES":1,
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
@@ -472,13 +473,13 @@ if __name__ == '__main__':
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
     if info['PRIOR']:
         prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
-                                      n_actions=env.num_actions,
-                                      network_output_size=info['NETWORK_INPUT_SIZE'][0],
-                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+                                n_actions=env.num_actions,
+                                network_output_size=info['NETWORK_INPUT_SIZE'][0],
+                                num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
 
         print("using randomized prior")
-        policy_net = NetWithPrior(policy_net_ensemble, prior_net_ensemble, info['PRIOR_SCALE'])
-        target_net = NetWithPrior(target_net_ensemble, prior_net_ensemble, info['PRIOR_SCALE'])
+        policy_net = NetWithPrior(policy_net, prior_net, info['PRIOR_SCALE'])
+        target_net = NetWithPrior(target_net, prior_net, info['PRIOR_SCALE'])
 
     target_net.load_state_dict(policy_net.state_dict())
     # create optimizer
