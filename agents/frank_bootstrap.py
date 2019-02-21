@@ -3,7 +3,6 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
-import tensorflow as tf
 import numpy as np
 from IPython import embed
 from collections import Counter
@@ -78,7 +77,7 @@ def handle_checkpoint(last_save, cnt):
 
 class ActionGetter:
     """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
-    """This class is from fg91's dqn"""
+    """This class is from fg91's dqn. TODO put my function back in"""
     def __init__(self, n_actions, eps_initial=1, eps_final=0.1, eps_final_frame=0.01,
                  eps_evaluation=0.0, eps_annealing_frames=100000,
                  replay_memory_start_size=50000, max_steps=25000000, random_seed=122):
@@ -117,13 +116,12 @@ class ActionGetter:
     def pt_get_action(self, step_number, state, active_head=None, evaluation=False):
         """
         Args:
-            session: A tensorflow session object
-            step_number: Integer, number of the current frame
-            state: A (84, 84, 4) sequence of frames of an Atari game in grayscale
-            main_dqn: A DQN object
+            step_number: int number of the current step
+            state: A (4, 84, 84) sequence of frames of an atari game in grayscale
+            active_head: number of head to use, if None, will run all heads and vote
             evaluation: A boolean saying whether the agent is being evaluated
         Returns:
-            An integer between 0 and n_actions - 1 determining the action the agent perfoms next
+            An integer between 0 and n_actions
         """
         if evaluation:
             eps = self.eps_evaluation
@@ -262,14 +260,6 @@ def train(step_number, last_save):
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
 
                 matplotlib_plot_all(perf)
-                # Scalar summaries for tensorboard
-                summ = sess.run(PERFORMANCE_SUMMARIES,
-                                feed_dict={
-                                           PTLOSS_PH:np.mean(ptloss_list),
-                                           REWARD_PH:np.mean(perf['avg_rewards'][-1])})
-
-                SUMM_WRITER.add_summary(summ, step_number)
-                print("Adding tensorboard", len(perf['episode_reward']), step_number, perf['avg_rewards'][-1])
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
         avg_eval_reward = evaluate(step_number)
@@ -316,8 +306,6 @@ def evaluate(step_number):
     generate_gif(model_base_filedir, step_number, frames_for_gif, eval_rewards[0], name='test', results=results_for_eval)
 
     # Show the evaluation score in tensorboard
-    summ = sess.run(EVAL_SCORE_SUMMARY, feed_dict={EVAL_SCORE_PH:np.mean(eval_rewards)})
-    SUMM_WRITER.add_summary(summ, step_number)
     efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
     with open(efile, 'a') as eval_reward_file:
         print(step_number, np.mean(eval_rewards), file=eval_reward_file)
@@ -502,22 +490,5 @@ if __name__ == '__main__':
                 print(e)
                 print('not able to load from buffer: %s. exit() to continue with empty buffer' %args.buffer_loadpath)
 
-    # Scalar summaries for tensorboard: loss, average reward and evaluation score
-    ############################################
-    tf.reset_default_graph()
-    SUMM_WRITER = tf.summary.FileWriter(model_base_filedir)
-    with tf.name_scope('Performance'):
-        PTLOSS_PH = tf.placeholder(tf.float32, shape=None, name='ptloss_summary')
-        PTLOSS_SUMMARY = tf.summary.scalar('ptloss', PTLOSS_PH)
-        REWARD_PH = tf.placeholder(tf.float32, shape=None, name='reward_summary')
-        REWARD_SUMMARY = tf.summary.scalar('reward', REWARD_PH)
-        EVAL_SCORE_PH = tf.placeholder(tf.float32, shape=None, name='evaluation_summary')
-        EVAL_SCORE_SUMMARY = tf.summary.scalar('evaluation_score', EVAL_SCORE_PH)
-
-    PERFORMANCE_SUMMARIES = tf.summary.merge([PTLOSS_SUMMARY, REWARD_SUMMARY])
-
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.05)
-    with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
-        ############################################
-        train(start_step_number, start_last_save)
+    train(start_step_number, start_last_save)
 
