@@ -112,6 +112,8 @@ class NetWithPrior(nn.Module):
     def __init__(self, net, prior, prior_scale=1.):
         super(NetWithPrior, self).__init__()
         self.net = net
+        # used when scaling core net
+        self.core_net = self.net.core_net
         self.prior_scale = prior_scale
         if self.prior_scale > 0.:
             self.prior = prior
