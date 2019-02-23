@@ -48,17 +48,15 @@ def linearly_decaying_epsilon(num_warmup_steps, num_annealing_steps, final_epsil
     Returns:
       A float, the current epsilon value computed according to the schedule.
     """
+    if step < num_warmup_steps:
+        return 1.0
     if num_annealing_steps > 0:
         steps_left = num_annealing_steps + num_warmup_steps - step
         bonus = (1.0 - final_epsilon) * steps_left / num_annealing_steps
         bonus = np.clip(bonus, 0., 1. - final_epsilon)
         return final_epsilon + bonus
     else:
-        if step < num_warmup_steps:
-            return 1.0
-        else:
-            return 0.0
-
+        return 0
 
 def write_info_file(info, model_base_filepath, cnt):
     info_filename = model_base_filepath + "_%010d_info.txt"%cnt

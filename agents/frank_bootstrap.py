@@ -156,8 +156,9 @@ def train(step_number, last_save):
                                                 num_annealing_steps=info['NUM_EPS_ANNEALING_STEPS'],
                                                 final_epsilon=info['EPS_FINAL'], step=step_number)
                 ep_eps_list.append(eps)
-                if eps < random_state.rand():
+                if random_state.rand() < eps:
                     action = random_state.randint(0, env.num_actions)
+                    print("random action", step_number, 'eps=%s'%eps, action)
                 else:
                     action = pt_get_action(state=state, active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
@@ -167,6 +168,7 @@ def train(step_number, last_save):
                                                 reward=np.sign(reward),
                                                 terminal=life_lost)
 
+                print(step_number,eps,action)
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
@@ -193,13 +195,13 @@ def train(step_number, last_save):
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
             last_save = handle_checkpoint(last_save, step_number)
+            matplotlib_plot_all(perf)
 
-            if not epoch_num%info['PLOT_EVERY_EPISODES'] and step_number > info['MIN_STEPS_TO_LEARN']:
+            if not epoch_num%info['PLOT_EVERY_EPISODES']:
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
 
-                matplotlib_plot_all(perf)
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
         avg_eval_reward = evaluate(step_number)
@@ -271,7 +273,7 @@ if __name__ == '__main__':
         "GAME":'roms/breakout.bin', # gym prefix
         "MIN_SCORE_GIF":100, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'BreakoutNewAction', # start files with name
+        "NAME":'BreakoutNewActionNoAnnealing', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":False, # turn on to use randomized prior
@@ -284,8 +286,8 @@ if __name__ == '__main__':
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
-        "NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
-        #"NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
+        #"NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
+        "NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
