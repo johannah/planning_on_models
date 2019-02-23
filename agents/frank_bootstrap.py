@@ -152,7 +152,7 @@ def train(step_number, last_save):
             ptloss_list = []
             while not terminal:
                # eps
-                eps = linearly_decaying_epsilon(num_warmup_steps=info['MIN_STEPS_TO_LEARN'],
+                eps = linearly_decaying_epsilon(num_warmup_steps=info['EPS_WARMUP'],
                                                 num_annealing_steps=info['NUM_EPS_ANNEALING_STEPS'],
                                                 final_epsilon=info['EPS_FINAL'], step=step_number)
                 ep_eps_list.append(eps)
@@ -168,7 +168,6 @@ def train(step_number, last_save):
                                                 reward=np.sign(reward),
                                                 terminal=life_lost)
 
-                print(step_number,eps,action)
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
@@ -195,9 +194,9 @@ def train(step_number, last_save):
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
             last_save = handle_checkpoint(last_save, step_number)
-            matplotlib_plot_all(perf)
 
             if not epoch_num%info['PLOT_EVERY_EPISODES']:
+                matplotlib_plot_all(perf)
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
@@ -248,7 +247,7 @@ def evaluate(step_number):
         # only save best if we've seen this round
         if episode_reward_sum > best_eval:
             best_eval = episode_reward_sum
-            generate_gif(model_base_filedir, step_number, frames_for_gif, eval_rewards[0], name='test', results=results_for_eval)
+            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval)
         eval_rewards.append(episode_reward_sum)
 
     efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
@@ -281,7 +280,8 @@ if __name__ == '__main__':
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
-        "MIN_STEPS_TO_LEARN":50000, # in environment frames
+        "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
+        "EPS_WARMUP": 50000, # steps to act completely random initially to fill replay buffer
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "EPS_FINAL":0.01, # 0.01 in osband
