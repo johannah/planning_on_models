@@ -14,7 +14,7 @@ import torch.optim as optim
 import datetime
 import time
 from dqn_model import EnsembleNet, NetWithPrior
-from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint
+from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint, linearly_decaying_epsilon
 from env import Environment
 from replay import ReplayMemory
 import config
@@ -74,81 +74,18 @@ def handle_checkpoint(last_save, cnt):
         return last_save
     else: return last_save
 
-
-class ActionGetter:
-    """Determines an action according to an epsilon greedy strategy with annealing epsilon"""
-    """This class is from fg91's dqn. TODO put my function back in"""
-    def __init__(self, n_actions, eps_initial=1, eps_final=0.1, eps_final_frame=0.01,
-                 eps_evaluation=0.0, eps_annealing_frames=100000,
-                 replay_memory_start_size=50000, max_steps=25000000, random_seed=122):
-        """
-        Args:
-            n_actions: Integer, number of possible actions
-            eps_initial: Float, Exploration probability for the first
-                replay_memory_start_size frames
-            eps_final: Float, Exploration probability after
-                replay_memory_start_size + eps_annealing_frames frames
-            eps_final_frame: Float, Exploration probability after max_frames frames
-            eps_evaluation: Float, Exploration probability during evaluation
-            eps_annealing_frames: Int, Number of frames over which the
-                exploration probabilty is annealed from eps_initial to eps_final
-            replay_memory_start_size: Integer, Number of frames during
-                which the agent only explores
-            max_frames: Integer, Total number of frames shown to the agent
-        """
-        self.n_actions = n_actions
-        self.eps_initial = eps_initial
-        self.eps_final = eps_final
-        self.eps_final_frame = eps_final_frame
-        self.eps_evaluation = eps_evaluation
-        self.eps_annealing_frames = eps_annealing_frames
-        self.replay_memory_start_size = replay_memory_start_size
-        self.max_steps = max_steps
-        self.random_state = np.random.RandomState(random_seed)
-
-        # Slopes and intercepts for exploration decrease
-        if self.eps_annealing_frames > 0:
-            self.slope = -(self.eps_initial - self.eps_final)/self.eps_annealing_frames
-            self.intercept = self.eps_initial - self.slope*self.replay_memory_start_size
-            self.slope_2 = -(self.eps_final - self.eps_final_frame)/(self.max_steps - self.eps_annealing_frames - self.replay_memory_start_size)
-            self.intercept_2 = self.eps_final_frame - self.slope_2*self.max_steps
-
-    def pt_get_action(self, step_number, state, active_head=None, evaluation=False):
-        """
-        Args:
-            step_number: int number of the current step
-            state: A (4, 84, 84) sequence of frames of an atari game in grayscale
-            active_head: number of head to use, if None, will run all heads and vote
-            evaluation: A boolean saying whether the agent is being evaluated
-        Returns:
-            An integer between 0 and n_actions
-        """
-        if evaluation:
-            eps = self.eps_evaluation
-        elif step_number < self.replay_memory_start_size:
-            eps = self.eps_initial
-        elif self.eps_annealing_frames > 0:
-            # TODO check this
-            if step_number >= self.replay_memory_start_size and step_number < self.replay_memory_start_size + self.eps_annealing_frames:
-                eps = self.slope*step_number + self.intercept
-            elif step_number >= self.replay_memory_start_size + self.eps_annealing_frames:
-                eps = self.slope_2*step_number + self.intercept_2
-        else:
-            eps = 0
-        if self.random_state.rand() < eps:
-            return eps, self.random_state.randint(0, self.n_actions)
-        else:
-            state = torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
-            vals = policy_net(state, active_head)
-            if active_head is not None:
-                action = torch.argmax(vals, dim=1).item()
-                return eps, action
-            else:
-                # vote
-                acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
-                data = Counter(acts)
-                action = data.most_common(1)[0][0]
-                return eps, action
+def pt_get_action(state, active_head=None):
+    state = torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
+    vals = policy_net(state, active_head)
+    if active_head is not None:
+        action = torch.argmax(vals, dim=1).item()
+        return action
+    else:
+        # vote
+        acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
+        data = Counter(acts)
+        action = data.most_common(1)[0][0]
+        return action
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
     states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
@@ -214,12 +151,15 @@ def train(step_number, last_save):
             ep_eps_list = []
             ptloss_list = []
             while not terminal:
-                if life_lost:
-                    action = 1
-                    eps = 0
-                else:
-                    eps,action = action_getter.pt_get_action(step_number, state=state, active_head=active_head)
+               # eps
+                eps = linearly_decaying_epsilon(num_warmup_steps=info['MIN_STEPS_TO_LEARN'],
+                                                num_annealing_steps=info['NUM_EPS_ANNEALING_STEPS'],
+                                                final_epsilon=info['EPS_FINAL'], step=step_number)
                 ep_eps_list.append(eps)
+                if eps < random_state.rand():
+                    action = random_state.randint(0, env.num_actions)
+                else:
+                    action = pt_get_action(state=state, active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
                 # Store transition in the replay memory
                 replay_memory.add_experience(action=action,
@@ -232,11 +172,11 @@ def train(step_number, last_save):
                 episode_reward_sum += reward
                 state = next_state
 
-                if step_number % info['LEARN_EVERY_STEPS'] == 0 and step_number > info['MIN_HISTORY_TO_LEARN']:
+                if step_number % info['LEARN_EVERY_STEPS'] == 0 and step_number > info['MIN_STEPS_TO_LEARN']:
                     _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
                     ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags, _masks)
                     ptloss_list.append(ptloss)
-                if step_number % info['TARGET_UPDATE'] == 0 and step_number >  info['MIN_HISTORY_TO_LEARN']:
+                if step_number % info['TARGET_UPDATE'] == 0 and step_number >  info['MIN_STEPS_TO_LEARN']:
                     print("++++++++++++++++++++++++++++++++++++++++++++++++")
                     print('updating target network at %s'%step_number)
                     target_net.load_state_dict(policy_net.state_dict())
@@ -254,7 +194,7 @@ def train(step_number, last_save):
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
             last_save = handle_checkpoint(last_save, step_number)
 
-            if not epoch_num%info['PLOT_EVERY_EPISODES'] and step_number > info['MIN_HISTORY_TO_LEARN']:
+            if not epoch_num%info['PLOT_EVERY_EPISODES'] and step_number > info['MIN_STEPS_TO_LEARN']:
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
@@ -275,8 +215,7 @@ def evaluate(step_number):
          """)
     eval_rewards = []
     evaluate_step_number = 0
-    frames_for_gif = []
-    results_for_eval = []
+    best_eval = info['MIN_SCORE_GIF']
     # only run one
     for i in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
@@ -284,11 +223,14 @@ def evaluate(step_number):
         terminal = False
         life_lost = True
         episode_steps = 0
+        frames_for_gif = []
+        results_for_eval = []
         while not terminal:
-            if life_lost:
-                action = 1
+            eps = random_state.rand()
+            if eps < info['EPS_EVAL']:
+               action = random_state.randint(0, env.num_actions)
             else:
-                eps,action = action_getter.pt_get_action(step_number, state, active_head=None, evaluation=True)
+               action = pt_get_action(state, active_head=None)
             next_state, reward, life_lost, terminal = env.step(action)
             evaluate_step_number += 1
             episode_steps +=1
@@ -297,15 +239,16 @@ def evaluate(step_number):
                 # only save first episode
                 frames_for_gif.append(env.ale.getScreenRGB())
                 results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
-            if not episode_steps%100:
+            if not episode_steps%1000:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
+        print("Evaluation score:\n", np.mean(eval_rewards))
+        # only save best if we've seen this round
+        if episode_reward_sum > best_eval:
+            best_eval = episode_reward_sum
+            generate_gif(model_base_filedir, step_number, frames_for_gif, eval_rewards[0], name='test', results=results_for_eval)
         eval_rewards.append(episode_reward_sum)
 
-    print("Evaluation score:\n", np.mean(eval_rewards))
-    generate_gif(model_base_filedir, step_number, frames_for_gif, eval_rewards[0], name='test', results=results_for_eval)
-
-    # Show the evaluation score in tensorboard
     efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
     with open(efile, 'a') as eval_reward_file:
         print(step_number, np.mean(eval_rewards), file=eval_reward_file)
@@ -326,28 +269,27 @@ if __name__ == '__main__':
 
     info = {
         "GAME":'roms/breakout.bin', # gym prefix
+        "MIN_SCORE_GIF":100, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'FRANKbootstrap_fasteranneal', # start files with name
+        "NAME":'BreakoutNewAction', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":False, # turn on to use randomized prior
         "PRIOR_SCALE":10, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
-        "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
-        "BERNOULLI_PROBABILITY": 0.9, # Probability of experience to go to each head - if 1, every experience goes to every head
+        "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
-        "MIN_HISTORY_TO_LEARN":50000, # in environment frames
+        "MIN_STEPS_TO_LEARN":50000, # in environment frames
+        "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
-        "EPS_INITIAL":1.0, # should be 1
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
-        "EPS_ANNEALING_FRAMES":int(1e6), # this may have been 1e6 in osband
-        #"EPS_ANNEALING_FRAMES":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
-        "EPS_FINAL_FRAME":0.01,
-        "NUM_EVAL_EPISODES":1, # num examples to average in eval
+        "NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
+        #"NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
+        "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
-        "EVAL_FREQUENCY":250000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":500000, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
@@ -391,14 +333,6 @@ if __name__ == '__main__':
                                  bernoulli_probability=info['BERNOULLI_PROBABILITY'])
 
     random_state = np.random.RandomState(info["SEED"])
-    action_getter = ActionGetter(n_actions=env.num_actions,
-                                 eps_initial=info['EPS_INITIAL'],
-                                 eps_final=info['EPS_FINAL'],
-                                 eps_final_frame=info['EPS_FINAL_FRAME'],
-                                 eps_annealing_frames=info['EPS_ANNEALING_FRAMES'],
-                                 eps_evaluation=info['EPS_EVAL'],
-                                 replay_memory_start_size=info['MIN_HISTORY_TO_LEARN'],
-                                 max_steps=info['MAX_STEPS'])
 
     if args.model_loadpath != '':
         # load data from loadpath - save model load for later. we need some of
