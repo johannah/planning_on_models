@@ -56,7 +56,7 @@ def linearly_decaying_epsilon(num_warmup_steps, num_annealing_steps, final_epsil
         bonus = np.clip(bonus, 0., 1. - final_epsilon)
         return final_epsilon + bonus
     else:
-        return 0
+        return final_epsilon
 
 def write_info_file(info, model_base_filepath, cnt):
     info_filename = model_base_filepath + "_%010d_info.txt"%cnt
