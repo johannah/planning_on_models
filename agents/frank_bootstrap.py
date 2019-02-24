@@ -236,10 +236,8 @@ def evaluate(step_number):
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
-            if not i:
-                # only save first episode
-                frames_for_gif.append(env.ale.getScreenRGB())
-                results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
+            frames_for_gif.append(env.ale.getScreenRGB())
+            results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
             if not episode_steps%1000:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
@@ -272,7 +270,7 @@ if __name__ == '__main__':
         "GAME":'roms/breakout.bin', # gym prefix
         "MIN_SCORE_GIF":100, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'BreakoutNewActionNoAnnealing', # start files with name
+        "NAME":'BreakoutNewActionAnnealing', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":False, # turn on to use randomized prior
@@ -286,8 +284,8 @@ if __name__ == '__main__':
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
-        #"NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
-        "NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
+        "NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
+        #"NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
