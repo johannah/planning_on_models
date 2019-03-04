@@ -37,11 +37,12 @@ class GatedMaskedConv2d(nn.Module):
         # returns slice which is 0 to 1ish - treat each latent value like a
         # "word" embedding
         self.dim = dim
-
         self.hsize = hsize
         self.wsize = wsize
 
         self.class_cond_embedding = nn.Embedding(n_classes, 2*dim)
+        #self.class_embedding_size = 2*self.dim*self.hsize*self.wsize
+        #self.class_cond_embedding = nn.Embedding(n_classes, self.class_embedding_size)
         vkernel_shape = (kernel//2 + 1, kernel)
         vpadding_shape = (kernel//2, kernel//2)
 
@@ -52,8 +53,7 @@ class GatedMaskedConv2d(nn.Module):
         hpadding_shape = (0,kernel//2)
 
         if float_condition_size is not None:
-            # 28 is from size of mnist - should pass this in TODO
-            self.float_condition_layer = nn.Linear(float_condition_size, 2*self.dim*self.hsize*self.wsize)
+            self.float_condition_layer = nn.Linear(float_condition_size, 2*self.dim)
         if cond_size is not None:
             self.spatial_cond_stack = nn.Conv2d(cond_size, dim*2, kernel_size=cond_kernel_shape, stride=1, padding=cond_padding_shape)
 
@@ -76,12 +76,13 @@ class GatedMaskedConv2d(nn.Module):
             self.make_causal()
         # manipulation to get same size out of h_vert
         # output of h_vert is 6,6,(2*dim)
+        # x_v.shape 32,1,84,84
         h_vert = self.vert_stack(x_v)
-        h_vert = h_vert[:,:,:x_v.size(-1), :]
+        h_vert = h_vert[:,:,:x_v.shape[-1], :]
         # h_vert is (batch_size,512,6,6)
 
         h_horiz = self.horiz_stack(x_h)
-        h_horiz = h_horiz[:,:,:,:x_h.size(-2)]
+        h_horiz = h_horiz[:,:,:,:x_h.shape[-2]]
         v2h = self.vert_to_horiz(h_vert)
 
         input_to_out_v = h_vert
@@ -89,15 +90,14 @@ class GatedMaskedConv2d(nn.Module):
 
         if float_condition is not None:
             float_out = self.float_condition_layer(float_condition)
-            float_out = float_out.view(-1,2*self.dim,self.hsize,self.wsize)
-            input_to_out_v += float_out[:,:,:,:]
-            input_to_out_h += float_out[:,:,:,:]
+            input_to_out_v += float_out[:,:,None,None]
+            input_to_out_h += float_out[:,:,None,None]
 
         # add class conditioning
         if class_condition is not None:
-            class_condition = self.class_cond_embedding(class_condition)
-            input_to_out_v += class_condition[:,:,None,None]
-            input_to_out_h += class_condition[:,:,None,None]
+            class_condition_emb = self.class_cond_embedding(class_condition)
+            input_to_out_v += class_condition_emb[:,:,None,None]
+            input_to_out_h += class_condition_emb[:,:,None,None]
 
         if spatial_condition is not None:
             spatial_c_e = self.spatial_cond_stack(spatial_condition)
@@ -120,17 +120,9 @@ class GatedPixelCNN(nn.Module):
         super(GatedPixelCNN, self).__init__()
         self.hsize = hsize
         self.wsize = wsize
-        if spatial_cond_size is None:
-            scond_size = 'na'
-        else:
-            scond_size = spatial_cond_size
-        # input_dim is the size of all possible values (in vqvae should be
-        # num_clusters)
-        self.name = 'rpcnn_id%d_d%d_l%d_nc%d_cs%s'%(input_dim, dim, n_layers, n_classes, scond_size)
         self.dim = dim
         # lookup table to store input
         #self.embedding = nn.Embedding(input_dim, self.dim)
-
         #if spatial_cond_size is not None:
         #    # assume same vocab size - but input_dim could be different here
         #    self.spatial_cond_embedding = nn.Embedding(input_dim, self.dim)
@@ -152,6 +144,7 @@ class GatedPixelCNN(nn.Module):
                                                 hsize=self.hsize, wsize=self.wsize
                                                  ))
 
+        self.init_conv = nn.Conv2d(input_dim, self.dim, 1)
         self.output_conv = nn.Sequential(
                                          nn.Conv2d(self.dim, 512, 1),
                                          nn.ReLU(True),
@@ -165,12 +158,10 @@ class GatedPixelCNN(nn.Module):
 
     def forward(self, x, class_condition=None, spatial_cond=None, float_condition=None):
         # mnist x is (B,C,W,H)
-        shp = x.size()+(-1,)
-        xo=x
+        #shp = x.size()+(-1,)
         #xo = self.embedding(x.contiguous().view(-1)).view(shp)
         # change order to (B,C,H,W)
         #xo = x.permute(0,3,1,2)
-        x_v, x_h = (xo,xo)
 
         ## vqvae x is (B,H,W,C)
         #shp = x.size()+(-1,)
@@ -179,7 +170,6 @@ class GatedPixelCNN(nn.Module):
         #xo = x.permute(0,3,1,2)
         #x_v, x_h = (xo,xo)
 
-        #embed()
         #if spatial_cond is not None:
             # coming in, spatial_cond is (batch_size,  frames, 6, 6)
             #sshp = spatial_cond.size()+(-1,)
@@ -190,6 +180,9 @@ class GatedPixelCNN(nn.Module):
             #spatial_cond = spatial_cond.reshape(sc_shp[:-2]+(-1,))
             #spatial_cond = spatial_cond.permute(0,3,1,2)
 
+        # need self.dim channels - do initial conv
+        xo = self.init_conv(x)
+        x_v, x_h = (xo,xo)
         for i, layer in enumerate(self.layers):
             x_v, x_h = layer(x_v=x_v, x_h=x_h, class_condition=class_condition,
                              spatial_condition=spatial_cond, float_condition=float_condition)

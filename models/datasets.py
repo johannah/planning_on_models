@@ -6,7 +6,7 @@ from IPython import embed
 from glob import glob
 from torch.utils.data import Dataset
 import os, sys
-from imageio import imread, imwrite, mimwrite
+from imageio import imread, imwrite, mimwrite, imsave
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
@@ -255,8 +255,20 @@ class AtariDataset(Dataset):
         assert(self.steps_ahead>=0)
         self.norm_by = float(norm_by)
         self.data_file = np.load(self.data_file)
-        self.frames = self.data_file['frames']
-        self.rewards = self.data_file['frames']
+        #self.frames = self.data_file['frames']
+        self.frames = self.data_file['frames'].astype(np.float)/255.
+        #self.frames_mean = self.frames[:2].mean(axis=0)
+        #imsave('mean.png', self.frames_mean)
+        #self.frames = self.frames-self.frames_mean
+        #self.frames_min = self.frames.min(axis=0)
+        #self.frames_max = self.frames.max(axis=0)
+        #self.frames_diff = self.frames_max-self.frames_min
+        ##self.frames_diff[np.where(self.frames_diff == 0.0)] = 0.001
+        #self.frames = (self.frames-self.frames_min)/self.frames_diff
+        #self.frames[np.isnan(self.frames)] = 0.0
+
+
+        self.rewards = self.data_file['rewards']
         self.terminals = self.data_file['terminals'].astype(np.int)
         self.actions = self.data_file['actions']
         self.action_space = sorted(list(set(self.actions)))
@@ -271,29 +283,60 @@ class AtariDataset(Dataset):
 
         self.index_array = list(np.arange(self.num_condition, self.num_examples, dtype=np.int))
         # ending indexes cannot be selected
-        self.ends = np.where(self.terminals == 1)[0]
 
+
+        to_remove = []
         for index in self.index_array:
             if np.sum(self.terminals[index-self.num_condition:index])>0:
-                self.index_array.remove(index)
+                to_remove.append(index)
+        print('removing episode start indices', to_remove)
+        for pl, index in enumerate(to_remove):
+            self.index_array.remove(index)
         self.index_array = np.array(self.index_array)
         self.relative_indexes = np.arange(len(self.index_array))
         self.reset_batch()
+        # location of start and ends of episodes in "relative indexes"
+        self.ends = list(np.where(self.terminals[self.index_array[self.relative_indexes]] == 1)[0])
+        self.starts = [e+1 for e in self.ends]
+        self.starts.insert(0,0)
+        self.ends.append(len(self.relative_indexes))
+        self.episode_indexes = [x for x in range(len(self.starts))]
 
     def reset_batch(self):
         self.unique_index_array = deepcopy(self.relative_indexes)
 
+    def __getstates__(self, index):
+        # determine if this is beginning of episode
+        # index refers to the next_state index
+
+        frames = self.frames[index-self.num_condition:index+1]
+        try:
+            assert (np.sum(self.terminals[index-self.num_condition:index]) == 0)
+        except:
+            print("terminals")
+            embed()
+        state = frames[:-1]
+        next_state = frames[1:]
+        assert (np.sum(state[-1]) == np.sum(next_state[-2]))
+        return state, next_state
+
     def get_data(self, relative_indexes, reset=False):
         indexes = self.index_array[relative_indexes]
+        batch_size = len(relative_indexes)
+        if (batch_size != self.mb_states.shape[0]):
+            self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
+            self.mb_next_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
         for i, idx in enumerate(indexes):
             # todo - proper norm
             st, nst = self.__getstates__(idx)
-            self.mb_states[i] = st/self.norm_by
-            self.mb_next_states[i] = nst/self.norm_by
+            #self.mb_states[i] = st/self.norm_by
+            #self.mb_next_states[i] = nst/self.norm_by
+            self.mb_states[i] = st
+            self.mb_next_states[i] = nst
         return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.FloatTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_next_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
 
     def get_minibatch(self):
-        relative_indexes = self.random_state.choice(self.unique_index_array, self.batch_size)
+        relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
         return self.get_data(relative_indexes)
 
     def get_unique_minibatch(self):
@@ -307,14 +350,14 @@ class AtariDataset(Dataset):
             reset = True
         return self.get_data(relative_indexes, reset)
 
-    def __getstates__(self, index):
-        # determine if this is beginning of episode
-        # index refers to the next_state index
-
-        frames = self.frames[index-self.num_condition:index+1]
-        state = frames[:-1]
-        next_state = frames[1:]
-        return state, next_state
+    def get_entire_episode(self):
+        episode_index = self.random_state.choice(self.episode_indexes)
+        print('grabbing episode %s [%s:%s] of reward %s' %(episode_index,
+                              self.starts[episode_index], self.ends[episode_index],
+                              self.episodic_reward[episode_index]))
+        relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)
+        episode_reward = self.episodic_reward[episode_index]
+        return (self.get_data(relative_indexes), episode_index, episode_reward)
 
 # used to be Dataloader, but overloaded
 class AtariDataLoader():

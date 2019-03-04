@@ -123,7 +123,7 @@ def train_acn(train_cnt):
             embed()
 
         # add the predicted codes to the input
-        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_states, float_condition=z, class_condition=actions))
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_states, class_condition=actions, float_condition=z))
         #yhat_batch = torch.sigmoid(pcnn_decoder(x=next_states, float_condition=z))
         #print(train_cnt)
         prior_model.codes[relative_indexes-args.number_condition] = u_q.detach().cpu().numpy()
@@ -187,11 +187,23 @@ def valid_acn(train_cnt, do_plot):
         print('writing img')
         n_imgs = 8
         n = min(states.shape[0], n_imgs)
-        bs = states.shape[0]
-        comparison = torch.cat([next_states.view(bs, 1, hsize, wsize)[:n],
-                                yhat_batch.view(bs, 1, hsize, wsize)[:n]])
+        #onext_states = torch.Tensor(next_states[:n].data.cpu().numpy()+train_data_loader.frames_mean)#*train_data_loader.frames_diff) + train_data_loader.frames_min)
+        #oyhat_batch =  torch.Tensor( yhat_batch[:n].data.cpu().numpy()+train_data_loader.frames_mean)#*train_data_loader.frames_diff) + train_data_loader.frames_min)
+        #onext_states = torch.Tensor(((next_states[:n].data.cpu().numpy()*train_data_loader.frames_diff)+train_data_loader.frames_min) + train_data_loader.frames_mean)/255.
+        #oyhat_batch =  torch.Tensor((( yhat_batch[:n].data.cpu().numpy()*train_data_loader.frames_diff)+train_data_loader.frames_min) + train_data_loader.frames_mean)/255.
+        bs = args.batch_size
+        h = train_data_loader.data_h
+        w = train_data_loader.data_w
+        comparison = torch.cat([next_states.view(bs,1,h,w)[:n],
+                                yhat_batch.view(bs,1,h,w)[:n]])
         img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
-        save_image(comparison.cpu(), img_name, nrow=n)
+        save_image(comparison, img_name, nrow=n)
+        #embed()
+        #ocomparison = torch.cat([onext_states,
+        #                        oyhat_batch])
+        #img_name = model_base_filepath + "_%010d_valid_reconstructionMINE.png"%train_cnt
+        #save_image(ocomparison, img_name, nrow=n)
+        #embed()
         print('finished writing img', img_name)
     valid_kl_loss/=float(valid_cnt)
     valid_rec_loss/=float(valid_cnt)
@@ -209,13 +221,15 @@ if __name__ == '__main__':
     parser.add_argument('--savename', default='acn')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
-    parser.add_argument('-se', '--save_every', default=100000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=100000*10, type=int)
-    parser.add_argument('-le', '--log_every',  default=100000*10, type=int)
+    parser.add_argument('-se', '--save_every', default=100000*2, type=int)
+    parser.add_argument('-pe', '--plot_every', default=100000*2, type=int)
+    parser.add_argument('-le', '--log_every',  default=100000*2, type=int)
     #parser.add_argument('-se', '--save_every', default=10, type=int)
     #parser.add_argument('-pe', '--plot_every', default=10, type=int)
     #parser.add_argument('-le', '--log_every',  default=10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=32, type=int)
+
+    parser.add_argument('-pf', '--num_pcnn_filters', default=32, type=int)
+    parser.add_argument('-bs', '--batch_size', default=48, type=int)
     parser.add_argument('-eos', '--encoder_output_size', default=4800, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=48, type=int)
@@ -224,8 +238,8 @@ if __name__ == '__main__':
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-4)
-    parser.add_argument('-pv', '--possible_values', default=1)
-    parser.add_argument('-npcnn', '--num_pcnn_layers', default=6)
+    #parser.add_argument('-pv', '--possible_values', default=1)
+    parser.add_argument('-npcnn', '--num_pcnn_layers', default=8)
     parser.add_argument('-nm', '--num_mixtures', default=8, type=int)
     args = parser.parse_args()
     if args.cuda:
@@ -263,11 +277,13 @@ if __name__ == '__main__':
                                    train_data_file,
                                    number_condition=4,
                                    steps_ahead=1,
+                                   batch_size=args.batch_size,
                                    norm_by=255.,)
     valid_data_loader = AtariDataset(
                                    valid_data_file,
                                    number_condition=4,
                                    steps_ahead=1,
+                                   batch_size=args.batch_size,
                                    norm_by=255.0,)
 
 
@@ -302,7 +318,9 @@ if __name__ == '__main__':
                                ).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
-                                 dim=args.possible_values,
+                                 #dim=args.possible_values,
+                                 dim=args.num_pcnn_filters,
+                                 #dim=args.code_length,
                                  n_layers=args.num_pcnn_layers,
                                  n_classes=num_actions,
                                  float_condition_size=args.code_length,
