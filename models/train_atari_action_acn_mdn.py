@@ -185,10 +185,11 @@ def valid_acn(train_cnt, do_plot):
     valid_cnt += states.shape[0]
     if i == 0 and do_plot:
         print('writing img')
-        n = min(states.shape(0), 8)
+        n_imgs = 8
+        n = min(states.shape[0], n_imgs)
         bs = states.shape[0]
-        comparison = torch.cat([actions.view(bs, 1, hsize, wsize)[:n],
-                              yhat_batch.view(bs, 1, hsize, wsize)[:n]])
+        comparison = torch.cat([next_states.view(bs, 1, hsize, wsize)[:n],
+                                yhat_batch.view(bs, 1, hsize, wsize)[:n]])
         img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
         save_image(comparison.cpu(), img_name, nrow=n)
         print('finished writing img', img_name)
@@ -211,6 +212,9 @@ if __name__ == '__main__':
     parser.add_argument('-se', '--save_every', default=100000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=100000*10, type=int)
     parser.add_argument('-le', '--log_every',  default=100000*10, type=int)
+    #parser.add_argument('-se', '--save_every', default=10, type=int)
+    #parser.add_argument('-pe', '--plot_every', default=10, type=int)
+    #parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-bs', '--batch_size', default=32, type=int)
     parser.add_argument('-eos', '--encoder_output_size', default=4800, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
