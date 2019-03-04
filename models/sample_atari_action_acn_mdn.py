@@ -180,7 +180,7 @@ if __name__ == '__main__':
 #                               ).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
-                                 dim=largs.possible_values,
+                                 dim=largs.num_pcnn_filters,
                                  n_layers=largs.num_pcnn_layers,
                                  n_classes=num_actions,
                                  float_condition_size=largs.code_length,

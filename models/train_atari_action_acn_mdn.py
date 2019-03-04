@@ -275,13 +275,13 @@ if __name__ == '__main__':
 
     train_data_loader = AtariDataset(
                                    train_data_file,
-                                   number_condition=4,
+                                   number_condition=args.number_condition,
                                    steps_ahead=1,
                                    batch_size=args.batch_size,
                                    norm_by=255.,)
     valid_data_loader = AtariDataset(
                                    valid_data_file,
-                                   number_condition=4,
+                                   number_condition=args.number_condition,
                                    steps_ahead=1,
                                    batch_size=args.batch_size,
                                    norm_by=255.0,)
@@ -318,9 +318,7 @@ if __name__ == '__main__':
                                ).to(DEVICE)
 
     pcnn_decoder = GatedPixelCNN(input_dim=1,
-                                 #dim=args.possible_values,
                                  dim=args.num_pcnn_filters,
-                                 #dim=args.code_length,
                                  n_layers=args.num_pcnn_layers,
                                  n_classes=num_actions,
                                  float_condition_size=args.code_length,
