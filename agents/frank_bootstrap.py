@@ -267,10 +267,10 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/breakout.bin', # gym prefix
-        "MIN_SCORE_GIF":100, # min score to plot gif in eval
+        "GAME":'roms/freeway.bin', # gym prefix
+        "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'BreakoutNewActionAnnealing', # start files with name
+        "NAME":'FreewayNewActionAnnealing', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":False, # turn on to use randomized prior

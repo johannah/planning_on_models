@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from IPython import embed
 from glob import glob
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import os, sys
 from imageio import imread, imwrite, mimwrite
 from skimage.color import rgb2gray
@@ -239,7 +239,85 @@ class FreewayForwardDataset(Dataset):
         y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
         return x,y
 
-class DataLoader():
+class AtariDataset(Dataset):
+    def __init__(self,  data_file, number_condition=4, steps_ahead=1,
+                        limit=None, batch_size=128,
+                        norm_by=255.0,
+                        seed=3949):
+
+        self.random_state = np.random.RandomState(seed)
+        self.batch_size = batch_size
+        # index next observation, will need
+        self.data_file = os.path.abspath(data_file)
+        self.num_condition = int(number_condition)
+        assert(self.num_condition>0)
+        self.steps_ahead = int(steps_ahead)
+        assert(self.steps_ahead>=0)
+        self.norm_by = float(norm_by)
+        self.data_file = np.load(self.data_file)
+        self.frames = self.data_file['frames']
+        self.rewards = self.data_file['frames']
+        self.terminals = self.data_file['terminals'].astype(np.int)
+        self.actions = self.data_file['actions']
+        self.action_space = sorted(list(set(self.actions)))
+        self.n_actions = len(self.action_space)
+        self.episodic_reward=self.data_file['episodic_reward']
+
+        self.num_examples,self.data_h,self.data_w = self.frames.shape
+
+        self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
+        self.mb_next_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
+
+
+        self.index_array = list(np.arange(self.num_condition, self.num_examples, dtype=np.int))
+        # ending indexes cannot be selected
+        self.ends = np.where(self.terminals == 1)[0]
+
+        for index in self.index_array:
+            if np.sum(self.terminals[index-self.num_condition:index])>0:
+                self.index_array.remove(index)
+        self.index_array = np.array(self.index_array)
+        self.relative_indexes = np.arange(len(self.index_array))
+        self.reset_batch()
+
+    def reset_batch(self):
+        self.unique_index_array = deepcopy(self.relative_indexes)
+
+    def get_data(self, relative_indexes, reset=False):
+        indexes = self.index_array[relative_indexes]
+        for i, idx in enumerate(indexes):
+            # todo - proper norm
+            st, nst = self.__getstates__(idx)
+            self.mb_states[i] = st/self.norm_by
+            self.mb_next_states[i] = nst/self.norm_by
+        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.FloatTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_next_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
+
+    def get_minibatch(self):
+        relative_indexes = self.random_state.choice(self.unique_index_array, self.batch_size)
+        return self.get_data(relative_indexes)
+
+    def get_unique_minibatch(self):
+        reset = False
+        relative_indexes = self.random_state.choice(self.unique_index_array, self.batch_size, replace=False)
+        # remove used indexes
+        not_in = np.logical_not(np.isin(self.unique_index_array, relative_indexes))
+        self.unique_index_array = self.unique_index_array[not_in]
+        if len(self.unique_index_array) < self.batch_size:
+            self.reset_batch()
+            reset = True
+        return self.get_data(relative_indexes, reset)
+
+    def __getstates__(self, index):
+        # determine if this is beginning of episode
+        # index refers to the next_state index
+
+        frames = self.frames[index-self.num_condition:index+1]
+        state = frames[:-1]
+        next_state = frames[1:]
+        return state, next_state
+
+# used to be Dataloader, but overloaded
+class AtariDataLoader():
     def __init__(self, train_load_function, test_load_function,
                  batch_size, random_number=394):
 

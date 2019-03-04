@@ -163,7 +163,7 @@ class GatedPixelCNN(nn.Module):
         self.apply(weights_init)
         self.output_conv[-1].bias.data.fill_(last_layer_bias)
 
-    def forward(self, x, label=None, spatial_cond=None, float_condition=None):
+    def forward(self, x, class_condition=None, spatial_cond=None, float_condition=None):
         # mnist x is (B,C,W,H)
         shp = x.size()+(-1,)
         xo=x
@@ -191,7 +191,7 @@ class GatedPixelCNN(nn.Module):
             #spatial_cond = spatial_cond.permute(0,3,1,2)
 
         for i, layer in enumerate(self.layers):
-            x_v, x_h = layer(x_v=x_v, x_h=x_h, class_condition=label,
+            x_v, x_h = layer(x_v=x_v, x_h=x_h, class_condition=class_condition,
                              spatial_condition=spatial_cond, float_condition=float_condition)
         return self.output_conv(x_h)
 
