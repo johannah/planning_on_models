@@ -53,24 +53,36 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_kl_loss, avg_train_rec_loss):
         if len(info['train_kl_losses'])<rolling*3:
             rolling = 1
         print('adding last loss plot', train_cnt)
-        plot_name = model_base_filepath + "_%010dloss.png"%train_cnt
-        print('plotting loss: %s with %s points'%(plot_name, len(info['train_cnts'])))
-        plot_dict = {
+        kl_plot_name = model_base_filepath + "_%010d_kl_loss.png"%train_cnt
+        rec_plot_name = model_base_filepath + "_%010d_rec_loss.png"%train_cnt
+        tot_plot_name = model_base_filepath + "_%010d_loss.png"%train_cnt
+        print('plotting loss: %s with %s points'%(tot_plot_name, len(info['train_cnts'])))
+        kl_plot_dict = {
                      'valid kl':{'index':info['valid_cnts'],
                                 'val':info['valid_kl_losses']},
-                     'valid rec':{'index':info['valid_cnts'],
-                                   'val':info['valid_rec_losses']},
-                     'valid loss':{'index':info['valid_cnts'],
-                                   'val':info['valid_losses']},
                      'train kl':{'index':info['train_cnts'],
                                    'val':info['train_kl_losses']},
+                    }
+
+
+        rec_plot_dict = {
+                     'valid rec':{'index':info['valid_cnts'],
+                                   'val':info['valid_rec_losses']},
                      'train rec':{'index':info['train_cnts'],
                                    'val':info['train_rec_losses']},
+                    }
+
+        tot_plot_dict = {
+                     'valid loss':{'index':info['valid_cnts'],
+                                   'val':info['valid_losses']},
                      'train loss':{'index':info['train_cnts'],
                                    'val':info['train_losses']},
                     }
 
-        plot_dict_losses(plot_dict, name=plot_name, rolling_length=rolling)
+
+        plot_dict_losses(kl_plot_dict, name=kl_plot_name, rolling_length=rolling)
+        plot_dict_losses(rec_plot_dict, name=rec_plot_name, rolling_length=rolling)
+        plot_dict_losses(tot_plot_dict, name=tot_plot_name, rolling_length=rolling)
 
 def handle_checkpointing(train_cnt, avg_train_kl_loss, avg_train_rec_loss):
     if ((train_cnt-info['last_save'])>=args.save_every):
