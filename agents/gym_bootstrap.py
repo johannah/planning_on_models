@@ -13,11 +13,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import datetime
 import time
-from dqn_model import EnsembleNet, NetWithPrior
+from dqn_model_small import EnsembleNet, NetWithPrior
 from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint, linearly_decaying_epsilon
-from env import Environment
 from replay import ReplayMemory
 import config
+import gym
 
 def rolling_average(a, n=5) :
     if n == 0:
@@ -75,7 +75,7 @@ def handle_checkpoint(last_save, cnt):
     else: return last_save
 
 def pt_get_action(state, active_head=None):
-    state = torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
+    state = torch.Tensor(state.reshape(1,info['INPUT_SIZE'])).to(info['DEVICE'])
     vals = policy_net(state, active_head)
     if active_head is not None:
         action = torch.argmax(vals, dim=1).item()
@@ -88,8 +88,9 @@ def pt_get_action(state, active_head=None):
         return action
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
-    states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
-    next_states = torch.Tensor(next_states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
+
+    states = torch.Tensor(states.reshape(states.shape[0],info['INPUT_SIZE'])).to(info['DEVICE'])
+    next_states = torch.Tensor(next_states.reshape(states.shape[0],info['INPUT_SIZE'])).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
@@ -142,6 +143,8 @@ def train(step_number, last_save):
             terminal = False
             life_lost = True
             state = env.reset()
+            state = np.array([state[None] for x in range(info['HISTORY_SIZE'])])
+            print("RESET", state.shape)
             start_steps = step_number
             st = time.time()
             episode_reward_sum = 0
@@ -157,21 +160,22 @@ def train(step_number, last_save):
                                                 final_epsilon=info['EPS_FINAL'], step=step_number)
                 ep_eps_list.append(eps)
                 if random_state.rand() < eps:
-                    action = random_state.randint(0, env.num_actions)
+                    action = random_state.randint(0, num_actions)
                     print("random action", step_number, 'eps=%s'%eps, action)
                 else:
                     action = pt_get_action(state=state, active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
+                next_state = next_state[None,:]
                 # Store transition in the replay memory
                 replay_memory.add_experience(action=action,
-                                                frame=next_state[-1],
+                                                frame=next_state,
                                                 reward=np.sign(reward),
                                                 terminal=life_lost)
 
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
-                state = next_state
+                state = np.concatenate((state[1:,:], next_state[None]), axis=0)
 
                 if step_number % info['LEARN_EVERY_STEPS'] == 0 and step_number > info['MIN_STEPS_TO_LEARN']:
                     _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
@@ -184,6 +188,7 @@ def train(step_number, last_save):
 
             et = time.time()
             ep_time = et-st
+            print("FINISH",step_number, len(perf['steps']), episode_reward_sum)
             perf['steps'].append(step_number)
             perf['episode_step'].append(step_number-start_steps)
             perf['episode_head'].append(active_head)
@@ -203,10 +208,10 @@ def train(step_number, last_save):
 
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
-        matplotlib_plot_all(perf)
+        #avg_eval_reward = evaluate(step_number)
+        #perf['eval_rewards'].append(avg_eval_reward)
+        #perf['eval_steps'].append(step_number)
+        #matplotlib_plot_all(perf)
 
 def evaluate(step_number):
     print("""
@@ -220,6 +225,7 @@ def evaluate(step_number):
     # only run one
     for i in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
+        state = np.array([state for x in range(info['HISTORY_SIZE'])])
         episode_reward_sum = 0
         terminal = False
         life_lost = True
@@ -229,10 +235,11 @@ def evaluate(step_number):
         while not terminal:
             eps = random_state.rand()
             if eps < info['EPS_EVAL']:
-               action = random_state.randint(0, env.num_actions)
+                action = random_state.randint(0, num_actions)
             else:
-               action = pt_get_action(state, active_head=None)
+                action = pt_get_action(state, active_head=None)
             next_state, reward, life_lost, terminal = env.step(action)
+            next_state = next_state[None,:]
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
@@ -240,7 +247,7 @@ def evaluate(step_number):
             results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
             if not episode_steps%1000:
                 print('eval', episode_steps, episode_reward_sum)
-            state = next_state
+        state = np.concatenate((state[:1,:], next_state), axis=0)
         print("Evaluation score:\n", np.mean(eval_rewards))
         # only save best if we've seen this round
         if episode_reward_sum > best_eval:
@@ -267,29 +274,28 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/freeway.bin', # gym prefix
-        "MIN_SCORE_GIF":0, # min score to plot gif in eval
+        "GAME":'MountainCar-v0', # gym prefix
+        "MIN_SCORE_GIF":-100, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'', # start files with name
+        "NAME":'MC', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
-        "PRIOR":False, # turn on to use randomized prior
+        "PRIOR":True, # turn on to use randomized prior
         "PRIOR_SCALE":10, # what to scale prior by
-        "N_ENSEMBLE":1, # number of bootstrap heads to use. when 1, this is a normal dqn
-        "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
+        "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
+        "BERNOULLI_PROBABILITY": 0.7, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
-        "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
-        "EPS_WARMUP": 50000, # steps to act completely random initially to fill replay buffer
+        "MIN_STEPS_TO_LEARN":1000, # min steps needed to start training neural nets
+        "EPS_WARMUP": 1000, # steps to act completely random initially to fill replay buffer
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
-        "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
-        "EPS_FINAL":0.01, # 0.01 in osband
+        "EPS_FINAL":0.0, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
-        "NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
-        #"NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
+        #"NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
+        "NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
-        "EVAL_FREQUENCY":500000, # how often to run evaluation episodes
+        "CHECKPOINT_EVERY_STEPS":20000, # how often to write pkl of model and npz of data buffer
+        "EVAL_FREQUENCY":10000, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
@@ -304,25 +310,23 @@ if __name__ == '__main__':
         "CLIP_GRAD":5, # Gradient clipping setting
         "SEED":101,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
-        "OBS_SIZE":(84,84),
-        "RESHAPE_SIZE":64*7*7,
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
-        "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
-        "FRAME_SKIP":4, # deterministic frame skips to match deepmind
-        "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
-        "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
     }
 
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
     info['args'] = args
     info['load_time'] = datetime.date.today().ctime()
-    info['NORM_BY'] = float(info['NORM_BY'])
 
     # create environment
-    env = Environment(rom_file=info['GAME'], frame_skip=info['FRAME_SKIP'],
-                      num_frames=info['HISTORY_SIZE'], no_op_start=info['MAX_NO_OP_FRAMES'], rand_seed=info['SEED'],
-                      dead_as_end=info['DEAD_AS_END'], max_episode_steps=info['MAX_EPISODE_STEPS'])
+    env = gym.make(info['GAME'])
+    s = env.reset()
+    info["OBS_SIZE"] = s[None].shape
+    info["INPUT_SIZE"] = info["OBS_SIZE"][0]*info["OBS_SIZE"][1]*info["HISTORY_SIZE"]
+    num_actions = env.action_space.n
+    #env = Environment(rom_file=info['GAME'], frame_skip=info['FRAME_SKIP'],
+    #                  num_frames=info['HISTORY_SIZE'], no_op_start=info['MAX_NO_OP_FRAMES'], rand_seed=info['SEED'],
+    #                  dead_as_end=info['DEAD_AS_END'], max_episode_steps=info['MAX_EPISODE_STEPS'])
 
     # create replay buffer
     replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
@@ -382,18 +386,18 @@ if __name__ == '__main__':
     seed_everything(info["SEED"])
 
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
-                                      n_actions=env.num_actions,
-                                      reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+                                      n_actions=num_actions,
+                                      input_size=info['INPUT_SIZE'],
+                                      dueling=info['DUELING']).to(info['DEVICE'])
     target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
-                                      n_actions=env.num_actions,
-                                      reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+                                      n_actions=num_actions,
+                                      input_size=info['INPUT_SIZE'],
+                                      dueling=info['DUELING']).to(info['DEVICE'])
     if info['PRIOR']:
         prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
-                                n_actions=env.num_actions,
-                                reshape_size=info['RESHAPE_SIZE'],
-                                num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+                                n_actions=num_actions,
+                                input_size=info['INPUT_SIZE'],
+                                dueling=info['DUELING']).to(info['DEVICE'])
 
         print("using randomized prior")
         policy_net = NetWithPrior(policy_net, prior_net, info['PRIOR_SCALE'])

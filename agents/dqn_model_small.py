@@ -30,33 +30,24 @@ def weights_init(m):
 
 
 class CoreNet(nn.Module):
-    def __init__(self, reshape_size=64*7*7, num_channels=4):
+    def __init__(self, input_size=4*2):
         super(CoreNet, self).__init__()
-        self.reshape_size = reshape_size
-        self.num_channels = num_channels
         # params from ddqn appendix
-        self.conv1 = nn.Conv2d(self.num_channels, 32, 8, 4)
-        # TODO - should we have this init during PRIOR code?
-        self.conv2 = nn.Conv2d(32, 64, 4, 2)
-        self.conv3 = nn.Conv2d(64, 64, 3, 1)
-        self.conv1.apply(weights_init)
-        self.conv2.apply(weights_init)
-        self.conv3.apply(weights_init)
+        self.lin1 = nn.Linear(input_size, 32)
+        self.lin2 = nn.Linear(32, 32)
 
     def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
+        x = F.relu(self.lin1(x))
+        x = F.relu(self.lin2(x))
         # size after conv3
-        x = x.view(-1, self.reshape_size)
+        #x = x.view(-1, self.reshape_size)
         return x
 
 class DuelingHeadNet(nn.Module):
-    def __init__(self, n_actions=4):
+    def __init__(self, n_actions=4, head_output_size=32, split_size=16):
         super(DuelingHeadNet, self).__init__()
-        mult = 64*7*7
-        self.split_size = 512
-        self.fc1 = nn.Linear(mult, self.split_size*2)
+        self.split_size=split_size
+        self.fc1 = nn.Linear(head_output_size, self.split_size*2)
         self.value = nn.Linear(self.split_size, 1)
         self.advantage = nn.Linear(self.split_size, n_actions)
         self.fc1.apply(weights_init)
@@ -73,11 +64,10 @@ class DuelingHeadNet(nn.Module):
         return q
 
 class HeadNet(nn.Module):
-    def __init__(self, n_actions=4):
+    def __init__(self, n_actions=4, head_output_size=32):
         super(HeadNet, self).__init__()
-        mult = 64*7*7
-        self.fc1 = nn.Linear(mult, 512)
-        self.fc2 = nn.Linear(512, n_actions)
+        self.fc1 = nn.Linear(head_output_size, 16)
+        self.fc2 = nn.Linear(16, n_actions)
         self.fc1.apply(weights_init)
         self.fc2.apply(weights_init)
 
@@ -87,9 +77,9 @@ class HeadNet(nn.Module):
         return x
 
 class EnsembleNet(nn.Module):
-    def __init__(self, n_ensemble, n_actions, reshape_size, num_channels, dueling=False):
+    def __init__(self, n_ensemble, n_actions, input_size, dueling=False):
         super(EnsembleNet, self).__init__()
-        self.core_net = CoreNet(reshape_size=reshape_size, num_channels=num_channels)
+        self.core_net = CoreNet(input_size)
         self.dueling = dueling
         if self.dueling:
             print("using dueling dqn")
