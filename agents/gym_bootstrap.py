@@ -88,7 +88,6 @@ def pt_get_action(state, active_head=None):
         return action
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
-
     states = torch.Tensor(states.reshape(states.shape[0],info['INPUT_SIZE'])).to(info['DEVICE'])
     next_states = torch.Tensor(next_states.reshape(states.shape[0],info['INPUT_SIZE'])).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
@@ -141,18 +140,20 @@ def train(step_number, last_save):
         epoch_frame = 0
         while epoch_frame < info['EVAL_FREQUENCY']:
             terminal = False
-            life_lost = True
             state = env.reset()
             state = np.array([state[None] for x in range(info['HISTORY_SIZE'])])
-            print("RESET", state.shape)
             start_steps = step_number
             st = time.time()
             episode_reward_sum = 0
             random_state.shuffle(heads)
             active_head = heads[0]
             epoch_num += 1
+            states = []
+            actions = []
             ep_eps_list = []
             ptloss_list = []
+            ep_action_list = []
+            max_position = -10
             while not terminal:
                # eps
                 eps = linearly_decaying_epsilon(num_warmup_steps=info['EPS_WARMUP'],
@@ -164,31 +165,36 @@ def train(step_number, last_save):
                     print("random action", step_number, 'eps=%s'%eps, action)
                 else:
                     action = pt_get_action(state=state, active_head=active_head)
-                next_state, reward, life_lost, terminal = env.step(action)
+                ep_action_list.append(action)
+                next_state, reward, terminal, env_info = env.step(action)
+                if next_state[0] > max_position:
+                    max_position = next_state[0]
                 next_state = next_state[None,:]
                 # Store transition in the replay memory
                 replay_memory.add_experience(action=action,
                                                 frame=next_state,
                                                 reward=np.sign(reward),
-                                                terminal=life_lost)
+                                                terminal=terminal)
 
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
                 state = np.concatenate((state[1:,:], next_state[None]), axis=0)
 
-                if step_number % info['LEARN_EVERY_STEPS'] == 0 and step_number > info['MIN_STEPS_TO_LEARN']:
-                    _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
-                    ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags, _masks)
-                    ptloss_list.append(ptloss)
                 if step_number % info['TARGET_UPDATE'] == 0 and step_number >  info['MIN_STEPS_TO_LEARN']:
                     print("++++++++++++++++++++++++++++++++++++++++++++++++")
                     print('updating target network at %s'%step_number)
                     target_net.load_state_dict(policy_net.state_dict())
 
+           #     if step_number % info['LEARN_EVERY_STEPS'] == 0 and step_number > info['MIN_STEPS_TO_LEARN']:
+            _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
+            ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags, _masks)
+            ptloss_list.append(ptloss)
+
             et = time.time()
             ep_time = et-st
-            print("FINISH",step_number, len(perf['steps']), episode_reward_sum)
+            print("FINISH", step_number, max_position, len(perf['steps']), episode_reward_sum)
+            print(ep_action_list)
             perf['steps'].append(step_number)
             perf['episode_step'].append(step_number-start_steps)
             perf['episode_head'].append(active_head)
@@ -228,7 +234,6 @@ def evaluate(step_number):
         state = np.array([state for x in range(info['HISTORY_SIZE'])])
         episode_reward_sum = 0
         terminal = False
-        life_lost = True
         episode_steps = 0
         frames_for_gif = []
         results_for_eval = []
@@ -238,13 +243,13 @@ def evaluate(step_number):
                 action = random_state.randint(0, num_actions)
             else:
                 action = pt_get_action(state, active_head=None)
-            next_state, reward, life_lost, terminal = env.step(action)
+            next_state, reward, terminal, env_info = env.step(action)
             next_state = next_state[None,:]
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
             frames_for_gif.append(env.ale.getScreenRGB())
-            results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
+            results_for_eval.append("%s, %s, %s" %(action, reward, terminal))
             if not episode_steps%1000:
                 print('eval', episode_steps, episode_reward_sum)
         state = np.concatenate((state[:1,:], next_state), axis=0)
@@ -275,18 +280,18 @@ if __name__ == '__main__':
 
     info = {
         "GAME":'MountainCar-v0', # gym prefix
-        "MIN_SCORE_GIF":-100, # min score to plot gif in eval
+        "MIN_SCORE_GIF":-199, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
         "NAME":'MC', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":10, # what to scale prior by
-        "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
-        "BERNOULLI_PROBABILITY": 0.7, # Probability of experience to go to each head - if 1, every experience goes to every head
+        "PRIOR_SCALE":15, # what to scale prior by
+        "N_ENSEMBLE":11, # number of bootstrap heads to use. when 1, this is a normal dqn
+        "BERNOULLI_PROBABILITY": 0.5, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         "MIN_STEPS_TO_LEARN":1000, # min steps needed to start training neural nets
-        "EPS_WARMUP": 1000, # steps to act completely random initially to fill replay buffer
+        "EPS_WARMUP": 500, # steps to act completely random initially to fill replay buffer
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "EPS_FINAL":0.0, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
@@ -294,11 +299,11 @@ if __name__ == '__main__':
         "NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":20000, # how often to write pkl of model and npz of data buffer
+        "CHECKPOINT_EVERY_STEPS":1000000, # how often to write pkl of model and npz of data buffer
         "EVAL_FREQUENCY":10000, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
-        "RMS_DECAY":0.95,
+        "RMS_DECAY":1.0,
         "RMS_MOMENTUM":0.0,
         "RMS_EPSILON":0.00001,
         "RMS_CENTERED":True,
@@ -306,7 +311,7 @@ if __name__ == '__main__':
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":32, # Batch size to use for learning
         "GAMMA":.99, # Gamma weight in Q update
-        "PLOT_EVERY_EPISODES": 50,
+        "PLOT_EVERY_EPISODES": 1000,
         "CLIP_GRAD":5, # Gradient clipping setting
         "SEED":101,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation

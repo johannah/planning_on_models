@@ -33,8 +33,8 @@ class CoreNet(nn.Module):
     def __init__(self, input_size=4*2):
         super(CoreNet, self).__init__()
         # params from ddqn appendix
-        self.lin1 = nn.Linear(input_size, 32)
-        self.lin2 = nn.Linear(32, 32)
+        self.lin1 = nn.Linear(input_size, 128)
+        self.lin2 = nn.Linear(128, 128)
 
     def forward(self, x):
         x = F.relu(self.lin1(x))
@@ -44,9 +44,9 @@ class CoreNet(nn.Module):
         return x
 
 class DuelingHeadNet(nn.Module):
-    def __init__(self, n_actions=4, head_output_size=32, split_size=16):
+    def __init__(self, n_actions=4, head_output_size=128):
         super(DuelingHeadNet, self).__init__()
-        self.split_size=split_size
+        self.split_size = int(head_output_size/2)
         self.fc1 = nn.Linear(head_output_size, self.split_size*2)
         self.value = nn.Linear(self.split_size, 1)
         self.advantage = nn.Linear(self.split_size, n_actions)
