@@ -8,9 +8,9 @@ import torch
 from IPython import embed
 import torch.nn.functional as F
 from torchvision import datasets, transforms
-from vqvae import AutoEncoder
-#from vqvae_bigger import AutoEncoder
-#from vqvae_small import AutoEncoder
+from vqvae import VQVAE
+#from vqvae_bigger import VQVAE
+#from vqvae_small import VQVAE
 from torch.autograd import Variable
 import numpy as np
 from torchvision.utils import save_image
@@ -153,7 +153,7 @@ if __name__ == '__main__':
             }
 
     if args.model_loadname is None:
-        vmodel = AutoEncoder(nr_logistic_mix=args.nr_logistic_mix,
+        vmodel = VQVAE(nr_logistic_mix=args.nr_logistic_mix,
                              num_clusters=args.num_k, encoder_output_size=args.num_z,
                              in_channels_size=args.number_condition, out_channels_size=1).to(DEVICE)
         opt = torch.optim.Adam(vmodel.parameters(), lr=args.learning_rate)
@@ -168,7 +168,7 @@ if __name__ == '__main__':
             args.num_z = args.num_z
             args.nr_logistic_mix
             args.num_k = largs.num_k
-            vmodel = AutoEncoder(nr_logistic_mix=largs.nr_logistic_mix,
+            vmodel = VQVAE(nr_logistic_mix=largs.nr_logistic_mix,
                                  num_clusters=largs.num_k,
                                  encoder_output_size=largs.num_z,
                                  in_channels_size=largs.number_condition,

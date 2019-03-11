@@ -289,7 +289,7 @@ class AtariDataset(Dataset):
         for index in self.index_array:
             if np.sum(self.terminals[index-self.num_condition:index])>0:
                 to_remove.append(index)
-        print('removing episode start indices', to_remove)
+        #print('removing episode start indices', to_remove)
         for pl, index in enumerate(to_remove):
             self.index_array.remove(index)
         self.index_array = np.array(self.index_array)

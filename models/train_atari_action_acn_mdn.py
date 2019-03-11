@@ -174,7 +174,6 @@ def valid_acn(train_cnt, do_plot):
     pcnn_decoder.eval()
     opt.zero_grad()
     i = 0
-    #data, label, data_index = data_loader.validation_data()
     states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_unique_minibatch()
     states = states.to(DEVICE)
     # 1 channel expected

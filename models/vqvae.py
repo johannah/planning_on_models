@@ -9,10 +9,10 @@ from torch.autograd import Variable
 from copy import deepcopy
 from IPython import embed
 
-class AutoEncoder(nn.Module):
+class VQVAE(nn.Module):
     def __init__(self, num_clusters=512, encoder_output_size=32,
                  nr_logistic_mix=10, in_channels_size=1, out_channels_size=1):
-        super(AutoEncoder, self).__init__()
+        super(VQVAE, self).__init__()
         self.nr_logistic_mix = nr_logistic_mix
         # the encoder_output_size is the size of the vector that is compressed
         # with vector quantization. if it is too large, vector quantization
@@ -40,12 +40,12 @@ class AutoEncoder(nn.Module):
             nn.BatchNorm2d(32),
             nn.ReLU(True),
             nn.Conv2d(in_channels=32,
-                      out_channels=42,
+                      out_channels=64,
                       kernel_size=4,
                       stride=2, padding=1),
-            nn.BatchNorm2d(42),
+            nn.BatchNorm2d(64),
             nn.ReLU(True),
-            nn.Conv2d(in_channels=42,
+            nn.Conv2d(in_channels=64,
                       out_channels=encoder_output_size,
                       kernel_size=1,
                       stride=1, padding=0),
@@ -59,15 +59,15 @@ class AutoEncoder(nn.Module):
 
         self.decoder = nn.Sequential(
                 nn.Conv2d(in_channels=encoder_output_size,
-                          out_channels=42,
+                          out_channels=64,
                           kernel_size=1,
                           stride=1, padding=0),
-                nn.BatchNorm2d(42),
+                nn.BatchNorm2d(64),
                 nn.ReLU(True),
                 # applies a 2d transposed convolution operator over input image
                 # composed of several input planes. Can be seen as gradient of Conv2d
                 # with respsct to its input. also known as fractionally-strided conv.
-                nn.ConvTranspose2d(in_channels=42,
+                nn.ConvTranspose2d(in_channels=64,
                       out_channels=32,
                       kernel_size=4,
                       stride=2, padding=1),
@@ -118,10 +118,10 @@ if __name__ == '__main__':
     use_cuda = False
     ysize, xsize = 40,40
     if use_cuda:
-        model = AutoEncoder().cuda()
+        model = VQVAE().cuda()
         x = Variable(torch.randn(32,1,ysize,xsize).cuda(), requires_grad=False)
     else:
-        model = AutoEncoder()
+        model = VQVAE()
         x = Variable(torch.randn(32,1,ysize,xsize), requires_grad=False)
 
     model.zero_grad()

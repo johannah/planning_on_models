@@ -67,7 +67,6 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     #nr_mix = int(ls[-1] / 10)
     # l is prediction
     logit_probs = l[:, :, :, :nr_mix]
-
     l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix*2]) # 3--changed to 1 for mean, scale, coef
     means = l[:, :, :, :, :nr_mix]
     # log_scales = torch.max(l[:, :, :, :, nr_mix:2 * nr_mix], -7.)
@@ -79,7 +78,6 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     x = x.contiguous()
     x = x.unsqueeze(-1) + Variable(torch.zeros(xs + [nr_mix]).to(DEVICE), requires_grad=False)
 
-    # ugggghhh
     # m2 = (means[:, :, :, 1, :] + coeffs[:, :, :, 0, :]
     #             * x[:, :, :, 0, :]).view(xs[0], xs[1], xs[2], 1, nr_mix)
 
@@ -125,6 +123,7 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
     lse = log_sum_exp(log_probs)
     # hacky hack mask to weight cars and frogs
+    #print("investigate weird loss")
     #from IPython import embed; embed()
     masked = (target[:,0,:,:]>-.99).float()*lse
     out = lse+masked
@@ -142,7 +141,6 @@ def discretized_mix_logistic_loss_1d(x, l, DEVICE='cpu'):
     # Pytorch ordering
     l = prediction
     x = target
-    embed()
     x = x.permute(0, 2, 3, 1)
     l = l.permute(0, 2, 3, 1)
     xs = [int(y) for y in x.size()]
