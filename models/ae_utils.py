@@ -56,10 +56,8 @@ def log_prob_from_logits(x):
 def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
     # Pytorch ordering
-    l = prediction
-    x = target
-    x = x.permute(0, 2, 3, 1)
-    l = l.permute(0, 2, 3, 1)
+    x = target.permute(0, 2, 3, 1)
+    l = prediction.permute(0, 2, 3, 1)
     xs = [int(y) for y in x.size()]
     ls = [int(y) for y in l.size()]
 

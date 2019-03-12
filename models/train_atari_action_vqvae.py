@@ -27,8 +27,9 @@ from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_dict_losses
 from ae_utils import save_checkpoint
-from vqvae import VQVAE
-from pixel_cnn import GatedPixelCNN
+from vqvae_module import VQVAE_ENCODER, VQVAE_PCNN_DECODER, VQVAE, get_vqvae_loss
+#from vqvae import VQVAE_ENCODER
+#from pixel_cnn import GatedPixelCNN
 from datasets import AtariDataset
 from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
 torch.manual_seed(394)
@@ -102,9 +103,9 @@ def handle_checkpointing(train_cnt, avg_loss_1, avg_loss_2, avg_loss_3):
         filename = model_base_filepath + "_%010dex.pt"%train_cnt
         print("SAVING MODEL:%s" %filename)
         state = {
-                 'vmodel_state_dict':vmodel.state_dict(),
+                 'vqvae_state_dict':vqvae_model.state_dict(),
                  'optimizer':opt.state_dict(),
-                 'embedding':vmodel.embedding,
+                 'embedding':vqvae_model.encoder.embedding,
                  'info':info,
                  }
         save_checkpoint(state, filename=filename)
@@ -123,47 +124,71 @@ def reshape_input(ss):
     # reshape 84x84 because needs to be divisible by 2 for each of the 4 layers
     return ss[:,:,2:-2,2:-2]
 
-def forward_pass(model, states, next_states, actions,  nr_logistic_mix, train=True, device='cpu', beta=0.25):
-    states = reshape_input(states)
-    next_states = reshape_input(next_states)
-    states = states.to(device)
-    # 1 channel expected
-    next_states = next_states[:,-1:].to(device)
-    actions = actions.to(device)
-    x_d, z_e_x, z_q_x, latents = model(states)
-    z_q_x.retain_grad()
-    #ns = (2*next_states)-1
-    ns = (2*states[:,-1:])-1
-    loss_1 = discretized_mix_logistic_loss(x_d,ns,nr_mix=nr_logistic_mix, DEVICE=device)
-    loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
-    loss_3 = beta*F.mse_loss(z_e_x, z_q_x.detach())
-    if train:
-        loss_1.backward(retain_graph=True)
-        model.embedding.zero_grad()
-        z_e_x.backward(z_q_x.grad, retain_graph=True)
-        loss_2.backward(retain_graph=True)
-        loss_3.backward()
-        parameters = list(model.parameters())
-        clip_grad_value_(parameters, 10)
-        opt.step()
-    ne = float(next_states.shape[0])
-    return x_d, z_e_x, z_q_x, latents, loss_1.item()/ne, loss_2.item()/ne, loss_3.item()/ne
+#def forward_pass(enc, dec, states, next_states, actions,  nr_logistic_mix, train=True, device='cpu', beta=0.25):
+#    states = reshape_input(states)
+#    next_states = reshape_input(next_states)
+#    states = states.to(device)
+#    # 1 channel expected
+#    next_states = next_states[:,-1:].to(device)
+#    actions = actions.to(device)
+#    z_e_x, z_q_x, latents = enc(states)
+#    z_q_x.retain_grad()
+#    ns = (2*next_states)-1
+#    fc = latents.view(latents.shape[0], latents.shape[1]*latents.shape[2]).float()
+#    yhat =  pcnn_decoder(x=ns, class_condition=actions, float_condition=fc)
+#    x_d =
+#    embed()
+#    loss_1 = discretized_mix_logistic_loss(x_d,ns,nr_mix=nr_logistic_mix, DEVICE=device)
+#    loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
+#    loss_3 = beta*F.mse_loss(z_e_x, z_q_x.detach())
+#    if train:
+#        loss_1.backward(retain_graph=True)
+#        model.embedding.zero_grad()
+#        z_e_x.backward(z_q_x.grad, retain_graph=True)
+#        loss_2.backward(retain_graph=True)
+#        loss_3.backward()
+#        parameters = list(model.parameters())
+#        clip_grad_value_(parameters, 10)
+#        opt.step()
+#    ne = float(next_states.shape[0])
+#    return x_d, z_e_x, z_q_x, latents, loss_1.item()/ne, loss_2.item()/ne, loss_3.item()/ne
 
 def train_vqvae(train_cnt):
-    avg_loss_1 = 0.0
-    avg_loss_2 = 0.0
-    avg_loss_3 = 0.0
-    init_cnt = train_cnt
     st = time.time()
     #for batch_idx, (data, label, data_index) in enumerate(train_loader):
     batches = 0
     while train_cnt < args.num_examples_to_train:
-        vmodel.train()
+        vqenc.train()
+        pcnn_decoder.train()
         opt.zero_grad()
         states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
         # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
-        x_d, z_e_x, z_q_x, latents, avg_loss_1, avg_loss_2, avg_loss_3 = forward_pass(vmodel, states, next_states, actions, nr_logistic_mix=args.nr_logistic_mix, train=True, device=DEVICE, beta=args.beta)
-        handle_checkpointing(train_cnt, avg_loss_1, avg_loss_2, avg_loss_3)
+        states = reshape_input(states).to(DEVICE)
+        # only predict future observation - normalize
+        targets = (2*reshape_input(next_states)[:,-1:]-1).to(DEVICE)
+        actions = actions.to(DEVICE)
+        x_d, z_e_x, z_q_x, latents, scl = vqvae_model(states, targets, class_condition=actions)
+        #z_e_x, z_q_x, latents = vqenc(states)
+        #float_condition = latents.view(latents.shape[0], latents.shape[1]*latents.shape[2]).float()
+        #x_d = pcnn_decoder(targets, class_condition=actions, float_condition=float_condition)
+        z_q_x.retain_grad()
+        vqvae_model.spatial_condition.retain_grad()
+        loss_1 = discretized_mix_logistic_loss(x_d, targets, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
+        loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
+        loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
+        #loss_1, loss_2, loss_3 = get_vqvae_loss(x_d, targets, z_e_x, z_q_x, nr_logistic_mix=args.nr_logistic_mix, beta=args.beta, device=DEVICE)
+        loss_1.backward(retain_graph=True)
+        #vqvae_model.encoder.embedding.zero_grad()
+        #z_e_x.backward(z_q_x.grad, retain_graph=True)
+        z_e_x.backward(vqvae_model.spatial_condition.grad, retain_graph=True)
+        loss_2.backward(retain_graph=True)
+        loss_3.backward()
+        parameters = list(vqvae_model.parameters())
+        clip_grad_value_(parameters, 10)
+        opt.step()
+
+        bs = float(x_d.shape[0])
+        handle_checkpointing(train_cnt, loss_1.item()/bs, loss_2.item()/bs, loss_3.item()/bs)
         train_cnt+=len(states)
 
         batches+=1
@@ -172,24 +197,33 @@ def train_vqvae(train_cnt):
     return train_cnt
 
 def valid_vqvae(train_cnt, do_plot=False):
-    vmodel.eval()
+    vqvae_model.eval()
     opt.zero_grad()
     states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_unique_minibatch()
     # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
-    fpr = forward_pass(vmodel, states, next_states, actions, nr_logistic_mix=args.nr_logistic_mix, train=False, device=DEVICE, beta=args.beta)
-    x_d, z_e_x, z_q_x, latents, avg_loss_1, avg_loss_2, avg_loss_3 = fpr
+    states = reshape_input(states).to(DEVICE)
+    # only predict future observation - normalize
+    targets = (2*reshape_input(next_states)[:,-1:]-1).to(DEVICE)
+    actions = actions.to(DEVICE)
+    x_d, z_e_x, z_q_x, latents, scl = vqvae_model(states, targets, class_condition=actions)
+    loss_1 = discretized_mix_logistic_loss(x_d, targets, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
+    loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
+    loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
+    #loss_1, loss_2, loss_3 = get_vqvae_loss(x_d, targets, z_e_x, z_q_x, nr_logistic_mix=args.nr_logistic_mix, beta=args.beta, device=DEVICE)
+    bs,yc,yh,yw = x_d.shape
     yhat = sample_from_discretized_mix_logistic(x_d, args.nr_logistic_mix)
     if do_plot:
         print('writing img')
         n_imgs = 8
         n = min(states.shape[0], n_imgs)
-        gold = reshape_input(states[:,-1:])
+        gold = states[:,-1:]
         bs,_,h,w = gold.shape
-        comparison = torch.cat([gold.view(bs,1,h,w)[:n],
+        comparison = torch.cat([gold.to('cpu').view(bs,1,h,w)[:n],
                                 yhat.to('cpu').view(bs,1,h,w)[:n]])
         img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
         save_image(comparison, img_name, nrow=n)
-    return avg_loss_1, avg_loss_2, avg_loss_3
+    bs = float(states.shape[0])
+    return loss_1.item()/bs, loss_2.item()/bs, loss_3.item()/bs
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -197,12 +231,12 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='vqvae')
+    parser.add_argument('--savename', default='vqvaepcnnfcc')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
-    parser.add_argument('-se', '--save_every', default=100000*2, type=int)
-    parser.add_argument('-pe', '--plot_every', default=100000*2, type=int)
-    parser.add_argument('-le', '--log_every',  default=100000*2, type=int)
+    parser.add_argument('-se', '--save_every', default=100000*5, type=int)
+    parser.add_argument('-pe', '--plot_every', default=100000*5, type=int)
+    parser.add_argument('-le', '--log_every',  default=100000*5, type=int)
     #parser.add_argument('-se', '--save_every', default=10, type=int)
     #parser.add_argument('-pe', '--plot_every', default=10, type=int)
     #parser.add_argument('-le', '--log_every',  default=10, type=int)
@@ -212,8 +246,7 @@ if __name__ == '__main__':
     parser.add_argument('-k', '--num_k', default=512, type=int)
     #parser.add_argument('-nm', '--num_mixtures', default=10, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-cl', '--code_length', default=48, type=int)
-    parser.add_argument('-bs', '--batch_size', default=48, type=int)
+    parser.add_argument('-bs', '--batch_size', default=16, type=int)
     parser.add_argument('-eos', '--encoder_output_size', default=4800, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
@@ -239,25 +272,6 @@ if __name__ == '__main__':
     model_base_filepath = os.path.join(model_base_filedir, args.savename)
     print("MODEL BASE FILEPATH", model_base_filepath)
 
-    # TODO - change loss
-    valid_data_file = train_data_file.replace('training', 'valid')
-
-    train_data_loader = AtariDataset(
-                                   train_data_file,
-                                   number_condition=args.number_condition,
-                                   steps_ahead=1,
-                                   batch_size=args.batch_size,
-                                   norm_by=255.,)
-    valid_data_loader = AtariDataset(
-                                   valid_data_file,
-                                   number_condition=args.number_condition,
-                                   steps_ahead=1,
-                                   batch_size=args.batch_size,
-                                   norm_by=255.0,)
-
-
-    num_actions = train_data_loader.n_actions
-
     info = {'train_cnts':[],
             'train_losses':[],
             'train_losses_1':[],
@@ -272,16 +286,48 @@ if __name__ == '__main__':
             'args':[args],
             'last_save':0,
             'last_plot':0,
+            'norm_by':255.0,
              }
 
+
+    # TODO - change loss
+    valid_data_file = train_data_file.replace('training', 'valid')
+
+    train_data_loader = AtariDataset(
+                                   train_data_file,
+                                   number_condition=args.number_condition,
+                                   steps_ahead=1,
+                                   batch_size=args.batch_size,
+                                   norm_by=info['norm_by'])
+    valid_data_loader = AtariDataset(
+                                   valid_data_file,
+                                   number_condition=args.number_condition,
+                                   steps_ahead=1,
+                                   batch_size=args.batch_size,
+                                   norm_by=info['norm_by'])
+
+
+    num_actions = train_data_loader.n_actions
     args.size_training_set = train_data_loader.num_examples
     hsize = train_data_loader.data_h
     wsize = train_data_loader.data_w
-    vmodel = VQVAE(nr_logistic_mix=args.nr_logistic_mix,
-                   num_clusters=args.num_k, encoder_output_size=args.num_z,
-                   in_channels_size=args.number_condition, out_channels_size=1).to(DEVICE)
+    vqenc = VQVAE_ENCODER(num_clusters=args.num_k, encoder_output_size=args.num_z,
+                   in_channels_size=args.number_condition)
 
-    parameters = list(vmodel.parameters())
+    # size of latents flattened - dependent on architecture of vqvae
+    info['float_condition_size'] = 100*args.num_z
+    # 3x logistic needed for loss
+    info['decoder_output_channels'] = args.nr_logistic_mix*3
+    pcnn_decoder = VQVAE_PCNN_DECODER(n_filters=args.num_pcnn_filters,
+                                 n_layers=args.num_pcnn_layers,
+                                 n_classes=num_actions,
+                                 float_condition_size=info['float_condition_size'],
+                                spatial_condition_size=1,
+                                 hsize=hsize, wsize=wsize, num_output_channels=info['decoder_output_channels'])
+
+    vqvae_model = VQVAE(vqenc, pcnn_decoder).to(DEVICE)
+    #parameters = list(vqenc.parameters())+list(pcnn_decoder.parameters())
+    parameters = list(vqvae_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     train_cnt = train_vqvae(train_cnt)
 

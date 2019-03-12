@@ -27,7 +27,7 @@ class GatedActivation(nn.Module):
 
 class GatedMaskedConv2d(nn.Module):
     def __init__(self, mask_type, dim, kernel, residual=True, n_classes=10,
-                 cond_size=None, float_condition_size=None, hsize=28, wsize=28):
+                 spatial_condition_size=None, float_condition_size=None, hsize=28, wsize=28):
         super(GatedMaskedConv2d, self).__init__()
         # ("Kernel size must be odd")
         assert (kernel % 2 == 1 )
@@ -40,7 +40,6 @@ class GatedMaskedConv2d(nn.Module):
         self.hsize = hsize
         self.wsize = wsize
 
-        self.class_cond_embedding = nn.Embedding(n_classes, 2*dim)
         #self.class_embedding_size = 2*self.dim*self.hsize*self.wsize
         #self.class_cond_embedding = nn.Embedding(n_classes, self.class_embedding_size)
         vkernel_shape = (kernel//2 + 1, kernel)
@@ -52,10 +51,11 @@ class GatedMaskedConv2d(nn.Module):
         hkernel_shape = (1,kernel//2+1)
         hpadding_shape = (0,kernel//2)
 
+        self.class_cond_embedding = nn.Embedding(n_classes, 2*dim)
         if float_condition_size is not None:
             self.float_condition_layer = nn.Linear(float_condition_size, 2*self.dim)
-        if cond_size is not None:
-            self.spatial_cond_stack = nn.Conv2d(cond_size, dim*2, kernel_size=cond_kernel_shape, stride=1, padding=cond_padding_shape)
+        if spatial_condition_size is not None:
+            self.spatial_condition_stack = nn.Conv2d(spatial_condition_size, dim*2, kernel_size=cond_kernel_shape, stride=1, padding=cond_padding_shape)
 
         self.vert_stack = nn.Conv2d(dim, dim*2, kernel_size=vkernel_shape, stride=1, padding=vpadding_shape)
         self.vert_to_horiz = nn.Conv2d(2*dim, 2*dim, kernel_size=1)
@@ -89,18 +89,22 @@ class GatedMaskedConv2d(nn.Module):
         input_to_out_h = v2h + h_horiz
 
         if float_condition is not None:
-            float_out = self.float_condition_layer(float_condition)
+            self.float_condition = torch.autograd.Variable(float_condition, requires_grad=True)
+            float_out = self.float_condition_layer(self.float_condition)
             input_to_out_v += float_out[:,:,None,None]
             input_to_out_h += float_out[:,:,None,None]
 
         # add class conditioning
         if class_condition is not None:
-            class_condition_emb = self.class_cond_embedding(class_condition)
+            # no gradient because class_condition is an integer
+            self.class_condition = class_condition
+            class_condition_emb = self.class_cond_embedding(self.class_condition)
             input_to_out_v += class_condition_emb[:,:,None,None]
             input_to_out_h += class_condition_emb[:,:,None,None]
 
         if spatial_condition is not None:
-            spatial_c_e = self.spatial_cond_stack(spatial_condition)
+            self.spatial_condition = torch.autograd.Variable(spatial_condition, requires_grad=True)
+            spatial_c_e = self.spatial_condition_stack(self.spatial_condition)
             input_to_out_v += spatial_c_e
             input_to_out_h += spatial_c_e
 
@@ -115,7 +119,7 @@ class GatedMaskedConv2d(nn.Module):
 
 class GatedPixelCNN(nn.Module):
     def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=10,
-                 spatial_cond_size=None, float_condition_size=None,
+                 spatial_condition_size=None, float_condition_size=None,
                  last_layer_bias=0.0, hsize=28, wsize=28):
         super(GatedPixelCNN, self).__init__()
         self.hsize = hsize
@@ -132,14 +136,14 @@ class GatedPixelCNN(nn.Module):
         # subsequent blocks have Mask-B convolutions
         self.layers.append(GatedMaskedConv2d(mask_type='A', dim=self.dim,
                            kernel=7, residual=False, n_classes=n_classes,
-                                             cond_size=spatial_cond_size,
+                                             spatial_condition_size=spatial_condition_size,
                                              float_condition_size=float_condition_size,
                                              hsize=self.hsize, wsize=self.wsize))
         for i in range(1,n_layers):
             self.layers.append(GatedMaskedConv2d(mask_type='B', dim=self.dim,
                                                  kernel=3, residual=True,
                                                  n_classes=n_classes,
-                                                 cond_size=spatial_cond_size,
+                                                 spatial_condition_size=spatial_condition_size,
                                                  float_condition_size=float_condition_size,
                                                 hsize=self.hsize, wsize=self.wsize
                                                  ))
@@ -151,77 +155,23 @@ class GatedPixelCNN(nn.Module):
                                          nn.Conv2d(512, input_dim, 1)
                                          )
 
+        self.fake_float_condition_layer = nn.Linear(float_condition_size, float_condition_size)
+
         # in pytorch - apply(fn)  recursively applies fn to every submodule as returned by .children
         # apply xavier_uniform init to all weights
         self.apply(weights_init)
         self.output_conv[-1].bias.data.fill_(last_layer_bias)
 
-    def forward(self, x, class_condition=None, spatial_cond=None, float_condition=None):
-        # mnist x is (B,C,W,H)
-        #shp = x.size()+(-1,)
-        #xo = self.embedding(x.contiguous().view(-1)).view(shp)
-        # change order to (B,C,H,W)
-        #xo = x.permute(0,3,1,2)
-
-        ## vqvae x is (B,H,W,C)
-        #shp = x.size()+(-1,)
-        ##xo = self.embedding(x.contiguous().view(-1)).view(shp)
-        ## change order to (B,C,H,W)
-        #xo = x.permute(0,3,1,2)
-        #x_v, x_h = (xo,xo)
-
-        #if spatial_cond is not None:
-            # coming in, spatial_cond is (batch_size,  frames, 6, 6)
-            #sshp = spatial_cond.size()+(-1,)
-            #sxo = self.spatial_cond_embedding(spatial_cond.contiguous().view(-1)).view(sshp)
-            # now it is  (batch_size, frames_hist, 6, 6, 256)
-            #spatial_cond = sxo.permute(0,2,3,1,4).contiguous()
-            #sc_shp = spatial_cond.shape
-            #spatial_cond = spatial_cond.reshape(sc_shp[:-2]+(-1,))
-            #spatial_cond = spatial_cond.permute(0,3,1,2)
-
+    def forward(self, x, class_condition=None, spatial_condition=None, float_condition=None):
         # need self.dim channels - do initial conv
+        self.spatial_condition = spatial_condition
+        self.float_condition = float_condition
+        self.class_condition = class_condition
+
         xo = self.init_conv(x)
         x_v, x_h = (xo,xo)
         for i, layer in enumerate(self.layers):
-            x_v, x_h = layer(x_v=x_v, x_h=x_h, class_condition=class_condition,
-                             spatial_condition=spatial_cond, float_condition=float_condition)
+            x_v, x_h = layer(x_v=x_v, x_h=x_h, class_condition=self.class_condition,
+                             spatial_condition=self.spatial_condition, float_condition=self.float_condition)
         return self.output_conv(x_h)
-
-# BADDDDDD
-#    def generate(self, label=None, spatial_cond=None, float_condition=None,
-#                 shape=(8,8), batch_size=1, true_output=None):
-#
-#        param = next(self.parameters())
-#        x = torch.zeros((batch_size, shape[0], shape[1]), dtype=torch.int64, device=param.device)
-#
-#        if spatial_cond is not None:
-#            # batch size and spatial cond batch size must be the same
-#            batch_size = spatial_cond.shape[0]
-#
-#        if float_condition is not None:
-#            # batch size and float cond batch size must be the same
-#            batch_size = float_condition.shape[0]
-#            x = torch.zeros((batch_size, self.dim, shape[0], shape[1]), dtype=torch.float32, device=param.device)
-#
-#        if true_output is not None:
-#            x = true_output
-#
-#        if batch_size != 1:
-#            raise ValueError('generator needs batch size of 1. TODO - fix')
-#
-#
-#        for ex in range(batch_size):
-#            for i in range(shape[0]):
-#                for j in range(shape[1]):
-#                    for dd in range(self.dim):
-#                        logits = self.forward(x, label=label, spatial_cond=spatial_cond, float_condition=float_condition)
-#                        #probs = F.softmax(logits[:,:,i,j], -1)
-#                        #x.data[:,i,j].copy_(probs.multinomial(1).squeeze().data)
-#                        #x.data[ex,dd,i,j].copy_(torch.argmax(logits[:,:,i,j]))
-#                        est = logits[ex,dd,i,j]
-#                        x.data[ex,dd,i,j].copy_(est)
-#                        #x.data[ex,dd,i,j].copy_(x[ex,dd,i,j])
-#        return x
-#
 
