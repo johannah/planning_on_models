@@ -106,37 +106,29 @@ class VQVAE_PCNN_DECODER(nn.Module):
         return yhat
 
 class VQVAE(nn.Module):
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder, decoder, z_input_size, pred_output_size):
         super(VQVAE, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.linear = nn.Linear(64*10*10, 1*80*80)
 
-    def encode(self, x, class_condition=None):
-        z_e_x, z_q_x, latents = self.encoder(x)
-        bs,c,h,w = z_q_x.shape
-        bs,yc,yh,yw = x[:,-1:,:,:].shape
-        # turn z_q_x into same size as the y so we can add as input
-        # seem to not get a gradient from the z_q_x ..... so combine with y and
-        # use it that way. Needs more investigation
-        spatial_condition = torch.autograd.Variable(z_q_x, requires_grad=True)
-        scl = self.linear(spatial_condition.contiguous().view(bs,c*h*w)).contiguous().view(bs,yc,yh,yw)
-        return z_e_x, z_q_x, latents, scl
+        #bs,c,h,w = z_q_x.shape
+        self.z_input_size = z_input_size
+        #bs,yc,yh,yw = y.shape
+        self.pred_output_size = pred_output_size
+        self.linear = nn.Linear(self.z_input_size, self.pred_output_size)
 
     def forward(self, x, y, class_condition=None):
         z_e_x, z_q_x, latents = self.encoder(x)
-        bs,c,h,w = z_q_x.shape
-        bs,yc,yh,yw = y.shape
         # turn z_q_x into same size as the y so we can add as input
         # seem to not get a gradient from the z_q_x ..... so combine with y and
         # use it that way. Needs more investigation
         self.spatial_condition = torch.autograd.Variable(z_q_x, requires_grad=True)
         self.y = torch.autograd.Variable(y, requires_grad=True)
-        self.scl = self.linear(self.spatial_condition.contiguous().view(bs,c*h*w)).contiguous().view(bs,yc,yh,yw)
+        bs,yc,yh,yw = y.shape
+        self.scl = self.linear(self.spatial_condition.contiguous().view(bs,self.z_input_size)).contiguous().view(bs,yc,yh,yw)
         self.yin = self.scl+self.y
-       # x_d =  self.decoder(y=self.yin, class_condition=class_condition, spatial_condition=self.spatial_condition)
         x_d =  self.decoder(y=self.yin, class_condition=class_condition)
-        return x_d, z_e_x, z_q_x, latents, self.scl
+        return x_d, z_e_x, z_q_x, latents
 
 def get_vqvae_loss(x_d, target, z_e_x, z_q_x, nr_logistic_mix, beta, device):
     loss_1 = discretized_mix_logistic_loss(x_d, target, nr_mix=nr_logistic_mix, DEVICE=device)

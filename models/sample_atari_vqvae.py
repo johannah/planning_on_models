@@ -45,34 +45,31 @@ def sample_autoregressive_batch(data, episode_number, episode_reward, name):
         states = reshape_input(states).to(DEVICE)
         targets = (2*reshape_input(next_states[:,-1:])-1).to(DEVICE)
         actions = actions.to(DEVICE)
-
+#
+        if args.teacher_force:
+            name+='_tf'
         bs = states.shape[0]
         #vqvae_model.scl
         print('generating %s images' %(bs))
-        np_targets = np.zeros((targets.shape[2], targets.shape[3]))
-        output = np.zeros((targets.shape[2], targets.shape[3]))
+        np_targets = deepcopy(targets.cpu().numpy())
+        #output = np.zeros((targets.shape[2], targets.shape[3]))
         total_reward = 0
         for bi in range(bs):
             # sample one at a time due to memory constraints
-            z_e_x, z_q_x, latents, scl = vqvae_model.encode(states[bi:bi+1], class_condition=actions[bi:bi+1])
-            canvas = scl
             total_reward += rewards[bi].item()
-            if args.teacher_force:
-                canvas+= targets[bi:bi+1]
-                name+='_tf'
+            y = targets[bi:bi+1]
+            if not args.teacher_force:
+                y *=0.0
             title = 'step:%05d action:%d reward:%s %s/%s' %(bi, actions[bi].item(), int(rewards[bi]), total_reward, int(episode_reward))
-            print('sampling image', bi)
-            for i in range(canvas.shape[1]):
-                for j in range(canvas.shape[2]):
-                    for k in range(canvas.shape[3]):
-                        x_d = vqvae_model.decoder(y=canvas.detach(), class_condition=actions[bi:bi+1].detach())
+            print("making", title)
+            for i in range(y.shape[1]):
+                for j in range(y.shape[2]):
+                    for k in range(y.shape[3]):
+                        x_d, z_e_x, z_q_x, latents = vqvae_model(states[bi:bi+1], y=y, class_condition=actions[bi:bi+1])
                         yhat = sample_from_discretized_mix_logistic(x_d, largs.nr_logistic_mix)
-                        output[j,k] = yhat[0,0,j,k].item()
-                        if not args.teacher_force:
-                            # put predicted pixel into output
-                            canvas[0,i,j,k] = yhat[0,0,j,k]
+                        y[0,0,j,k] = 2*(yhat[0,0,j,k]/255.0)-1
 
-            np_canvas = output
+            np_canvas = yhat[0,0].cpu().numpy()
             f,ax = plt.subplots(1,2)
             iname = os.path.join(output_savepath, '%s_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), bi))
             ax[0].imshow(np_targets[bi,0])
@@ -82,11 +79,11 @@ def sample_autoregressive_batch(data, episode_number, episode_reward, name):
             plt.suptitle(title)
             plt.savefig(iname)
             print('saving', iname)
-        #search_path = iname[:-10:] + '*.png'
-        #gif_path = iname[:-10:] + '.gif'
-        #cmd = 'convert %s %s' %(search_path, gif_path)
-        #print('creating gif', gif_path)
-        #os.system(cmd)
+        search_path = iname[:-10:] + '*.png'
+        gif_path = iname[:-10:] + '.gif'
+        cmd = 'convert %s %s' %(search_path, gif_path)
+        print('creating gif', gif_path)
+        os.system(cmd)
 
 if __name__ == '__main__':
     import argparse
@@ -148,13 +145,14 @@ if __name__ == '__main__':
 
     vqenc = VQVAE_ENCODER(num_clusters=largs.num_k, encoder_output_size=largs.num_z,
                           in_channels_size=largs.number_condition)
+    print("FIX ARGUMENTS")
     pcnn_decoder = VQVAE_PCNN_DECODER(n_filters=largs.num_pcnn_filters,
                                       n_layers=largs.num_pcnn_layers,
                                       n_classes=num_actions,
-                                      float_condition_size=info['float_condition_size'],
                                       spatial_condition_size=1,
                                       hsize=hsize, wsize=wsize,
-                                      num_output_channels=info['decoder_output_channels'])
+                                      float_condition_size=100*largs.num_z,
+                                      num_output_channels=largs.nr_logistic_mix*3)
     vqvae_model=VQVAE(vqenc,pcnn_decoder).to(DEVICE)
 
     vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])

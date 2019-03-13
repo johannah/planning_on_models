@@ -26,8 +26,8 @@ class GatedActivation(nn.Module):
         return torch.tanh(x)*torch.sigmoid(y)
 
 class GatedMaskedConv2d(nn.Module):
-    def __init__(self, mask_type, dim, kernel, residual=True, n_classes=10,
-                 spatial_condition_size=None, float_condition_size=None, hsize=28, wsize=28):
+    def __init__(self, mask_type, dim, kernel, residual=True, n_classes=None,
+                       spatial_condition_size=None, float_condition_size=None, hsize=28, wsize=28):
         super(GatedMaskedConv2d, self).__init__()
         # ("Kernel size must be odd")
         assert (kernel % 2 == 1 )
@@ -51,7 +51,8 @@ class GatedMaskedConv2d(nn.Module):
         hkernel_shape = (1,kernel//2+1)
         hpadding_shape = (0,kernel//2)
 
-        self.class_cond_embedding = nn.Embedding(n_classes, 2*dim)
+        if n_classes is not None:
+            self.class_cond_embedding = nn.Embedding(n_classes, 2*dim)
         if float_condition_size is not None:
             self.float_condition_layer = nn.Linear(float_condition_size, 2*self.dim)
         if spatial_condition_size is not None:
@@ -118,7 +119,7 @@ class GatedMaskedConv2d(nn.Module):
         return out_v, out_h
 
 class GatedPixelCNN(nn.Module):
-    def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=10,
+    def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=None,
                  spatial_condition_size=None, float_condition_size=None,
                  last_layer_bias=0.0, hsize=28, wsize=28):
         super(GatedPixelCNN, self).__init__()
@@ -154,8 +155,6 @@ class GatedPixelCNN(nn.Module):
                                          nn.ReLU(True),
                                          nn.Conv2d(512, input_dim, 1)
                                          )
-
-        self.fake_float_condition_layer = nn.Linear(float_condition_size, float_condition_size)
 
         # in pytorch - apply(fn)  recursively applies fn to every submodule as returned by .children
         # apply xavier_uniform init to all weights

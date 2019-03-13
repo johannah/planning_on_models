@@ -165,9 +165,9 @@ def train_vqvae(train_cnt):
         # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
         states = reshape_input(states).to(DEVICE)
         # only predict future observation - normalize
-        targets = (2*reshape_input(next_states)[:,-1:]-1).to(DEVICE)
-        actions = actions.to(DEVICE)
-        x_d, z_e_x, z_q_x, latents, scl = vqvae_model(states, targets, class_condition=actions)
+        targets = (2*states[:,-1:]-1).to(DEVICE)
+        #actions = actions.to(DEVICE)
+        x_d, z_e_x, z_q_x, latents = vqvae_model(states, targets)
         #z_e_x, z_q_x, latents = vqenc(states)
         #float_condition = latents.view(latents.shape[0], latents.shape[1]*latents.shape[2]).float()
         #x_d = pcnn_decoder(targets, class_condition=actions, float_condition=float_condition)
@@ -203,9 +203,9 @@ def valid_vqvae(train_cnt, do_plot=False):
     # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
     states = reshape_input(states).to(DEVICE)
     # only predict future observation - normalize
-    targets = (2*reshape_input(next_states)[:,-1:]-1).to(DEVICE)
-    actions = actions.to(DEVICE)
-    x_d, z_e_x, z_q_x, latents, scl = vqvae_model(states, targets, class_condition=actions)
+    targets = (2*states[:,-1:]-1).to(DEVICE)
+    #actions = actions.to(DEVICE)
+    x_d, z_e_x, z_q_x, latents = vqvae_model(states, targets)
     loss_1 = discretized_mix_logistic_loss(x_d, targets, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
     loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
     loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
@@ -231,16 +231,15 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='vqvaepcnnfcc')
+    parser.add_argument('--savename', default='vqpcnnrec')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
-    parser.add_argument('-se', '--save_every', default=100000*5, type=int)
-    parser.add_argument('-pe', '--plot_every', default=100000*5, type=int)
-    parser.add_argument('-le', '--log_every',  default=100000*5, type=int)
+    parser.add_argument('-se', '--save_every', default=100000*4, type=int)
+    parser.add_argument('-pe', '--plot_every', default=100000*4, type=int)
+    parser.add_argument('-le', '--log_every',  default=100000*4, type=int)
     #parser.add_argument('-se', '--save_every', default=10, type=int)
     #parser.add_argument('-pe', '--plot_every', default=10, type=int)
     #parser.add_argument('-le', '--log_every',  default=10, type=int)
-    parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-b', '--beta', default=0.25, type=float, help='scale for loss 3, commitment loss in vqvae')
     parser.add_argument('-z', '--num_z', default=64, type=int)
     parser.add_argument('-k', '--num_k', default=512, type=int)
@@ -290,7 +289,11 @@ if __name__ == '__main__':
              }
 
 
-    # TODO - change loss
+    ## size of latents flattened - dependent on architecture of vqvae
+    #info['float_condition_size'] = 100*args.num_z
+    ## 3x logistic needed for loss
+    info['decoder_output_channels'] = args.nr_logistic_mix*3
+    ## TODO - change loss
     valid_data_file = train_data_file.replace('training', 'valid')
 
     train_data_loader = AtariDataset(
@@ -314,18 +317,18 @@ if __name__ == '__main__':
     vqenc = VQVAE_ENCODER(num_clusters=args.num_k, encoder_output_size=args.num_z,
                    in_channels_size=args.number_condition)
 
-    # size of latents flattened - dependent on architecture of vqvae
-    info['float_condition_size'] = 100*args.num_z
-    # 3x logistic needed for loss
-    info['decoder_output_channels'] = args.nr_logistic_mix*3
     pcnn_decoder = VQVAE_PCNN_DECODER(n_filters=args.num_pcnn_filters,
                                  n_layers=args.num_pcnn_layers,
-                                 n_classes=num_actions,
-                                 float_condition_size=info['float_condition_size'],
-                                spatial_condition_size=1,
-                                 hsize=hsize, wsize=wsize, num_output_channels=info['decoder_output_channels'])
+                              #   n_classes=num_actions,
+                              #   float_condition_size=info['float_condition_size'],
+                              #  spatial_condition_size=1,
+                                 hsize=hsize, wsize=wsize,
+                                 num_output_channels=info['decoder_output_channels'])
 
-    vqvae_model = VQVAE(vqenc, pcnn_decoder).to(DEVICE)
+    args.pred_output_size = 1*80*80
+    # 10 is result of structure of network
+    args.z_input_size = 10*10*args.num_z
+    vqvae_model = VQVAE(vqenc, pcnn_decoder, z_input_size=args.z_input_size, pred_output_size=args.pred_output_size).to(DEVICE)
     #parameters = list(vqenc.parameters())+list(pcnn_decoder.parameters())
     parameters = list(vqvae_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
