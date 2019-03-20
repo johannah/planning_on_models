@@ -119,8 +119,8 @@ class GatedMaskedConv2d(nn.Module):
         return out_v, out_h
 
 class GatedPixelCNN(nn.Module):
-    def __init__(self, input_dim=512, dim=256, n_layers=15, n_classes=None,
-                 spatial_condition_size=None, float_condition_size=None,
+    def __init__(self, input_dim=512, dim=256, n_layers=15,
+                 n_classes=None, spatial_condition_size=None, float_condition_size=None,
                  last_layer_bias=0.0, hsize=28, wsize=28):
         super(GatedPixelCNN, self).__init__()
         self.hsize = hsize
