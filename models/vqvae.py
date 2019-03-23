@@ -11,7 +11,7 @@ from IPython import embed
 
 class VQVAE(nn.Module):
     def __init__(self, num_clusters=512, encoder_output_size=32,
-                 in_channels_size=1, num_output_mixtures=30):
+                 in_channels_size=1, num_output_mixtures=30, n_actions=0):
         super(VQVAE, self).__init__()
         # the encoder_output_size is the size of the vector that is compressed
         # with vector quantization. if it is too large, vector quantization
@@ -23,7 +23,7 @@ class VQVAE(nn.Module):
         # of 40x40x1 and z output of 10x10x9 (512 = 2**9 = 9 bits)
         # (40x40x1x8)/(10x10x9) = 12800/900 = 14.22
 
-        self.name = 'vqvae4layer'
+        self.n_actions = n_actions
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels=in_channels_size,
                       out_channels=16,
@@ -83,10 +83,29 @@ class VQVAE(nn.Module):
                         stride=2, padding=1),
                 #nn.Sigmoid()
                 )
+        # size of the output of the latent space - bs,encoder_output_size,vq_space_dim,vq_space_dim
+        vq_space_dim = 10
+        if self.n_actions > 0:
+            self.action_conv = nn.Sequential(
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                       out_channels=encoder_output_size,
+                                       kernel_size=3, padding=1),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                                        out_channels=encoder_output_size,
+                                                        kernel_size=3, padding=1),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                                        out_channels=self.n_actions,
+                                                        kernel_size=vq_space_dim, padding=0),
+                                 )
 
     def forward(self, x):
+        action = -1
         # get continuous output directly from encoder
         z_e_x = self.encoder(x)
+        if self.n_actions > 0:
+            action = F.log_softmax(self.action_conv(z_e_x)[:,:,0,0], dim=1)
         # NCHW is the order in the encoder
         # (num, channels, height, width)
         N, C, H, W = z_e_x.size()
@@ -110,7 +129,7 @@ class VQVAE(nn.Module):
         z_q_x = z_q_x.view(N, H, W, C).permute(0, 3, 1, 2)
         # put quantized data through decoder
         x_tilde = self.decoder(z_q_x)
-        return x_tilde, z_e_x, z_q_x, latents
+        return x_tilde, z_e_x, z_q_x, latents, action
 
 
 if __name__ == '__main__':

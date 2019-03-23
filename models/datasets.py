@@ -369,12 +369,13 @@ class AtariDataset(Dataset):
         for i, idx in enumerate(indexes):
             # todo - proper norm
             st, nst = self.__getstates__(idx)
-            self.mb_states[i] = st
+            # use nst so the action is coherent
+            self.mb_states[i] = nst
             # reconstruct the observed frame
-            self.mb_pred_states[i,0] = st[-1]
+            self.mb_pred_states[i,0] = nst[-1]
             # reconstruct the frame difference between observed frame and the
             # previous frame
-            self.mb_pred_states[i,1] = st[-2]-st[-1]
+            self.mb_pred_states[i,1] = nst[-2]-nst[-1]
         return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.FloatTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_pred_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
 
     def get_framediff_minibatch(self):
