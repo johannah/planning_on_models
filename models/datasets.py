@@ -267,7 +267,6 @@ class AtariDataset(Dataset):
         #self.frames = (self.frames-self.frames_min)/self.frames_diff
         #self.frames[np.isnan(self.frames)] = 0.0
 
-
         self.rewards = self.data_file['rewards']
         self.terminals = self.data_file['terminals'].astype(np.int)
         self.actions = self.data_file['actions']
@@ -279,7 +278,7 @@ class AtariDataset(Dataset):
 
         self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
         self.mb_next_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
-
+        self.mb_pred_states = np.zeros((batch_size, 2, self.data_h, self.data_w), np.float32)
 
         self.index_array = list(np.arange(self.num_condition, self.num_examples, dtype=np.int))
         # ending indexes cannot be selected
@@ -317,20 +316,22 @@ class AtariDataset(Dataset):
             embed()
         state = frames[:-1]
         next_state = frames[1:]
+        # next state is one frame ahead, so the observed frame in state is -1
+        # and the observed frame in next_state is -2, by index. predicted (step
+        # ahead) frame is next_state[-1]
         assert (np.sum(state[-1]) == np.sum(next_state[-2]))
         return state, next_state
 
     def get_data(self, relative_indexes, reset=False):
+        # action corresponds to the action that moves s_t to s_t+1
         indexes = self.index_array[relative_indexes]
         batch_size = len(relative_indexes)
-        if (batch_size != self.mb_states.shape[0]):
+        if (batch_size != self.mb_next_states.shape[0]):
             self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
             self.mb_next_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
         for i, idx in enumerate(indexes):
             # todo - proper norm
             st, nst = self.__getstates__(idx)
-            #self.mb_states[i] = st/self.norm_by
-            #self.mb_next_states[i] = nst/self.norm_by
             self.mb_states[i] = st
             self.mb_next_states[i] = nst
         return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.FloatTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_next_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
@@ -358,6 +359,27 @@ class AtariDataset(Dataset):
         relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)
         episode_reward = self.episodic_reward[episode_index]
         return (self.get_data(relative_indexes), episode_index, episode_reward)
+
+    def get_framediff_data(self, relative_indexes, reset=False):
+        indexes = self.index_array[relative_indexes]
+        batch_size = len(relative_indexes)
+        if (batch_size != self.mb_pred_states.shape[0]):
+            self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
+            self.mb_pred_states = np.zeros((batch_size, 2, self.data_h, self.data_w), np.float32)
+        for i, idx in enumerate(indexes):
+            # todo - proper norm
+            st, nst = self.__getstates__(idx)
+            self.mb_states[i] = st
+            # reconstruct the observed frame
+            self.mb_pred_states[i,0] = st[-1]
+            # reconstruct the frame difference between observed frame and the
+            # previous frame
+            self.mb_pred_states[i,1] = st[-2]-st[-1]
+        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.FloatTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_pred_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
+
+    def get_framediff_minibatch(self):
+        relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
+        return self.get_framediff_data(relative_indexes)
 
 # used to be Dataloader, but overloaded
 class AtariDataLoader():

@@ -11,9 +11,8 @@ from IPython import embed
 
 class VQVAE(nn.Module):
     def __init__(self, num_clusters=512, encoder_output_size=32,
-                 nr_logistic_mix=10, in_channels_size=1, out_channels_size=1):
+                 in_channels_size=1, num_output_mixtures=30):
         super(VQVAE, self).__init__()
-        self.nr_logistic_mix = nr_logistic_mix
         # the encoder_output_size is the size of the vector that is compressed
         # with vector quantization. if it is too large, vector quantization
         # becomes more difficult. if it is too small, then the conv net has less
@@ -25,7 +24,6 @@ class VQVAE(nn.Module):
         # (40x40x1x8)/(10x10x9) = 12800/900 = 14.22
 
         self.name = 'vqvae4layer'
-        self.num_mixture = 2*self.nr_logistic_mix*out_channels_size+self.nr_logistic_mix
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels=in_channels_size,
                       out_channels=16,
@@ -80,7 +78,7 @@ class VQVAE(nn.Module):
                 nn.BatchNorm2d(16),
                 nn.ReLU(True),
                 nn.ConvTranspose2d(in_channels=16,
-                        out_channels=self.num_mixture,
+                        out_channels=num_output_mixtures,
                         kernel_size=4,
                         stride=2, padding=1),
                 #nn.Sigmoid()

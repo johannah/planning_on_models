@@ -81,12 +81,12 @@ if __name__ == '__main__':
     train_data_file = largs.train_data_file
     valid_data_file = largs.train_data_file.replace('training', 'valid')
 
-    #train_data_loader = AtariDataset(
-    #                               train_data_file,
-    #                               number_condition=4,
-    #                               steps_ahead=1,
-    #                               batch_size=args.batch_size,
-    #                               norm_by=255.,)
+    train_data_loader = AtariDataset(
+                                   train_data_file,
+                                   number_condition=4,
+                                   steps_ahead=1,
+                                   batch_size=args.batch_size,
+                                   norm_by=255.,)
     valid_data_loader = AtariDataset(
                                    valid_data_file,
                                    number_condition=4,
@@ -105,6 +105,8 @@ if __name__ == '__main__':
 
     vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
-    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode()
-    sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
+    #valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode()
+    #sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
+    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode()
+    sample_batch(train_episode_batch, episode_index, episode_reward, 'train')
 

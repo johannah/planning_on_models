@@ -120,9 +120,9 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
     lse = log_sum_exp(log_probs)
     # mask to nonzero in real image - should use time/moving things
-    masked = (target[:,0,:,:]>-.99).float()*lse
-    out = lse+masked
-    return -out.mean()
+    #masked = (target[:,0,:,:]>-.99).float()*lse
+    #out = lse+masked
+    return -lse.mean()
 
 # Arguments were backwards in older version
 #def discretized_mix_logistic_loss_1d(x, l, DEVICE='cpu'):
