@@ -176,7 +176,7 @@ def valid_vqvae(train_cnt, do_plot=False):
         bs,_,h,w = gold.shape
         # sample from discretized should be between 0 and 255
         print("yhat sample", yhat.min(), yhat.max())
-        yimg = ((yhat/255.0 + 1.0)/2.0).to('cpu')
+        yimg = ((yhat + 1.0)/2.0).to('cpu')
         print("yhat img", yhat.min().item(), yhat.max().item())
         print("gold img", gold.min().item(), gold.max().item())
         comparison = torch.cat([gold.view(bs,1,h,w)[:n],
@@ -193,7 +193,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('--savename', default='vqdecrec')
-    parser.add_argument('-l', '--model_loadname', default=None)
+    parser.add_argument('-l', '--model_loadpath', default=None)
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     parser.add_argument('-se', '--save_every', default=100000*3, type=int)
     parser.add_argument('-pe', '--plot_every', default=100000*3, type=int)
@@ -205,10 +205,10 @@ if __name__ == '__main__':
     parser.add_argument('-z', '--num_z', default=64, type=int)
     parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=32, type=int)
+    parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-eos', '--encoder_output_size', default=4800, type=int)
     parser.add_argument('-ncond', '--number_condition', default=1, type=int)
-    parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
+    parser.add_argument('-e', '--num_examples_to_train', default=1000000000, type=int)
     parser.add_argument('-lr', '--learning_rate', default=1.5e-5)
     args = parser.parse_args()
     if args.cuda:
@@ -216,41 +216,51 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    train_cnt = 0
-    run_num = 0
+    if args.model_loadpath == '':
+         train_cnt = 0
+         run_num = 0
+         model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+         while os.path.exists(model_base_filedir):
+             run_num +=1
+             model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+         os.makedirs(model_base_filedir)
+         model_base_filepath = os.path.join(model_base_filedir, args.savename)
+         print("MODEL BASE FILEPATH", model_base_filepath)
+
+         info = {'train_cnts':[],
+                 'train_losses':[],
+                 'train_losses_1':[],
+                 'train_losses_2':[],
+                 'train_losses_3':[],
+                 'valid_cnts':[],
+                 'valid_losses':[],
+                 'valid_losses_1':[],
+                 'valid_losses_2':[],
+                 'valid_losses_3':[],
+                 'save_times':[],
+                 'args':[args],
+                 'last_save':0,
+                 'last_plot':0,
+                 'norm_by':255.0,
+                  }
+
+
+         ## size of latents flattened - dependent on architecture of vqvae
+         #info['float_condition_size'] = 100*args.num_z
+         ## 3x logistic needed for loss
+         info['decoder_output_channels'] = args.nr_logistic_mix*3
+         ## TODO - change loss
+    else:
+        print('loading model from: %s' %args.model_loadpath)
+        model_dict = torch.load(args.model_loadpath)
+        info =  model_dict['info']
+        model_base_filedir = os.path.split(args.model_loadpath)[0]
+        model_base_filepath = os.path.join(model_base_filedir, args.savename)
+        train_cnt = info['train_cnts'][-1]
+        info['loaded_from'] = args.model_loadpath
+
     train_data_file = args.train_data_file
     data_dir = os.path.split(train_data_file)[0]
-    model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-    while os.path.exists(model_base_filedir):
-        run_num +=1
-        model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-    os.makedirs(model_base_filedir)
-    model_base_filepath = os.path.join(model_base_filedir, args.savename)
-    print("MODEL BASE FILEPATH", model_base_filepath)
-
-    info = {'train_cnts':[],
-            'train_losses':[],
-            'train_losses_1':[],
-            'train_losses_2':[],
-            'train_losses_3':[],
-            'valid_cnts':[],
-            'valid_losses':[],
-            'valid_losses_1':[],
-            'valid_losses_2':[],
-            'valid_losses_3':[],
-            'save_times':[],
-            'args':[args],
-            'last_save':0,
-            'last_plot':0,
-            'norm_by':255.0,
-             }
-
-
-    ## size of latents flattened - dependent on architecture of vqvae
-    #info['float_condition_size'] = 100*args.num_z
-    ## 3x logistic needed for loss
-    info['decoder_output_channels'] = args.nr_logistic_mix*3
-    ## TODO - change loss
     valid_data_file = train_data_file.replace('training', 'valid')
 
     train_data_loader = AtariDataset(
@@ -265,8 +275,6 @@ if __name__ == '__main__':
                                    steps_ahead=1,
                                    batch_size=args.batch_size,
                                    norm_by=info['norm_by'])
-
-
     num_actions = train_data_loader.n_actions
     args.size_training_set = train_data_loader.num_examples
     hsize = train_data_loader.data_h
@@ -274,10 +282,16 @@ if __name__ == '__main__':
     vqvae_model = VQVAE(num_clusters=args.num_k,
                         encoder_output_size=args.num_z,
                         in_channels_size=args.number_condition).to(DEVICE)
-    args.pred_output_size = 1*80*80
-    # 10 is result of structure of network
-    args.z_input_size = 10*10*args.num_z
+
     parameters = list(vqvae_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
+    if args.model_loadpath != '':
+        vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
+        opt.load_state_dict(model_dict['optimizer'])
+        vqvae_model.embedding = model_dict['embedding']
+
+    #args.pred_output_size = 1*80*80
+    ## 10 is result of structure of network
+    #args.z_input_size = 10*10*args.num_z
     train_cnt = train_vqvae(train_cnt)
 

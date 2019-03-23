@@ -67,7 +67,6 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     logit_probs = l[:, :, :, :nr_mix]
     l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix*2]) # 3--changed to 1 for mean, scale, coef
     means = l[:, :, :, :, :nr_mix]
-    # log_scales = torch.max(l[:, :, :, :, nr_mix:2 * nr_mix], -7.)
     log_scales = torch.clamp(l[:, :, :, :, nr_mix:2 * nr_mix], min=-7.)
 
     #coeffs = F.tanh(l[:, :, :, :, 2 * nr_mix:3 * nr_mix])
@@ -86,9 +85,9 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     centered_x = x - means
     inv_stdv = torch.exp(-log_scales)
     plus_in = inv_stdv * (centered_x + 1. / 255.)
-    cdf_plus = F.sigmoid(plus_in)
+    cdf_plus = torch.sigmoid(plus_in)
     min_in = inv_stdv * (centered_x - 1. / 255.)
-    cdf_min = F.sigmoid(min_in)
+    cdf_min = torch.sigmoid(min_in)
     # log probability for edge case of 0 (before scaling)
     log_cdf_plus = plus_in - F.softplus(plus_in)
     # log probability for edge case of 255 (before scaling)
@@ -120,25 +119,19 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, DEVICE='cpu'):
     log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
     lse = log_sum_exp(log_probs)
-    # hacky hack mask to weight cars and frogs
-    #print("investigate weird loss")
-    #from IPython import embed; embed()
+    # mask to nonzero in real image - should use time/moving things
     masked = (target[:,0,:,:]>-.99).float()*lse
     out = lse+masked
     return -out.mean()
 
-
-def discretized_mix_logistic_loss_1d(x, l, DEVICE='cpu'):
-    # Pytorch ordering
-    x = x.permute(0, 2, 3, 1)
-    l = l.permute(0, 2, 3, 1)
-    xs = [int(y) for y in x.size()]
-    ls = [int(y) for y in l.size()]
-
-    """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
-    # Pytorch ordering
+# Arguments were backwards in older version
+#def discretized_mix_logistic_loss_1d(x, l, DEVICE='cpu'):
+def discretized_mix_logistic_loss_1d(prediction, target, DEVICE='cpu'):
     l = prediction
     x = target
+    # Pytorch ordering
+    """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
+    # Pytorch ordering
     x = x.permute(0, 2, 3, 1)
     l = l.permute(0, 2, 3, 1)
     xs = [int(y) for y in x.size()]
@@ -158,9 +151,9 @@ def discretized_mix_logistic_loss_1d(x, l, DEVICE='cpu'):
     centered_x = x - means
     inv_stdv = torch.exp(-log_scales)
     plus_in = inv_stdv * (centered_x + 1. / 255.)
-    cdf_plus = F.sigmoid(plus_in)
+    cdf_plus = torch.sigmoid(plus_in)
     min_in = inv_stdv * (centered_x - 1. / 255.)
-    cdf_min = F.sigmoid(min_in)
+    cdf_min = torch.sigmoid(min_in)
     # log probability for edge case of 0 (before scaling)
     log_cdf_plus = plus_in - F.softplus(plus_in)
     # log probability for edge case of 255 (before scaling)
