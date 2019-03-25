@@ -351,14 +351,18 @@ class AtariDataset(Dataset):
             reset = True
         return self.get_data(relative_indexes, reset)
 
-    def get_entire_episode(self):
+    def get_entire_episode(self, diff=False):
         episode_index = self.random_state.choice(self.episode_indexes)
         print('grabbing episode %s [%s:%s] of reward %s' %(episode_index,
                               self.starts[episode_index], self.ends[episode_index],
                               self.episodic_reward[episode_index]))
         relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)
         episode_reward = self.episodic_reward[episode_index]
-        return (self.get_data(relative_indexes), episode_index, episode_reward)
+        if not diff:
+            data = self.get_data(relative_indexes)
+        else:
+            data = self.get_framediff_data(relative_indexes)
+        return (data, episode_index, episode_reward)
 
     def get_framediff_data(self, relative_indexes, reset=False):
         indexes = self.index_array[relative_indexes]
@@ -371,11 +375,13 @@ class AtariDataset(Dataset):
             st, nst = self.__getstates__(idx)
             # use nst so the action is coherent
             self.mb_states[i] = nst
-            # reconstruct the observed frame
+            # reconstruct the previously observed
             self.mb_pred_states[i,0] = nst[-1]
             # reconstruct the frame difference between observed frame and the
             # previous frame
             self.mb_pred_states[i,1] = nst[-2]-nst[-1]
+            # the action is the action which brings us from nst[-2] to nst[-1] (
+            # (or st[-1] to nst[-1])
         return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.FloatTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_pred_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
 
     def get_framediff_minibatch(self):
