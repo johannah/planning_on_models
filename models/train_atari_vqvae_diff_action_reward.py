@@ -123,7 +123,7 @@ def train_vqvae(train_cnt):
         loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
         loss_act = F.nll_loss(pred_actions, actions)
         loss_act.backward(retain_graph=True)
-        # TODO - should be ordinal
+        # TODO - should be ordinal???
         loss_rewards = F.nll_loss(pred_rewards, rewards)
         loss_rewards.backward(retain_graph=True)
         loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
@@ -279,6 +279,7 @@ if __name__ == '__main__':
     args.size_training_set = train_data_loader.num_examples
     hsize = train_data_loader.data_h
     wsize = train_data_loader.data_w
+    info['num_rewards'] = len(train_data_loader.unique_rewards)
     # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
     # decorelated channel
     info['num_channels'] = 2
@@ -288,7 +289,8 @@ if __name__ == '__main__':
                         encoder_output_size=args.num_z,
                         num_output_mixtures=info['num_output_mixtures'],
                         in_channels_size=args.number_condition,
-                        n_actions=info['num_actions']).to(DEVICE)
+                        n_actions=info['num_actions'],
+                        int_reward=info['num_rewards']).to(DEVICE)
 
     parameters = list(vqvae_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
