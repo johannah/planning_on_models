@@ -21,7 +21,7 @@ def find_episodic_rewards(fname):
     ends = np.where(n['terminal_flags']==True)[0]
     start_cnt = ends[0]+1
     episodic_ends = list(ends[1:-1])
-    for cc, end_cnt in enumerate(episodic_ends[:2]):
+    for cc, end_cnt in enumerate(episodic_ends):
         episode_reward_cnt = np.sum(n['rewards'][start_cnt:end_cnt+1])
         n_ends = np.sum(n['terminal_flags'][start_cnt:end_cnt+1])
         if n_ends != 1:
@@ -40,6 +40,7 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
     rewards = []
     terminals = []
     actions = []
+    values = []
     episodic_reward = []
     reward_options = []
     while num < num_examples:
@@ -67,6 +68,7 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
             #mimsave('I%05d_r%s.gif'%(idx,r), fr)
             rewards.extend(rs)
             vals = []
+            # discounted future rewards
             for n in range(len(rs)):
                 rs_n = rs[n:]
                 power = np.arange(len(rs_n))
@@ -74,16 +76,18 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
                 gammas = gammas ** power
                 cum_rs_n = np.sum(rs_n * gammas)
                 vals.append(cum_rs_n)
-            embed()
+            values.extend(vals)
             episodic_reward.append(np.sum(rs))
             num+=len(rs)
             print(r,num,episodic_reward[-1])
 
+    print(len(values), len(rewards))
     fname = os.path.join(os.path.split(ffrom)[0], '%s_set.npz'%kind)
     print("writing", fname)
     np.savez(fname, frames=frames,
                     rewards=rewards,
                     terminals=terminals,
+                    values=np.array(values),
                     actions=actions,
                     episodic_reward=episodic_reward)
     return used
@@ -96,7 +100,7 @@ if __name__ == '__main__':
     all_rewards = []
     all_starts = []
     all_ends = []
-    for f in npz_files[:2]:
+    for f in npz_files:
         erewards, estarts, eends = find_episodic_rewards(f)
         fhist = f.replace('.npz', '_hist.png')
         if not os.path.exists(fhist):

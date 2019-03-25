@@ -258,6 +258,7 @@ class AtariDataset(Dataset):
         self.frames = self.data_file['frames'].astype(np.float)/255.
         # TODO! Rewards should be normalized
         self.rewards = self.data_file['rewards']
+        self.values = self.data_file['values']
         self.unique_rewards = list(set(self.rewards))
         self.terminals = self.data_file['terminals'].astype(np.int)
         self.actions = self.data_file['actions']
@@ -325,7 +326,7 @@ class AtariDataset(Dataset):
             st, nst = self.__getstates__(idx)
             self.mb_states[i] = st
             self.mb_next_states[i] = nst
-        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_next_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
+        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]), torch.FloatTensor(self.mb_next_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
 
     def get_minibatch(self):
         relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
@@ -373,7 +374,7 @@ class AtariDataset(Dataset):
             self.mb_pred_states[i,1] = nst[-2]-nst[-1]
             # the action is the action which brings us from nst[-2] to nst[-1] (
             # (or st[-1] to nst[-1])
-        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.mb_pred_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
+        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]), torch.FloatTensor(self.mb_pred_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
 
     def get_framediff_minibatch(self):
         relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)

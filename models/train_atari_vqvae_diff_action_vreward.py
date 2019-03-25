@@ -31,7 +31,6 @@ from vqvae import VQVAE
 #from vqvae import VQVAE_ENCODER
 #from pixel_cnn import GatedPixelCNN
 from datasets import AtariDataset
-from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
 torch.manual_seed(394)
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
@@ -42,7 +41,6 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
     info['valid_cnts'].append(train_cnt)
     print('examples %010d loss' %train_cnt, info['train_losses_list'][-1])
     # plot
-
     if do_plot:
         info['last_plot'] = train_cnt
         rolling = 3
@@ -112,15 +110,22 @@ def train_vqvae(train_cnt):
         # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
         states = (2*reshape_input(states)-1).to(DEVICE)
         rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)
+        actions = actions.to(DEVICE)
+        values = values.to(DEVICE)
+        x_d, z_e_x, z_q_x, latents, pred_actions, pred_values = vqvae_model(states)
         # dont normalize diff
         diff = (reshape_input(pred_states[:,1][:,None])).to(DEVICE)
-        x_d, z_e_x, z_q_x, latents = vqvae_model(states)
         # (args.nr_logistic_mix/2)*3 is needed for each reconstruction
         z_q_x.retain_grad()
         rec_est =  x_d[:, :nmix]
         diff_est = x_d[:, nmix:]
         loss_rec = discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
         loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
+        loss_act = F.nll_loss(pred_actions, actions)
+        loss_act.backward(retain_graph=True)
+        # TODO - should be ordinal???
+        loss_values = args.ralpha*F.mse_loss(pred_values, values)
+        loss_values.backward(retain_graph=True)
         loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
         loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
         loss_rec.backward(retain_graph=True)
@@ -133,8 +138,8 @@ def train_vqvae(train_cnt):
         clip_grad_value_(parameters, 10)
         opt.step()
         bs = float(x_d.shape[0])
-        loss_list = [loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
-        if batches > 5:
+        loss_list = [loss_values.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
+        if batches > 100:
             handle_checkpointing(train_cnt, loss_list)
         train_cnt+=len(states)
         batches+=1
@@ -150,13 +155,19 @@ def valid_vqvae(train_cnt, do_plot=False):
     states = (2*reshape_input(states)-1).to(DEVICE)
     rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)
     diff = (2*reshape_input(pred_states[:,1][:,None])-1).to(DEVICE)
-    x_d, z_e_x, z_q_x, latents = vqvae_model(states)
+    actions = actions.to(DEVICE)
+    values = values.to(DEVICE)
+    x_d, z_e_x, z_q_x, latents, pred_actions, pred_values = vqvae_model(states)
     # (args.nr_logistic_mix/2)*3 is needed for each reconstruction
     z_q_x.retain_grad()
     rec_est =  x_d[:, :nmix]
     diff_est = x_d[:, nmix:]
     loss_rec = discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
     loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
+    loss_act = F.nll_loss(pred_actions, actions)
+    loss_act.backward(retain_graph=True)
+    loss_values = args.ralpha*F.mse_loss(pred_values, values)
+    loss_values.backward(retain_graph=True)
     loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
     loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
     bs,yc,yh,yw = x_d.shape
@@ -177,7 +188,7 @@ def valid_vqvae(train_cnt, do_plot=False):
         img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
         save_image(comparison, img_name, nrow=n)
     bs = float(states.shape[0])
-    loss_list = [loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
+    loss_list = [loss_values.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
     return loss_list
 
 if __name__ == '__main__':
@@ -187,9 +198,9 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='vqdiff')
+    parser.add_argument('--savename', default='vqdiffactval')
     parser.add_argument('-l', '--model_loadpath', default='')
-    parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
+    parser.add_argument('-v', '--reward_value', default=True, action='store_true')
     if not debug:
         parser.add_argument('-se', '--save_every', default=100000*5, type=int)
         parser.add_argument('-pe', '--plot_every', default=100000*5, type=int)
@@ -199,6 +210,7 @@ if __name__ == '__main__':
         parser.add_argument('-pe', '--plot_every', default=10, type=int)
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-b', '--beta', default=0.25, type=float, help='scale for loss 3, commitment loss in vqvae')
+    parser.add_argument('-r', '--ralpha', default=3, type=float, help='scale for value prediction')
     parser.add_argument('-z', '--num_z', default=64, type=int)
     parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
@@ -264,10 +276,11 @@ if __name__ == '__main__':
                                    steps_ahead=1,
                                    batch_size=args.batch_size,
                                    norm_by=info['norm_by'])
-    num_actions = train_data_loader.n_actions
+    num_actions = info['num_actions'] = train_data_loader.n_actions
     args.size_training_set = train_data_loader.num_examples
     hsize = train_data_loader.data_h
     wsize = train_data_loader.data_w
+    info['num_rewards'] = len(train_data_loader.unique_rewards)
     # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
     # decorelated channel
     info['num_channels'] = 2
@@ -276,7 +289,9 @@ if __name__ == '__main__':
     vqvae_model = VQVAE(num_clusters=args.num_k,
                         encoder_output_size=args.num_z,
                         num_output_mixtures=info['num_output_mixtures'],
-                        in_channels_size=args.number_condition).to(DEVICE)
+                        in_channels_size=args.number_condition,
+                        n_actions=info['num_actions'],
+                        reward_value=args.reward_value).to(DEVICE)
 
     parameters = list(vqvae_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
