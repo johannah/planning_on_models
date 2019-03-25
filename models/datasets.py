@@ -255,18 +255,8 @@ class AtariDataset(Dataset):
         assert(self.steps_ahead>=0)
         self.norm_by = float(norm_by)
         self.data_file = np.load(self.data_file)
-        #self.frames = self.data_file['frames']
         self.frames = self.data_file['frames'].astype(np.float)/255.
-        #self.frames_mean = self.frames[:2].mean(axis=0)
-        #imsave('mean.png', self.frames_mean)
-        #self.frames = self.frames-self.frames_mean
-        #self.frames_min = self.frames.min(axis=0)
-        #self.frames_max = self.frames.max(axis=0)
-        #self.frames_diff = self.frames_max-self.frames_min
-        ##self.frames_diff[np.where(self.frames_diff == 0.0)] = 0.001
-        #self.frames = (self.frames-self.frames_min)/self.frames_diff
-        #self.frames[np.isnan(self.frames)] = 0.0
-
+        # TODO! Rewards should be normalized
         self.rewards = self.data_file['rewards']
         self.terminals = self.data_file['terminals'].astype(np.int)
         self.actions = self.data_file['actions']
