@@ -21,7 +21,7 @@ def find_episodic_rewards(fname):
     ends = np.where(n['terminal_flags']==True)[0]
     start_cnt = ends[0]+1
     episodic_ends = list(ends[1:-1])
-    for cc, end_cnt in enumerate(episodic_ends):
+    for cc, end_cnt in enumerate(episodic_ends[:2]):
         episode_reward_cnt = np.sum(n['rewards'][start_cnt:end_cnt+1])
         n_ends = np.sum(n['terminal_flags'][start_cnt:end_cnt+1])
         if n_ends != 1:
@@ -66,6 +66,15 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
 
             #mimsave('I%05d_r%s.gif'%(idx,r), fr)
             rewards.extend(rs)
+            vals = []
+            for n in range(len(rs)):
+                rs_n = rs[n:]
+                power = np.arange(len(rs_n))
+                gammas = np.ones(len(rs_n), dtype=np.float)*gamma
+                gammas = gammas ** power
+                cum_rs_n = np.sum(rs_n * gammas)
+                vals.append(cum_rs_n)
+            embed()
             episodic_reward.append(np.sum(rs))
             num+=len(rs)
             print(r,num,episodic_reward[-1])
@@ -79,18 +88,15 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
                     episodic_reward=episodic_reward)
     return used
 
-
-
-
-
 if __name__ == '__main__':
     fpath = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00'
     npz_files = sorted(glob(os.path.join(fpath, '*train_buffer.npz')))
+    gamma = 0.99
     file_names = []
     all_rewards = []
     all_starts = []
     all_ends = []
-    for f in npz_files:
+    for f in npz_files[:2]:
         erewards, estarts, eends = find_episodic_rewards(f)
         fhist = f.replace('.npz', '_hist.png')
         if not os.path.exists(fhist):
@@ -109,9 +115,9 @@ if __name__ == '__main__':
     n_val = n_training*.1
     n_test = n_training*.05
     seed = 1903
+    used = make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples=n_test, seed=seed+15, kind='test',used=[])
     used = make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples=n_training, seed=seed, kind='training', used=[])
     used = make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples=n_val, seed=seed+10, kind='valid', used=[])
-    used = make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples=n_test, seed=seed+15, kind='test',used=[])
 
 
 
