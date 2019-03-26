@@ -14,11 +14,16 @@ from train_atari_action_vqvae import reshape_input
 import config
 torch.manual_seed(394)
 
+import torch
 from torch.autograd import Variable
 from torch.autograd import Function
 import torch.nn.functional as F
+from torchvision import models
 from torchvision import utils
 import cv2
+import sys
+import numpy as np
+import argparse
 
 # GRAD cam from https://github.com/jacobgil/pytorch-grad-cam
 # started 845
@@ -74,13 +79,12 @@ class ModelOutputs():
         return target_activations, output
 
 def show_cam_on_image(img, mask):
-    heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_INFERNO)
-    heatmap = np.float32(heatmap) / 255.0
+    heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_JET)
+    heatmap = np.float32(heatmap) / 255
     cam = heatmap + np.float32(img)
     cam = cam / np.max(cam)
-    #combine = np.hstack((img,cam))
-    #cv2.imwrite("cam.jpg", np.uint8(255 * combine))
-    return cam
+    combine = np.hstack((img,cam))
+    cv2.imwrite("cam.jpg", np.uint8(255 * combine))
 
 class GradCam:
     def __init__(self, model, target_layer_names, use_cuda):
@@ -197,147 +201,6 @@ class GuidedBackpropReLUModel:
 
         return output
 
-
-
-def sample_batch(data, episode_number, episode_reward, name):
-    nmix = int(info['num_output_mixtures']/2)
-    grad_cam = GradCam(model=vqvae_model, target_layer_names=['10'], use_cuda=args.use_cuda)
-    # If None, returns the map for the highest scoring category.
-    # Otherwise, targets the requested index.
-    target_index = None
-    states, actions, rewards, values, pred_states, terminals, reset, relative_indexes = data
-    actions = actions.to(DEVICE)
-    rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)
-    # true data as numpy for plotting
-    rec_true = (((rec+1)/2.0)).cpu().numpy()
-    x = (2*reshape_input(states)-1).to(DEVICE)
-    diff = (reshape_input(pred_states[:,1][:,None])).to(DEVICE)
-    prev_true = (reshape_input(states[:,-2:-1])).cpu().numpy()
-
-    if args.reward_int:
-        true_signals = rewards.cpu().numpy()
-    else:
-        true_signals = values.cpu().numpy()
-
-    action_preds = []
-    action_preds_lsm = []
-    action_preds_wrong = []
-    action_steps = []
-    action_trues = []
-    signal_preds = []
-    # (args.nr_logistic_mix/2)*3 is needed for each reconstruction
-    for i in range(states.shape[0]):
-        mask = grad_cam(x[i:i+1], target_index)
-        cimg = cv2.cvtColor(rec_true[i,0],cv2.COLOR_GRAY2RGB)
-        cam = show_cam_on_image(cimg, mask)
-        vqvae_model.zero_grad()
-        with torch.no_grad():
-            x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = vqvae_model(x[i:i+1])
-            rec_est = x_d[:,:nmix].detach()
-            diff_est = x_d[:,nmix:].detach()
-            rec_est = sample_from_discretized_mix_logistic(rec_est, largs.nr_logistic_mix)
-            rec_est = (((rec_est[0,0]+1)/2.0)).cpu().numpy()
-            diff_est = sample_from_discretized_mix_logistic(diff_est, largs.nr_logistic_mix)[0,0]
-            diff_true = diff[i,0]
-
-            if args.reward_int:
-                print('using int reward')
-                pred_signal = torch.argmax(pred_signals).item()
-            elif 'num_rewards' in info.keys():
-                pred_signal = (pred_signals[0].cpu().numpy())
-                print('using val reward',pred_signal)
-            else:
-                print('using no reward')
-                pred_signal = -99
-
-            signal_preds.append(pred_signal)
-            f,ax = plt.subplots(2,3)
-            title = 'step %s/%s action %s reward %s' %(i, states.shape[0], actions[i].item(), rewards[i].item())
-            pred_action = torch.argmax(pred_actions).item()
-            action = int(actions[i].item())
-            action_preds.append(pred_action)
-            action_preds_lsm.append(pred_actions.cpu().numpy())
-            if pred_action != action:
-                action_preds_wrong.append(pred_action)
-                action_trues.append(action)
-                action_steps.append(i)
-
-            print("A",action_preds_lsm[-1], pred_action, action)
-            print("R",true_signals[i], pred_signal)
-            iname = os.path.join(output_savepath, '%s_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
-            ax[0,0].imshow(prev_true[i,0])
-            ax[0,0].set_title('prev TA:%s PR:%s'%(action,pred_action))
-            ax[1,0].imshow(cam, vmin=0, vmax=1)
-            ax[1,0].set_title('sal %s'%(saliency_name))
-            ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
-            ax[0,1].set_title('rec true TR:%s'%true_signals[i])
-            ax[1,1].imshow(rec_est, vmin=0, vmax=1)
-            ax[1,1].set_title('rec est PR:%s'%pred_signal)
-            ax[0,2].imshow(diff_true, vmin=-1, vmax=1)
-            ax[0,2].set_title('diff true')
-            ax[1,2].imshow(diff_est, vmin=-1, vmax=1)
-            ax[1,2].set_title('diff est')
-            plt.suptitle(title)
-            plt.savefig(iname)
-            plt.close()
-            if not i%10:
-                print("saving", os.path.split(iname)[1])
-    # plot actions
-    aname = os.path.join(output_savepath, '%s_E%05d_action.png'%(name, int(episode_number)))
-    plt.figure()
-    plt.scatter(action_steps, action_preds_wrong, alpha=.5, label='predict')
-    plt.scatter(action_steps, action_trues, alpha=.1, label='actual')
-    plt.legend()
-    plt.savefig(aname)
-
-    actions = actions.cpu().data.numpy()
-    action_preds = np.array(action_preds)
-    actions_correct = []
-    actions_incorrect = []
-    actions_error = []
-
-    arname = os.path.join(output_savepath, '%s_E%05d_action.txt'%(name, int(episode_number)))
-    af = open(arname, 'w')
-    for a in sorted(list(set(actions))):
-        actcor = np.sum(action_preds[actions==a] == actions[actions==a])
-        acticor = np.sum(action_preds[actions==a] != actions[actions==a])
-        error = acticor/float(np.sum(actcor+acticor))
-        actions_correct.append(actcor)
-        actions_incorrect.append(acticor)
-        actions_error.append(error)
-        v = 'action {} correct {} incorrect {} error {}'.format(a,actcor,acticor,error)
-        print(v)
-        af.write(v+'\n')
-    af.close()
-
-    srname = os.path.join(output_savepath, '%s_E%05d_signal.txt'%(name, int(episode_number)))
-    sf = open(srname, 'w')
-    if args.reward_int:
-        signal_preds = np.array(signal_preds).astype(np.int)
-        signal_correct = []
-        signal_incorrect = []
-        signal_error = []
-
-        for s in sorted(list(set(true_signals))):
-            sigcor = np.sum(signal_preds[true_signals==s] ==  true_signals[true_signals==s])
-            sigicor = np.sum(signal_preds[true_signals==s] != true_signals[true_signals==s])
-            error = sigicor/float(np.sum(sigcor+sigicor))
-            signal_correct.append(sigcor)
-            signal_incorrect.append(sigicor)
-            signal_error.append(error)
-            v = 'reward signal {} correct {} incorrect {} error {}'.format(s,sigcor,sigicor,error)
-            print(v)
-            sf.write(v+'\n')
-    else:
-        mse = np.square(signal_preds-true_signals).mean()
-        sf.write('mse: %s'%mse)
-    sf.close()
-    gif_path = iname[:-10:] + '.gif'
-    search_path = iname[:-10:] + '*.png'
-    cmd = 'convert %s %s' %(search_path, gif_path)
-    print('creating gif', gif_path)
-    os.system(cmd)
-
 if __name__ == '__main__':
     import argparse
     default_base_savedir = config.model_savedir
@@ -346,8 +209,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='generate vq-vae')
     parser.add_argument('model_loadname', help='full path to model')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('-as', '--action_saliency', action='store_true', default=True)
-    parser.add_argument('-rs', '--reward_saliency', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=False)
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-s', '--generate_savename', default='g')
@@ -359,11 +220,6 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--rollout_length', default=0, type=int)
 
     args = parser.parse_args()
-    if args.action_saliency:
-        saliency_name = 'action'
-    if args.reward_saliency:
-        saliency_name = 'reward'
-
     if args.cuda:
         DEVICE = 'cuda'
         args.use_cuda = True
@@ -423,7 +279,7 @@ if __name__ == '__main__':
                             int_reward=False,
                             reward_value=True).to(DEVICE)
     else:
-       vqvae_model = VQVAE(num_clusters=largs.num_k,
+        vqvae_model = VQVAE(num_clusters=largs.num_k,
                             encoder_output_size=largs.num_z,
                             num_output_mixtures=info['num_output_mixtures'],
                             in_channels_size=largs.number_condition,
@@ -433,8 +289,39 @@ if __name__ == '__main__':
     vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
     valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True)
-    sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
+    #sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
 
-    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True)
-    sample_batch(train_episode_batch, episode_index, episode_reward, 'train')
+    # Can work with any model, but it assumes that the model has a
+    # feature method, and a classifier method,
+    # as in the VGG models in torchvision.
+
+    grad_cam = GradCam(model = vqvae_model,
+                    target_layer_names =['10'], use_cuda=args.use_cuda)
+
+    # If None, returns the map for the highest scoring category.
+    # Otherwise, targets the requested index.
+    target_index = None
+
+    states, actions, rewards, values, pred_states, terminals, reset, relative_indexes = valid_episode_batch
+
+    input_data = (2*reshape_input(states[:1])-1).to(DEVICE)
+
+    mask = grad_cam(input_data, target_index)
+    img = input_data[0,-1].cpu().numpy()
+    img = (img+1)/2.0
+    cimg = cv2.cvtColor(img,cv2.COLOR_GRAY2RGB)
+    show_cam_on_image(cimg, mask)
+    #utils.save_image(torch.from_numpy(cam_gb), 'cam_gb.jpg')
+
+    #gb_model = GuidedBackpropReLUModel(model = models.vgg19(pretrained=True), use_cuda=args.use_cuda)
+    #gb = gb_model(input, index=target_index)
+    #utils.save_image(torch.from_numpy(gb), 'gb.jpg')
+
+    #cam_mask = np.zeros(gb.shape)
+    #for i in range(0, gb.shape[0]):
+    #    cam_mask[i, :, :] = mask
+
+    #cam_gb = np.multiply(cam_mask, gb)
+    #utils.save_image(torch.from_numpy(cam_gb), 'cam_gb.jpg')
+
 

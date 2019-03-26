@@ -89,6 +89,7 @@ class VQVAE(nn.Module):
         # size of the output of the latent space - bs,encoder_output_size,vq_space_dim,vq_space_dim
         vq_space_dim = 10
         if self.n_actions > 0:
+            print("predicting actions", self.n_actions)
             self.action_conv = nn.Sequential(
                                     nn.Conv2d(in_channels=encoder_output_size,
                                        out_channels=encoder_output_size,
@@ -104,6 +105,7 @@ class VQVAE(nn.Module):
                                  )
         if self.int_reward > 0:
             # reward should be between 0 and int_reward
+            print("predicting an int reward", self.int_reward)
             self.int_reward_conv = nn.Sequential(
                                     nn.Conv2d(in_channels=encoder_output_size,
                                        out_channels=encoder_output_size,
@@ -118,6 +120,7 @@ class VQVAE(nn.Module):
                                                         kernel_size=vq_space_dim, padding=0),
                                  )
         if self.reward_value > 0:
+            print("predicting reward value")
             # reward should be between 0 and int_reward
             self.reward_val_conv = nn.Sequential(
                                     nn.Conv2d(in_channels=encoder_output_size,
