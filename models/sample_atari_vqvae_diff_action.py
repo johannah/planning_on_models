@@ -289,16 +289,31 @@ def sample_batch(data, episode_number, episode_reward, name):
                 action_steps.append(i)
 
             print("A",action_preds_lsm[-1], pred_action, action)
+            action_correct = pred_action == action
             print("R",true_signals[i], pred_signal)
             iname = os.path.join(output_savepath, '%s_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
             ax[0,0].imshow(prev_true[i,0])
             ax[0,0].set_title('prev TA:%s PA:%s'%(action,pred_action))
             ax[1,0].imshow(cam, vmin=0, vmax=1)
-            ax[1,0].set_title('saliency-%s'%(saliency_name))
+            if action_correct:
+                ax[1,0].set_title('gradcam-%s PA:%s COR  '%(saliency_name,pred_action))
+            else:
+                ax[1,0].set_title('gradcam-%s PA:%s WRG'%(saliency_name,pred_action))
             ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
-            ax[0,1].set_title('rec true TR:%s'%true_signals[i])
+            if args.reward_int:
+                reward_correct = true_signals[i]  == pred_signal
+                ax[0,1].set_title('rec true TR:%s PR:%s'%(true_signals[i], pred_signal))
+                if reward_correct:
+                    ax[1,1].set_title('rec est  PR:%s COR'%pred_signal)
+                else:
+                    ax[1,1].set_title('rec est  PR:%s WRG'%pred_signal)
+            elif 'num_rewards' in info.keys():
+                ax[0,1].set_title('rec true TR:%s PR:%s'%(round(true_signals[i],2), round(pred_signal,2)))
+                ax[1,1].set_title('rec est PR:%s'%round(pred_signal,2))
+            else:
+                ax[0,1].set_title('rec true')
+                ax[1,1].set_title('rec est')
             ax[1,1].imshow(rec_est, vmin=0, vmax=1)
-            ax[1,1].set_title('rec est PR:%s'%pred_signal)
             ax[0,2].imshow(diff_true, vmin=-1, vmax=1)
             ax[0,2].set_title('diff true')
             ax[1,2].imshow(diff_est, vmin=-1, vmax=1)
@@ -378,7 +393,7 @@ if __name__ == '__main__':
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-s', '--generate_savename', default='g')
     parser.add_argument('-bs', '--batch_size', default=5, type=int)
-    parser.add_argument('-l', '--limit', default=100, type=int)
+    parser.add_argument('-l', '--limit', default=200, type=int)
     parser.add_argument('-n', '--max_generations', default=70, type=int)
     parser.add_argument('-gg', '--generate_gif', action='store_true', default=False)
     parser.add_argument('--train_only', action='store_true', default=False)
@@ -386,9 +401,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     if args.action_saliency:
-        saliency_name = 'action'
+        saliency_name = 'act'
     if args.reward_saliency:
-        saliency_name = 'reward'
+        saliency_name = 'rew'
         args.action_saliency = False
 
     if args.cuda:
