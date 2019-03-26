@@ -74,7 +74,7 @@ class ModelOutputs():
         return target_activations, output
 
 def show_cam_on_image(img, mask):
-    heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_INFERNO)
+    heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_AUTUMN)
     heatmap = np.float32(heatmap) / 255.0
     cam = heatmap + np.float32(img)
     cam = cam / np.max(cam)
@@ -268,7 +268,7 @@ def sample_batch(data, episode_number, episode_reward, name):
             ax[0,0].imshow(prev_true[i,0])
             ax[0,0].set_title('prev TA:%s PR:%s'%(action,pred_action))
             ax[1,0].imshow(cam, vmin=0, vmax=1)
-            ax[1,0].set_title('sal %s'%(saliency_name))
+            ax[1,0].set_title('saliency-%s'%(saliency_name))
             ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
             ax[0,1].set_title('rec true TR:%s'%true_signals[i])
             ax[1,1].imshow(rec_est, vmin=0, vmax=1)
@@ -363,6 +363,7 @@ if __name__ == '__main__':
         saliency_name = 'action'
     if args.reward_saliency:
         saliency_name = 'reward'
+        args.action_saliency = False
 
     if args.cuda:
         DEVICE = 'cuda'
