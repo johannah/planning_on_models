@@ -343,12 +343,15 @@ class AtariDataset(Dataset):
             reset = True
         return self.get_data(relative_indexes, reset)
 
-    def get_entire_episode(self, diff=False):
+    def get_entire_episode(self, diff=False, limit=-10):
         episode_index = self.random_state.choice(self.episode_indexes)
         print('grabbing episode %s [%s:%s] of reward %s' %(episode_index,
                               self.starts[episode_index], self.ends[episode_index],
                               self.episodic_reward[episode_index]))
         relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)
+        if limit > 0:
+            print("limiting episode to %s steps" %limit)
+            relative_indexes = relative_indexes[:limit]
         episode_reward = self.episodic_reward[episode_index]
         if not diff:
             data = self.get_data(relative_indexes)

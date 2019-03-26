@@ -73,15 +73,6 @@ class ModelOutputs():
             output = self.model.int_reward_conv(output)[:,:,0,0]
         return target_activations, output
 
-def show_cam_on_image(img, mask):
-    heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_AUTUMN)
-    heatmap = np.float32(heatmap) / 255.0
-    cam = heatmap + np.float32(img)
-    cam = cam / np.max(cam)
-    #combine = np.hstack((img,cam))
-    #cv2.imwrite("cam.jpg", np.uint8(255 * combine))
-    return cam
-
 class GradCam:
     def __init__(self, model, target_layer_names, use_cuda):
         self.model = model
@@ -133,8 +124,8 @@ class GradCam:
         dsh = input.shape[2]
         dsw = input.shape[3]
         cam = cv2.resize(cam, (dsh, dsw))
-        cam = cam - np.min(cam)
-        cam = cam / np.max(cam)
+        #cam = cam - np.min(cam)
+        #cam = cam / np.max(cam)
         return cam
 
 class GuidedBackpropReLU(Function):
@@ -196,6 +187,18 @@ class GuidedBackpropReLUModel:
         output = output[0,:,:,:]
 
         return output
+#
+#def show_cam_on_image(img, mask):
+#    # mask should be between 0 and 1
+#    heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_AUTUMN)
+#    heatmap = np.float32(heatmap) / 255.0
+#    #cam = heatmap + np.float32(img)
+#    #cam = (cam - cam.min())/cam.max()
+#    #cam = (cam - cam.min())/cam.max()
+#    #cam = cam / np.max(cam)
+#    #combine = np.hstack((img,cam))
+#    #cv2.imwrite("cam.jpg", np.uint8(255 * combine))
+#    return heatmap
 
 
 
@@ -226,12 +229,35 @@ def sample_batch(data, episode_number, episode_reward, name):
     action_trues = []
     signal_preds = []
     # (args.nr_logistic_mix/2)*3 is needed for each reconstruction
+    raw_masks = []
+    print("getting gradcam masks")
     for i in range(states.shape[0]):
         mask = grad_cam(x[i:i+1], target_index)
-        cimg = cv2.cvtColor(rec_true[i,0],cv2.COLOR_GRAY2RGB)
-        cam = show_cam_on_image(cimg, mask)
+        raw_masks.append(mask)
         vqvae_model.zero_grad()
+    raw_masks = np.array(raw_masks)
+    mask_max = raw_masks.max()
+    mask_min = raw_masks.min()
+    raw_masks = (raw_masks-mask_min)/mask_max
+    # flip grads for more visually appealing opencv JET colorplot
+    raw_masks = 1-raw_masks
+    cams = []
+    for i in range(states.shape[0]):
+        #heatmap = cv2.applyColorMap(np.uint8(255*raw_masks[i]), cv2.COLORMAP_AUTUMN)
+        heatmap = cv2.applyColorMap(np.uint8(255*raw_masks[i]), cv2.COLORMAP_JET)
+        cams.append(np.float32(heatmap)/255.0)
+    cams = np.array(cams).astype(np.float)
+    cams = 20 * np.log10((cams-cams.min()) + 1.)
+    cams = (cams/cams.max())
+    #cams = np.array([c-c.min() for c in cams])
+    #cams = np.array([c/c.max() for c in cams])
+
+    print("starting vqvae")
+    for i in range(states.shape[0]):
         with torch.no_grad():
+            cimg = cv2.cvtColor(rec_true[i,0],cv2.COLOR_GRAY2RGB).astype(np.float32)
+            # both are between 0 and 1
+            cam = cams[i]*.4 + cimg*.6
             x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = vqvae_model(x[i:i+1])
             rec_est = x_d[:,:nmix].detach()
             diff_est = x_d[:,nmix:].detach()
@@ -266,7 +292,7 @@ def sample_batch(data, episode_number, episode_reward, name):
             print("R",true_signals[i], pred_signal)
             iname = os.path.join(output_savepath, '%s_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
             ax[0,0].imshow(prev_true[i,0])
-            ax[0,0].set_title('prev TA:%s PR:%s'%(action,pred_action))
+            ax[0,0].set_title('prev TA:%s PA:%s'%(action,pred_action))
             ax[1,0].imshow(cam, vmin=0, vmax=1)
             ax[1,0].set_title('saliency-%s'%(saliency_name))
             ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
@@ -352,11 +378,11 @@ if __name__ == '__main__':
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-s', '--generate_savename', default='g')
     parser.add_argument('-bs', '--batch_size', default=5, type=int)
+    parser.add_argument('-l', '--limit', default=100, type=int)
     parser.add_argument('-n', '--max_generations', default=70, type=int)
     parser.add_argument('-gg', '--generate_gif', action='store_true', default=False)
     parser.add_argument('--train_only', action='store_true', default=False)
     parser.add_argument('--test_only', action='store_true', default=False)
-    parser.add_argument('-r', '--rollout_length', default=0, type=int)
 
     args = parser.parse_args()
     if args.action_saliency:
@@ -433,9 +459,9 @@ if __name__ == '__main__':
 
     vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
-    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True)
+    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True, limit=args.limit)
     sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
 
-    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True)
+    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True, limit=args.limit)
     sample_batch(train_episode_batch, episode_index, episode_reward, 'train')
 
