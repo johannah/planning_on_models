@@ -296,9 +296,9 @@ def sample_batch(data, episode_number, episode_reward, name):
             ax[0,0].set_title('prev TA:%s PA:%s'%(action,pred_action))
             ax[1,0].imshow(cam, vmin=0, vmax=1)
             if action_correct:
-                ax[1,0].set_title('gradcam-%s PA:%s COR  '%(saliency_name,pred_action))
+                ax[1,0].set_title('gcam-%s PA:%s COR  '%(saliency_name,pred_action))
             else:
-                ax[1,0].set_title('gradcam-%s PA:%s WRG'%(saliency_name,pred_action))
+                ax[1,0].set_title('gcam-%s PA:%s WRG'%(saliency_name,pred_action))
             ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
             if args.reward_int:
                 reward_correct = true_signals[i]  == pred_signal
@@ -308,8 +308,8 @@ def sample_batch(data, episode_number, episode_reward, name):
                 else:
                     ax[1,1].set_title('rec est  PR:%s WRG'%pred_signal)
             elif 'num_rewards' in info.keys():
-                ax[0,1].set_title('rec true TR:%s PR:%s'%(round(true_signals[i],2), round(pred_signal,2)))
-                ax[1,1].set_title('rec est PR:%s'%round(pred_signal,2))
+                ax[0,1].set_title('rec true TR:%s PR:%s'%(np.round(true_signals[i],2), np.round(pred_signal,2)))
+                ax[1,1].set_title('rec est PR:%s'%np.round(pred_signal,2))
             else:
                 ax[0,1].set_title('rec true')
                 ax[1,1].set_title('rec est')
