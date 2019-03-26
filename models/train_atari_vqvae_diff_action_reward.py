@@ -150,7 +150,7 @@ def train_vqvae(train_cnt):
 def valid_vqvae(train_cnt, do_plot=False):
     vqvae_model.eval()
     #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_unique_minibatch()
-    states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_framediff_minibatch()
+    states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_framediff_minibatch()
     # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
     states = (2*reshape_input(states)-1).to(DEVICE)
     rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)

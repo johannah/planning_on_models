@@ -253,16 +253,21 @@ def sample_batch(data, episode_number, episode_reward, name):
     #cams = np.array([c/c.max() for c in cams])
 
     print("starting vqvae")
+    rec_sams = np.zeros((args.num_samples, 80, 80), np.float32)
     for i in range(states.shape[0]):
         with torch.no_grad():
             cimg = cv2.cvtColor(rec_true[i,0],cv2.COLOR_GRAY2RGB).astype(np.float32)
             # both are between 0 and 1
             cam = cams[i]*.4 + cimg*.6
             x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = vqvae_model(x[i:i+1])
-            rec_est = x_d[:,:nmix].detach()
+            rec_mest = x_d[:,:nmix].detach()
             diff_est = x_d[:,nmix:].detach()
-            rec_est = sample_from_discretized_mix_logistic(rec_est, largs.nr_logistic_mix)
-            rec_est = (((rec_est[0,0]+1)/2.0)).cpu().numpy()
+            for n in range(args.num_samples):
+                sam = sample_from_discretized_mix_logistic(rec_mest, largs.nr_logistic_mix, only_mean=False)
+                rec_sams[n] = (((sam[0,0]+1)/2.0)).cpu().numpy()
+            rec_est = np.mean(rec_sams, axis=0)
+
+            # just take the mean from diff
             diff_est = sample_from_discretized_mix_logistic(diff_est, largs.nr_logistic_mix)[0,0]
             diff_true = diff[i,0]
 
@@ -295,10 +300,21 @@ def sample_batch(data, episode_number, episode_reward, name):
             ax[0,0].imshow(prev_true[i,0])
             ax[0,0].set_title('prev TA:%s PA:%s'%(action,pred_action))
             ax[1,0].imshow(cam, vmin=0, vmax=1)
-            if action_correct:
-                ax[1,0].set_title('gcam-%s PA:%s COR  '%(saliency_name,pred_action))
-            else:
-                ax[1,0].set_title('gcam-%s PA:%s WRG'%(saliency_name,pred_action))
+
+            # plot action saliency map
+            if args.action_saliency:
+                if action_correct:
+                    ax[1,0].set_title('gcam-%s PA:%s COR  '%(saliency_name,pred_action))
+                else:
+                    ax[1,0].set_title('gcam-%s PA:%s WRG'%(saliency_name,pred_action))
+            # plot reward saliency map
+            if args.reward_saliency:
+                reward_correct = true_signals[i]  == pred_signal
+                if reward_correct:
+                    ax[1,0].set_title('gcam-%s PR:%s COR  '%(saliency_name,pred_signal))
+                else:
+                    ax[1,0].set_title('gcam-%s PR:%s WRG'%(saliency_name,pred_signal))
+
             ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
             if args.reward_int:
                 reward_correct = true_signals[i]  == pred_signal
@@ -318,6 +334,12 @@ def sample_batch(data, episode_number, episode_reward, name):
             ax[0,2].set_title('diff true')
             ax[1,2].imshow(diff_est, vmin=-1, vmax=1)
             ax[1,2].set_title('diff est')
+            for a in range(2):
+                for b in range(3):
+                    ax[a,b].set_yticklabels([])
+                    ax[a,b].set_xticklabels([])
+                    ax[a,b].set_yticks([])
+                    ax[a,b].set_xticks([])
             plt.suptitle(title)
             plt.savefig(iname)
             plt.close()
@@ -393,6 +415,8 @@ if __name__ == '__main__':
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-s', '--generate_savename', default='g')
     parser.add_argument('-bs', '--batch_size', default=5, type=int)
+    parser.add_argument('-ns', '--num_samples', default=40, type=int)
+    parser.add_argument('-mr', '--min_reward', default=-999, type=int)
     parser.add_argument('-l', '--limit', default=200, type=int)
     parser.add_argument('-n', '--max_generations', default=70, type=int)
     parser.add_argument('-gg', '--generate_gif', action='store_true', default=False)
@@ -474,9 +498,9 @@ if __name__ == '__main__':
 
     vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
-    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True, limit=args.limit)
+    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
     sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
 
-    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True, limit=args.limit)
+    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
     sample_batch(train_episode_batch, episode_index, episode_reward, 'train')
 

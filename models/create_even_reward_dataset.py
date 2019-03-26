@@ -79,6 +79,7 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
             values.extend(vals)
             episodic_reward.append(np.sum(rs))
             num+=len(rs)
+            embed()
             print(r,num,episodic_reward[-1])
 
     print(len(values), len(rewards))

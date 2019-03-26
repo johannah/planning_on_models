@@ -243,7 +243,7 @@ class AtariDataset(Dataset):
     def __init__(self,  data_file, number_condition=4, steps_ahead=1,
                         limit=None, batch_size=128,
                         norm_by=255.0,
-                        seed=3949):
+                        seed=39):
 
         self.random_state = np.random.RandomState(seed)
         self.batch_size = batch_size
@@ -343,11 +343,15 @@ class AtariDataset(Dataset):
             reset = True
         return self.get_data(relative_indexes, reset)
 
-    def get_entire_episode(self, diff=False, limit=-10):
-        episode_index = self.random_state.choice(self.episode_indexes)
-        print('grabbing episode %s [%s:%s] of reward %s' %(episode_index,
-                              self.starts[episode_index], self.ends[episode_index],
-                              self.episodic_reward[episode_index]))
+    def get_entire_episode(self, diff=False, limit=-10, min_reward=-99):
+        ep_reward = -9999
+        while ep_reward < min_reward:
+            episode_index = self.random_state.choice(self.episode_indexes)
+            print('grabbing episode %s [%s:%s] of reward %s' %(episode_index,
+                                  self.starts[episode_index], self.ends[episode_index],
+                                  self.episodic_reward[episode_index]))
+            ep_reward = self.episodic_reward[episode_index]
+
         relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)
         if limit > 0:
             print("limiting episode to %s steps" %limit)
