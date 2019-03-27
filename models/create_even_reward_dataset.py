@@ -78,9 +78,9 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
                 vals.append(cum_rs_n)
             values.extend(vals)
             episodic_reward.append(np.sum(rs))
+            print("adding sum", np.sum(rs), len(episodic_reward))
             num+=len(rs)
-            embed()
-            print(r,num,episodic_reward[-1])
+            #print(r,num,episodic_reward[-1])
 
     print(len(values), len(rewards))
     fname = os.path.join(os.path.split(ffrom)[0], '%s_set.npz'%kind)

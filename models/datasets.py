@@ -387,6 +387,18 @@ class AtariDataset(Dataset):
         relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
         return self.get_framediff_data(relative_indexes)
 
+    def get_framediff_unique_minibatch(self):
+        reset = False
+        relative_indexes = self.random_state.choice(self.unique_index_array, self.batch_size, replace=False)
+        # remove used indexes
+        not_in = np.logical_not(np.isin(self.unique_index_array, relative_indexes))
+        self.unique_index_array = self.unique_index_array[not_in]
+        if len(self.unique_index_array) < self.batch_size:
+            self.reset_batch()
+            reset = True
+        return self.get_framediff_data(relative_indexes, reset)
+
+
 # used to be Dataloader, but overloaded
 class AtariDataLoader():
     def __init__(self, train_load_function, test_load_function,
