@@ -287,7 +287,7 @@ class AtariDataset(Dataset):
         self.relative_indexes = np.arange(len(self.index_array))
         self.reset_batch()
         # location of start and ends of episodes in "relative indexes"
-        self.ends = list(np.where(self.terminals[self.index_array[self.relative_indexes]] == 1)[0])
+        self.ends = list(np.where(self.terminals[self.index_array[self.relative_indexes]] == 1)[0])[:-1]
         self.starts = [e+1 for e in self.ends]
         self.starts.insert(0,0)
         self.ends.append(len(self.relative_indexes))
