@@ -499,8 +499,10 @@ if __name__ == '__main__':
     vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
     valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
+    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
+
+
     sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
 
-    train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
     sample_batch(train_episode_batch, episode_index, episode_reward, 'train')
 
