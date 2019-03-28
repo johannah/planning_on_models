@@ -47,7 +47,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
         if len(info['train_losses_list'])<rolling*3:
             rolling = 0
         train_losses = np.array(info['train_losses_list'])
-        valid_losses = np.array(info['train_losses_list'])
+        valid_losses = np.array(info['valid_losses_list'])
         for i in range(valid_losses.shape[1]):
             plot_name = model_base_filepath + "_%010d_loss%s.png"%(train_cnt, i)
             print("plotting", os.path.split(plot_name)[1])

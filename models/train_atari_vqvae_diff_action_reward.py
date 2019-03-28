@@ -1,16 +1,3 @@
-"""
-Associative Compression Network based on https://arxiv.org/pdf/1804.02476v2.pdf
-
-Strongly referenced ACN implementation and blog post from:
-http://jalexvig.github.io/blog/associative-compression-networks/
-
-Base VAE referenced from pytorch examples:
-https://github.com/pytorch/examples/blob/master/vae/main.py
-"""
-
-# TODO conv
-# TODO load function
-# daydream function
 import os
 import time
 import numpy as np
@@ -28,8 +15,6 @@ from IPython import embed
 from lstm_utils import plot_dict_losses
 from ae_utils import save_checkpoint
 from vqvae import VQVAE
-#from vqvae import VQVAE_ENCODER
-#from pixel_cnn import GatedPixelCNN
 from datasets import AtariDataset
 torch.manual_seed(394)
 
@@ -47,7 +32,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
         if len(info['train_losses_list'])<rolling*3:
             rolling = 0
         train_losses = np.array(info['train_losses_list'])
-        valid_losses = np.array(info['train_losses_list'])
+        valid_losses = np.array(info['valid_losses_list'])
         for i in range(valid_losses.shape[1]):
             plot_name = model_base_filepath + "_%010d_loss%s.png"%(train_cnt, i)
             print("plotting", os.path.split(plot_name)[1])

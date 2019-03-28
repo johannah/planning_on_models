@@ -239,6 +239,49 @@ class FreewayForwardDataset(Dataset):
         y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
         return x,y
 
+class ForwardLatentDataset(Dataset):
+    def __init__(self,  data_file, batch_size=128, seed=9):
+        self.random_state = np.random.RandomState(seed)
+        self.batch_size = batch_size
+        # index next observation, will need
+        self.data_file = os.path.abspath(data_file)
+        self.data_file = np.load(self.data_file)
+        # output of vqvae embedding
+        self.latents = self.data_file['latents']
+        self.next_latents = self.data_file['next_latents']
+        self.rewards = self.data_file['rewards']
+        self.values = self.data_file['values']
+        self.unique_rewards = list(set(self.rewards))
+        # should probably add terminals
+        self.actions = self.data_file['actions']
+        self.action_space = sorted(list(set(self.actions)))
+        self.n_actions = len(self.action_space)
+        self.num_examples,self.data_h,self.data_w = self.latents.shape
+        self.index_array = list(np.arange(0, self.num_examples, dtype=np.int))
+
+    def reset_batch(self):
+        self.unique_index_array = deepcopy(self.index_array)
+
+    def get_data(self, indexes, reset=False):
+        # action corresponds to the action that moves s_t to s_t+1
+        return torch.FloatTensor(self.latents[indexes]), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]), torch.LongTensor(self.next_latents[indexes]), reset, indexes
+
+    def get_minibatch(self):
+        indexes = self.random_state.choice(self.index_array, self.batch_size)
+        return self.get_data(indexes)
+
+    def get_unique_minibatch(self):
+        reset = False
+        indexes = self.random_state.choice(self.unique_index_array, self.batch_size, replace=False)
+        # remove used indexes
+        not_in = np.logical_not(np.isin(self.unique_index_array, indexes))
+        self.unique_index_array = self.unique_index_array[not_in]
+        if len(self.unique_index_array) < self.batch_size:
+            self.reset_batch()
+            reset = True
+        return self.get_data(indexes, reset)
+
+
 class AtariDataset(Dataset):
     def __init__(self,  data_file, number_condition=4, steps_ahead=1,
                         limit=None, batch_size=128,
@@ -386,18 +429,6 @@ class AtariDataset(Dataset):
     def get_framediff_minibatch(self):
         relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
         return self.get_framediff_data(relative_indexes)
-
-    def get_framediff_unique_minibatch(self):
-        reset = False
-        relative_indexes = self.random_state.choice(self.unique_index_array, self.batch_size, replace=False)
-        # remove used indexes
-        not_in = np.logical_not(np.isin(self.unique_index_array, relative_indexes))
-        self.unique_index_array = self.unique_index_array[not_in]
-        if len(self.unique_index_array) < self.batch_size:
-            self.reset_batch()
-            reset = True
-        return self.get_framediff_data(relative_indexes, reset)
-
 
 # used to be Dataloader, but overloaded
 class AtariDataLoader():

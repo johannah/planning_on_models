@@ -47,7 +47,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
         if len(info['train_losses_list'])<rolling*3:
             rolling = 0
         train_losses = np.array(info['train_losses_list'])
-        valid_losses = np.array(info['train_losses_list'])
+        valid_losses = np.array(info['valid_losses_list'])
         for i in range(valid_losses.shape[1]):
             plot_name = model_base_filepath + "_%010d_loss%s.png"%(train_cnt, i)
             print("plotting", os.path.split(plot_name)[1])
@@ -146,7 +146,7 @@ def train_vqvae(train_cnt):
 def valid_vqvae(train_cnt, do_plot=False):
     vqvae_model.eval()
     #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_unique_minibatch()
-    states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_framediff_minibatch()
+    states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_framediff_minibatch()
     # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
     states = (2*reshape_input(states)-1).to(DEVICE)
     rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)

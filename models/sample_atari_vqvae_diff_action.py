@@ -121,11 +121,9 @@ class GradCam:
             cam += w * target[i, :, :]
 
         cam = np.maximum(cam, 0)
-        dsh = input.shape[2]
-        dsw = input.shape[3]
-        cam = cv2.resize(cam, (dsh, dsw))
-        #cam = cam - np.min(cam)
-        #cam = cam / np.max(cam)
+        #dsh = input.shape[2]
+        #dsw = input.shape[3]
+        #cam = cv2.resize(cam, (dsh, dsw))
         return cam
 
 class GuidedBackpropReLU(Function):
@@ -187,20 +185,6 @@ class GuidedBackpropReLUModel:
         output = output[0,:,:,:]
 
         return output
-#
-#def show_cam_on_image(img, mask):
-#    # mask should be between 0 and 1
-#    heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_AUTUMN)
-#    heatmap = np.float32(heatmap) / 255.0
-#    #cam = heatmap + np.float32(img)
-#    #cam = (cam - cam.min())/cam.max()
-#    #cam = (cam - cam.min())/cam.max()
-#    #cam = cam / np.max(cam)
-#    #combine = np.hstack((img,cam))
-#    #cv2.imwrite("cam.jpg", np.uint8(255 * combine))
-#    return heatmap
-
-
 
 def sample_batch(data, episode_number, episode_reward, name):
     nmix = int(info['num_output_mixtures']/2)
@@ -232,7 +216,8 @@ def sample_batch(data, episode_number, episode_reward, name):
     raw_masks = []
     print("getting gradcam masks")
     for i in range(states.shape[0]):
-        mask = grad_cam(x[i:i+1], target_index)
+        cam = grad_cam(x[i:i+1], target_index)
+        mask = cv2.resize(cam, (80, 80))
         raw_masks.append(mask)
         vqvae_model.zero_grad()
     raw_masks = np.array(raw_masks)
@@ -254,6 +239,7 @@ def sample_batch(data, episode_number, episode_reward, name):
 
     print("starting vqvae")
     rec_sams = np.zeros((args.num_samples, 80, 80), np.float32)
+    rec_est = np.zeros((80,80))
     for i in range(states.shape[0]):
         with torch.no_grad():
             cimg = cv2.cvtColor(rec_true[i,0],cv2.COLOR_GRAY2RGB).astype(np.float32)
@@ -262,10 +248,13 @@ def sample_batch(data, episode_number, episode_reward, name):
             x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = vqvae_model(x[i:i+1])
             rec_mest = x_d[:,:nmix].detach()
             diff_est = x_d[:,nmix:].detach()
-            for n in range(args.num_samples):
-                sam = sample_from_discretized_mix_logistic(rec_mest, largs.nr_logistic_mix, only_mean=False)
-                rec_sams[n] = (((sam[0,0]+1)/2.0)).cpu().numpy()
-            rec_est = np.mean(rec_sams, axis=0)
+            if args.num_samples:
+                for n in range(args.num_samples):
+                    sam = sample_from_discretized_mix_logistic(rec_mest, largs.nr_logistic_mix, only_mean=False)
+                    rec_sams[n] = (((sam[0,0]+1)/2.0)).cpu().numpy()
+                rec_est = np.mean(rec_sams, axis=0)
+            rec_mean = sample_from_discretized_mix_logistic(rec_mest, largs.nr_logistic_mix, only_mean=True)
+            rec_mean = (((rec_mean[0,0]+1)/2.0)).cpu().numpy()
 
             # just take the mean from diff
             diff_est = sample_from_discretized_mix_logistic(diff_est, largs.nr_logistic_mix)[0,0]
@@ -282,7 +271,7 @@ def sample_batch(data, episode_number, episode_reward, name):
                 pred_signal = -99
 
             signal_preds.append(pred_signal)
-            f,ax = plt.subplots(2,3)
+            f,ax = plt.subplots(2,4)
             title = 'step %s/%s action %s reward %s' %(i, states.shape[0], actions[i].item(), rewards[i].item())
             pred_action = torch.argmax(pred_actions).item()
             action = int(actions[i].item())
@@ -304,9 +293,9 @@ def sample_batch(data, episode_number, episode_reward, name):
             # plot action saliency map
             if args.action_saliency:
                 if action_correct:
-                    ax[1,0].set_title('gcam-%s PA:%s COR  '%(saliency_name,pred_action))
+                    ax[1,0].set_title('gc%s PA:%s COR  '%(saliency_name,pred_action))
                 else:
-                    ax[1,0].set_title('gcam-%s PA:%s WRG'%(saliency_name,pred_action))
+                    ax[1,0].set_title('gc%s PA:%s WRG'%(saliency_name,pred_action))
             # plot reward saliency map
             if args.reward_saliency:
                 reward_correct = true_signals[i]  == pred_signal
@@ -315,31 +304,43 @@ def sample_batch(data, episode_number, episode_reward, name):
                 else:
                     ax[1,0].set_title('gcam-%s PR:%s WRG'%(saliency_name,pred_signal))
 
-            ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
             if args.reward_int:
                 reward_correct = true_signals[i]  == pred_signal
-                ax[0,1].set_title('rec true TR:%s PR:%s'%(true_signals[i], pred_signal))
+                ax[0,1].set_title('rec true')#%(true_signals[i], pred_signal))
+                ax[0,2].set_title('TR:%s PR:%s'%(true_signals[i], pred_signal))
                 if reward_correct:
-                    ax[1,1].set_title('rec est  PR:%s COR'%pred_signal)
+                    ax[1,1].set_title('avgest COR')
+                    ax[1,2].set_title('samest COR')
                 else:
-                    ax[1,1].set_title('rec est  PR:%s WRG'%pred_signal)
+                    ax[1,1].set_title('avgest WRG')
+                    ax[1,2].set_title('samest WRG')
             elif 'num_rewards' in info.keys():
-                ax[0,1].set_title('rec true TR:%s PR:%s'%(np.round(true_signals[i],2), np.round(pred_signal,2)))
-                ax[1,1].set_title('rec est PR:%s'%np.round(pred_signal,2))
+                ax[0,1].set_title('rec true')#%(np.round(true_signals[i],2), np.round(pred_signal,2)))
+                ax[0,2].set_title('TR:%s PR:%s'%(np.round(true_signals[i],2), np.round(pred_signal,2)))
+                ax[1,1].set_title('avgrec est PR:%s'%np.round(pred_signal,2))
+                ax[1,2].set_title('samrec est PR:%s'%np.round(pred_signal,2))
             else:
                 ax[0,1].set_title('rec true')
-                ax[1,1].set_title('rec est')
-            ax[1,1].imshow(rec_est, vmin=0, vmax=1)
-            ax[0,2].imshow(diff_true, vmin=-1, vmax=1)
-            ax[0,2].set_title('diff true')
-            ax[1,2].imshow(diff_est, vmin=-1, vmax=1)
-            ax[1,2].set_title('diff est')
+                ax[0,2].set_title('rec true')
+                ax[1,1].set_title('avgrec est')
+                ax[1,2].set_title('samrec est')
+
+            ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
+            ax[0,2].imshow(rec_true[i,0], vmin=0, vmax=1)
+            ax[1,1].imshow(rec_mean, vmin=0, vmax=1)
+            ax[1,2].imshow(rec_est, vmin=0, vmax=1)
+
+            ax[0,3].set_title('diff true')
+            ax[1,3].set_title('diff est')
+            ax[0,3].imshow(diff_true, vmin=-1, vmax=1)
+            ax[1,3].imshow(diff_est, vmin=-1, vmax=1)
             for a in range(2):
-                for b in range(3):
+                for b in range(4):
                     ax[a,b].set_yticklabels([])
                     ax[a,b].set_xticklabels([])
                     ax[a,b].set_yticks([])
                     ax[a,b].set_xticks([])
+            plt.tight_layout()
             plt.suptitle(title)
             plt.savefig(iname)
             plt.close()
@@ -425,9 +426,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     if args.action_saliency:
-        saliency_name = 'act'
+        saliency_name = 'A'
     if args.reward_saliency:
-        saliency_name = 'rew'
+        saliency_name = 'R'
         args.action_saliency = False
 
     if args.cuda:
@@ -489,7 +490,7 @@ if __name__ == '__main__':
                             int_reward=False,
                             reward_value=True).to(DEVICE)
     else:
-       vqvae_model = VQVAE(num_clusters=largs.num_k,
+        vqvae_model = VQVAE(num_clusters=largs.num_k,
                             encoder_output_size=largs.num_z,
                             num_output_mixtures=info['num_output_mixtures'],
                             in_channels_size=largs.number_condition,
@@ -500,7 +501,6 @@ if __name__ == '__main__':
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
     valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
     train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
-
 
     sample_batch(valid_episode_batch, episode_index, episode_reward, 'valid')
 
