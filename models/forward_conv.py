@@ -49,11 +49,10 @@ class BasicBlock(nn.Module):
 
 
 class ForwardResNet(nn.Module):
-    def __init__(self, block, data_width=10, num_channels=1, num_output_channels=512, num_actions=5, num_rewards=3, zero_init_residual=False):
+    def __init__(self, block, data_width=10, num_channels=4, num_output_channels=512, num_rewards=3, zero_init_residual=False):
         # num output channels will be num clusters
         super(ForwardResNet, self).__init__()
 
-        self.num_actions = num_actions
         self.num_rewards = num_rewards
 
         self.inplanes = 64
@@ -67,8 +66,8 @@ class ForwardResNet(nn.Module):
         self.layer_last = nn.Conv2d(netc, num_output_channels, kernel_size=1)
 
         # divide by two bc of stride length
-        self.layer_action = self._make_layer(block, netc, 1, stride=1)
-        self.layer_out_action = nn.Conv2d(netc, self.num_actions, kernel_size=data_width)
+        #self.layer_action = self._make_layer(block, netc, 1, stride=1)
+        #self.layer_out_action = nn.Conv2d(netc, self.num_actions, kernel_size=data_width)
 
         self.layer_reward = self._make_layer(block, netc, 1, stride=1)
         self.layer_out_reward = nn.Conv2d(netc, self.num_rewards, kernel_size=data_width)
@@ -112,10 +111,10 @@ class ForwardResNet(nn.Module):
         # bs,c,h,w
         nx = F.log_softmax(self.layer_last(self.layer_rec(x)), dim=1)
         # action output should be bs,n_actions,1,1]
-        act = F.log_softmax(self.layer_out_action(self.layer_action(x))[:,:,0,0], dim=1)
+        #act = F.log_softmax(self.layer_out_action(self.layer_action(x))[:,:,0,0], dim=1)
         # reward output should be bs,n_rewards,1,1]
         reward = F.log_softmax(self.layer_out_reward(self.layer_reward(x))[:,:,0,0], dim=1)
-        return nx, act, reward
+        return nx, reward
 
 if __name__ == '__main__':
     model = ForwardResNet(BasicBlock, data_width=10, num_channels=1)
