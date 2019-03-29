@@ -137,7 +137,7 @@ class VQVAE(nn.Module):
                                  )
 
     def decode_clusters(self, latents, N, H, W, C):
-        z_q_x = self.embedding(latents.view(latents.size(0), -1))
+        z_q_x = self.embedding(latents.view(latents.shape[0], -1))
         # back to NCHW (orig) - now cluster centers/class
         z_q_x = z_q_x.view(N, H, W, C).permute(0, 3, 1, 2)
         # put quantized data through decoder

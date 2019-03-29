@@ -29,7 +29,7 @@ def sample_episode(data, episode_number, episode_reward, name):
      # rollout for number of steps and decode with vqvae decoder
     states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
     s = (2*reshape_input(states)-1)
-    ns = (2*reshape_input(next_states)-1).cpu().numpy()
+    ns =(2*reshape_input(next_states)-1).cpu().numpy()
     # make channels for actions which is the size of the latents
     elen = actions.shape[0]
     channel_actions = torch.zeros((elen, forward_info['num_actions'], forward_info['hsize'], forward_info['hsize']))
@@ -60,12 +60,13 @@ def sample_episode(data, episode_number, episode_reward, name):
         all_pred_latents.append(pred_next_latents[0].cpu().numpy())
         all_pred_rewards.append(pred_rewards)
     plot_latents(all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params)
+    plot_reconstructions(s.cpu().numpy(), ns, all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params)
+
+
 
 def plot_latents(all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params):
     episode_number, episode_reward, name = params
     for i in range(args.rollout_length-1):
-        # todo - im plotting one short
-
         f,ax = plt.subplots(3,3)
         # true latent at time i
         ax[0,0].imshow(all_real_latents[i], interpolation="None")
@@ -102,7 +103,7 @@ def plot_latents(all_real_latents, all_pred_latents, all_pred_rewards, used_prev
         ax[2,2].imshow(error_ts_diff, interpolation="None")
         ax[2,2].set_title('s-s1 diff error')
 
-        iname = os.path.join(output_savepath, '%sforward_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
+        iname = os.path.join(output_savepath, '%s_latent_forward_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
         for a in range(len(ax[0])):
             for b in range(len(ax[1])):
                 ax[a,b].set_yticklabels([])
@@ -121,210 +122,91 @@ def plot_latents(all_real_latents, all_pred_latents, all_pred_rewards, used_prev
     os.system(cmd)
 
 
+def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params):
+    # TODO - feed in true actions
+    episode_number, episode_reward, name = params
+    for i in range(args.rollout_length-1):
+        # todo - this needs to go in main function so we have the option to
+        # rollout actions
+
+        all_latents = np.concatenate((all_real_latents[i][None,None],  # true s
+                                      used_prev_latents[i][None,None],  # pred s
+                                      all_real_latents[i+1][None,None], # true s+1
+                                      all_pred_latents[i][None,None], # pred s+1
+                                      ), axis=0).astype(np.int)
+        all_latents = torch.LongTensor(all_latents)
+        N,H,W,C = all_latents.shape[0],10,10,vq_largs.num_z
+        z_q_x, x_d = vqvae_model.decode_clusters(all_latents,N,H,W,C)
 
 
+        # TODO
+        nmix = 30
+        rec_mest = x_d[:,:nmix].detach()
+        if args.num_samples:
+            rec_sams = np.zeros((4, args.num_samples, 1, 80, 80))
+            for n in range(args.num_samples):
+                sam = sample_from_discretized_mix_logistic(rec_mest, vq_largs.nr_logistic_mix, only_mean=False)
+                rec_sams[:,n] = (((sam+1)/2.0)).cpu().numpy()
+            rec_est = np.mean(rec_sams, axis=1)
+        rec_mean = sample_from_discretized_mix_logistic(rec_mest, vq_largs.nr_logistic_mix, only_mean=True)
+        rec_mean = (((rec_mean+1)/2.0)).cpu().numpy()
 
-#    # true data as numpy for plotting
-#    rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)
-#    rec_true = (((rec+1)/2.0)).cpu().numpy()
-#    diff = (reshape_input(pred_states[:,1][:,None])).to(DEVICE)
-#    prev_true = (reshape_input(states[:,-2:-1])).cpu().numpy()
-#
-#    if args.reward_int:
-#        true_signals = rewards.cpu().numpy()
-#    else:
-#        true_signals = values.cpu().numpy()
-#
-#    action_preds = []
-#    action_preds_lsm = []
-#    action_preds_wrong = []
-#    action_steps = []
-#    action_trues = []
-#    signal_preds = []
-#    # (args.nr_logistic_mix/2)*3 is needed for each reconstruction
-#    raw_masks = []
-#    print("getting gradcam masks")
-#    raw_masks = np.array(raw_masks)
-#    mask_max = raw_masks.max()
-#    mask_min = raw_masks.min()
-#    raw_masks = (raw_masks-mask_min)/mask_max
-#    # flip grads for more visually appealing opencv JET colorplot
-#    raw_masks = 1-raw_masks
-#    cams = []
-#    for i in range(states.shape[0]):
-#        #heatmap = cv2.applyColorMap(np.uint8(255*raw_masks[i]), cv2.COLORMAP_AUTUMN)
-#        heatmap = cv2.applyColorMap(np.uint8(255*raw_masks[i]), cv2.COLORMAP_JET)
-#        cams.append(np.float32(heatmap)/255.0)
-#    cams = np.array(cams).astype(np.float)
-#    cams = 20 * np.log10((cams-cams.min()) + 1.)
-#    cams = (cams/cams.max())
-#    #cams = np.array([c-c.min() for c in cams])
-#    #cams = np.array([c/c.max() for c in cams])
-#
-#    print("starting vqvae")
-#    rec_sams = np.zeros((args.num_samples, 80, 80), np.float32)
-#    rec_est = np.zeros((80,80))
-#    for i in range(states.shape[0]):
-#        with torch.no_grad():
-#            cimg = cv2.cvtColor(rec_true[i,0],cv2.COLOR_GRAY2RGB).astype(np.float32)
-#            # both are between 0 and 1
-#            cam = cams[i]*.4 + cimg*.6
-#            x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = vqvae_model(x[i:i+1])
-#            rec_mest = x_d[:,:nmix].detach()
-#            diff_est = x_d[:,nmix:].detach()
-#            if args.num_samples:
-#                for n in range(args.num_samples):
-#                    sam = sample_from_discretized_mix_logistic(rec_mest, largs.nr_logistic_mix, only_mean=False)
-#                    rec_sams[n] = (((sam[0,0]+1)/2.0)).cpu().numpy()
-#                rec_est = np.mean(rec_sams, axis=0)
-#            rec_mean = sample_from_discretized_mix_logistic(rec_mest, largs.nr_logistic_mix, only_mean=True)
-#            rec_mean = (((rec_mean[0,0]+1)/2.0)).cpu().numpy()
-#
-#            # just take the mean from diff
-#            diff_est = sample_from_discretized_mix_logistic(diff_est, largs.nr_logistic_mix)[0,0]
-#            diff_true = diff[i,0]
-#
-#            if args.reward_int:
-#                print('using int reward')
-#                pred_signal = torch.argmax(pred_signals).item()
-#            elif 'num_rewards' in info.keys():
-#                pred_signal = (pred_signals[0].cpu().numpy())
-#                print('using val reward',pred_signal)
-#            else:
-#                print('using no reward')
-#                pred_signal = -99
-#
-#            signal_preds.append(pred_signal)
-#            f,ax = plt.subplots(2,4)
-#            title = 'step %s/%s action %s reward %s' %(i, states.shape[0], actions[i].item(), rewards[i].item())
-#            pred_action = torch.argmax(pred_actions).item()
-#            action = int(actions[i].item())
-#            action_preds.append(pred_action)
-#            action_preds_lsm.append(pred_actions.cpu().numpy())
-#            if pred_action != action:
-#                action_preds_wrong.append(pred_action)
-#                action_trues.append(action)
-#                action_steps.append(i)
-#
-#            print("A",action_preds_lsm[-1], pred_action, action)
-#            action_correct = pred_action == action
-#            print("R",true_signals[i], pred_signal)
-#            iname = os.path.join(output_savepath, '%s_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
-#            ax[0,0].imshow(prev_true[i,0])
-#            ax[0,0].set_title('prev TA:%s PA:%s'%(action,pred_action))
-#            ax[1,0].imshow(cam, vmin=0, vmax=1)
-#
-#            # plot action saliency map
-#            if args.action_saliency:
-#                if action_correct:
-#                    ax[1,0].set_title('gc%s PA:%s COR  '%(saliency_name,pred_action))
-#                else:
-#                    ax[1,0].set_title('gc%s PA:%s WRG'%(saliency_name,pred_action))
-#            # plot reward saliency map
-#            if args.reward_saliency:
-#                reward_correct = true_signals[i]  == pred_signal
-#                if reward_correct:
-#                    ax[1,0].set_title('gcam-%s PR:%s COR  '%(saliency_name,pred_signal))
-#                else:
-#                    ax[1,0].set_title('gcam-%s PR:%s WRG'%(saliency_name,pred_signal))
-#
-#            if args.reward_int:
-#                reward_correct = true_signals[i]  == pred_signal
-#                ax[0,1].set_title('rec true')#%(true_signals[i], pred_signal))
-#                ax[0,2].set_title('TR:%s PR:%s'%(true_signals[i], pred_signal))
-#                if reward_correct:
-#                    ax[1,1].set_title('avgest COR')
-#                    ax[1,2].set_title('samest COR')
-#                else:
-#                    ax[1,1].set_title('avgest WRG')
-#                    ax[1,2].set_title('samest WRG')
-#            elif 'num_rewards' in info.keys():
-#                ax[0,1].set_title('rec true')#%(np.round(true_signals[i],2), np.round(pred_signal,2)))
-#                ax[0,2].set_title('TR:%s PR:%s'%(np.round(true_signals[i],2), np.round(pred_signal,2)))
-#                ax[1,1].set_title('avgrec est PR:%s'%np.round(pred_signal,2))
-#                ax[1,2].set_title('samrec est PR:%s'%np.round(pred_signal,2))
-#            else:
-#                ax[0,1].set_title('rec true')
-#                ax[0,2].set_title('rec true')
-#                ax[1,1].set_title('avgrec est')
-#                ax[1,2].set_title('samrec est')
-#
-#            ax[0,1].imshow(rec_true[i,0], vmin=0, vmax=1)
-#            ax[0,2].imshow(rec_true[i,0], vmin=0, vmax=1)
-#            ax[1,1].imshow(rec_mean, vmin=0, vmax=1)
-#            ax[1,2].imshow(rec_est, vmin=0, vmax=1)
-#
-#            ax[0,3].set_title('diff true')
-#            ax[1,3].set_title('diff est')
-#            ax[0,3].imshow(diff_true, vmin=-1, vmax=1)
-#            ax[1,3].imshow(diff_est, vmin=-1, vmax=1)
-#            for a in range(2):
-#                for b in range(4):
-#                    ax[a,b].set_yticklabels([])
-#                    ax[a,b].set_xticklabels([])
-#                    ax[a,b].set_yticks([])
-#                    ax[a,b].set_xticks([])
-#            plt.tight_layout()
-#            plt.suptitle(title)
-#            plt.savefig(iname)
-#            plt.close()
-#            if not i%10:
-#                print("saving", os.path.split(iname)[1])
-#    # plot actions
-#    aname = os.path.join(output_savepath, '%s_E%05d_action.png'%(name, int(episode_number)))
-#    plt.figure()
-#    plt.scatter(action_steps, action_preds_wrong, alpha=.5, label='predict')
-#    plt.scatter(action_steps, action_trues, alpha=.1, label='actual')
-#    plt.legend()
-#    plt.savefig(aname)
-#
-#    actions = actions.cpu().data.numpy()
-#    action_preds = np.array(action_preds)
-#    actions_correct = []
-#    actions_incorrect = []
-#    actions_error = []
-#
-#    arname = os.path.join(output_savepath, '%s_E%05d_action.txt'%(name, int(episode_number)))
-#    af = open(arname, 'w')
-#    for a in sorted(list(set(actions))):
-#        actcor = np.sum(action_preds[actions==a] == actions[actions==a])
-#        acticor = np.sum(action_preds[actions==a] != actions[actions==a])
-#        error = acticor/float(np.sum(actcor+acticor))
-#        actions_correct.append(actcor)
-#        actions_incorrect.append(acticor)
-#        actions_error.append(error)
-#        v = 'action {} correct {} incorrect {} error {}'.format(a,actcor,acticor,error)
-#        print(v)
-#        af.write(v+'\n')
-#    af.close()
-#
-#    srname = os.path.join(output_savepath, '%s_E%05d_signal.txt'%(name, int(episode_number)))
-#    sf = open(srname, 'w')
-#    if args.reward_int:
-#        signal_preds = np.array(signal_preds).astype(np.int)
-#        signal_correct = []
-#        signal_incorrect = []
-#        signal_error = []
-#
-#        for s in sorted(list(set(true_signals))):
-#            sigcor = np.sum(signal_preds[true_signals==s] ==  true_signals[true_signals==s])
-#            sigicor = np.sum(signal_preds[true_signals==s] != true_signals[true_signals==s])
-#            error = sigicor/float(np.sum(sigcor+sigicor))
-#            signal_correct.append(sigcor)
-#            signal_incorrect.append(sigicor)
-#            signal_error.append(error)
-#            v = 'reward signal {} correct {} incorrect {} error {}'.format(s,sigcor,sigicor,error)
-#            print(v)
-#            sf.write(v+'\n')
-#    else:
-#        mse = np.square(signal_preds-true_signals).mean()
-#        sf.write('mse: %s'%mse)
-#    sf.close()
-#    gif_path = iname[:-10:] + '.gif'
-#    search_path = iname[:-10:] + '*.png'
-#    cmd = 'convert %s %s' %(search_path, gif_path)
-#    print('creating gif', gif_path)
-#    os.system(cmd)
+
+        ##########################################
+        f,ax = plt.subplots(3,3)
+        ax[0,0].imshow(true_states[i,-1], interpolation="None")
+        ax[0,0].set_title('%02d true s '%i)
+        ax[0,1].imshow(true_next_states[i,-1], interpolation="None")
+        ax[0,1].set_title('%02d true s1'%(i+1))
+        ax[0,2].imshow(true_next_states[i,-1], interpolation="None")
+        ax[0,2].set_title('%02d true s1'%(i+1))
+
+        #ax[1,0].imshow(rec_est[0,0], interpolation="None")
+        #ax[1,0].set_title('s rec true sam')
+
+        ## was this teacher forced or rolled out?
+        if i <  args.lead_in:
+            ax[1,0].set_title('s rec given')
+        else:
+            ax[1,0].set_title('s rec self sam')
+        ax[1,0].imshow(rec_est[1,0], interpolation="None")
+
+        ax[1,2].set_title('s1 rec tf sam')
+        ax[1,2].imshow(rec_est[2,0], interpolation="None")
+
+        ax[1,1].set_title('s1 rec est sam')
+        ax[1,1].imshow(rec_est[3,0], interpolation="None")
+
+        ax[2,0].set_title('error s')
+        serror = np.square(true_states[i,-1]-rec_est[1,0])
+        ax[2,0].imshow(serror, interpolation="None")
+
+        ax[2,1].set_title('error s1')
+        s1error = np.square(true_next_states[i,-1]-rec_est[3,0])
+        ax[2,1].imshow(s1error, interpolation="None")
+
+        ax[2,2].set_title('error tf s1')
+        s1error = np.square(true_next_states[i,-1]-rec_est[2,0])
+        ax[2,2].imshow(s1error, interpolation="None")
+
+        iname = os.path.join(output_savepath, '%s_rec_forward_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
+        print(iname)
+        for a in range(len(ax[0])):
+            for b in range(len(ax[1])):
+                ax[a,b].set_yticklabels([])
+                ax[a,b].set_xticklabels([])
+                ax[a,b].set_yticks([])
+                ax[a,b].set_xticks([])
+        plt.tight_layout()
+        #title = 'step %s/%s action %s reward %s' %(i, states.shape[0], actions[i].item(), rewards[i].item())
+        #plt.suptitle(title)
+        plt.savefig(iname)
+        plt.close()
+    gif_path = iname[:-10:] + '.gif'
+    search_path = iname[:-10:] + '*.png'
+    cmd = 'convert %s %s' %(search_path, gif_path)
+    print('creating gif', gif_path)
+    os.system(cmd)
 
 if __name__ == '__main__':
     import argparse
@@ -431,8 +313,8 @@ if __name__ == '__main__':
 
     vqvae_model.load_state_dict(vq_model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
-    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
-    #train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=True, limit=args.limit, min_reward=args.min_reward)
+    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
+    #train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
 
     conv_forward_model = ForwardResNet(BasicBlock, data_width=forward_info['hsize'],
                                        num_channels=forward_info['num_channels'],
