@@ -3,6 +3,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import sys
 import os
+from copy import deepcopy
 import torch
 from IPython import embed
 from vqvae import VQVAE
@@ -28,9 +29,12 @@ def sample_episode(data, episode_number, episode_reward, name):
     params = (episode_number, episode_reward, name)
      # rollout for number of steps and decode with vqvae decoder
     states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
-    s = (2*reshape_input(states)-1)
-    ns =(2*reshape_input(next_states)-1).cpu().numpy()
+    snp = reshape_input(deepcopy(states))
+    s = (2*reshape_input(torch.FloatTensor(states))-1)
+    nsnp = reshape_input(next_states)
+    embed()
     # make channels for actions which is the size of the latents
+    actions = torch.LongTensor(actions).to(DEVICE)
     elen = actions.shape[0]
     channel_actions = torch.zeros((elen, forward_info['num_actions'], forward_info['hsize'], forward_info['hsize']))
     for a in range(forward_info['num_actions']):
@@ -40,29 +44,27 @@ def sample_episode(data, episode_number, episode_reward, name):
     all_pred_latents = []
     all_pred_rewards = []
     used_prev_latents = []
-    assert args.lead_in > 0
+    assert args.lead_in >= 2
     for i in range(args.rollout_length):
         x_d, z_e_x, z_q_x, real_latents, pred_actions, pred_signals = vqvae_model(s[i:i+1])
         # for the ith index
         all_real_latents.append(real_latents[0].cpu().numpy())
         if i < args.lead_in:
-            latents = real_latents
+            used_prev_latents.append(real_latents)
         else:
             # use last predicted latents
-            latents = pred_next_latents
-        # predict next latent step given action
-        used_prev_latents.append(latents[0].cpu().numpy())
-        state_input = torch.cat((channel_actions[i][None,:], latents[:,None].float()), dim=1)
-        out_pred_next_latents, pred_rewards = conv_forward_model(state_input)
-        # take argmax over channels axis
-        pred_next_latents = torch.argmax(out_pred_next_latents, dim=1)
-        # prediction for the i + 1 index
-        all_pred_latents.append(pred_next_latents[0].cpu().numpy())
-        all_pred_rewards.append(pred_rewards)
-    plot_latents(all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params)
-    plot_reconstructions(s.cpu().numpy(), ns, all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params)
-
-
+            used_prev_latents.append(pred_next_latents)
+        if len(used_prev_latents) >=2:
+            state_input = torch.cat((channel_actions[i][None,:], used_prev_latents[-2][:,None].float(), used_prev_latents[-1][:,None].float()), dim=1)
+            out_pred_next_latents, pred_prev_actions, pred_rewards = conv_forward_model(state_input)
+            # take argmax over channels axis
+            pred_next_latents = torch.argmax(out_pred_next_latents, dim=1)
+            # prediction for the i + 1 index
+            all_pred_latents.append(pred_next_latents[0].cpu().numpy())
+            all_pred_rewards.append(pred_rewards)
+    used_prev_latents = [ul[0].cpu().numpy() for ul in used_prev_latents]
+    #plot_latents(all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params)
+    plot_reconstructions(snp, nsnp, all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params)
 
 def plot_latents(all_real_latents, all_pred_latents, all_pred_rewards, used_prev_latents, params):
     episode_number, episode_reward, name = params
@@ -190,7 +192,6 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         ax[2,2].imshow(s1error, interpolation="None")
 
         iname = os.path.join(output_savepath, '%s_rec_forward_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
-        print(iname)
         for a in range(len(ax[0])):
             for b in range(len(ax[1])):
                 ax[a,b].set_yticklabels([])
@@ -214,23 +215,18 @@ if __name__ == '__main__':
     if not os.path.exists(default_base_savedir):
         os.makedirs(default_base_savedir)
     parser = argparse.ArgumentParser(description='generate vq-vae')
-    parser.add_argument('forward_model_loadname', help='full path to model')
+    parser.add_argument('-l', '--forward_model_loadname', help='full path to model', default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/convnrpa00/convnrpa_0052009984ex.pt')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-as', '--action_saliency', action='store_true', default=True)
     parser.add_argument('-rs', '--reward_saliency', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=False)
-    parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-s', '--generate_savename', default='g')
     parser.add_argument('-bs', '--batch_size', default=5, type=int)
     parser.add_argument('-li', '--lead_in', default=5, type=int)
-    parser.add_argument('-rl', '--rollout_length', default=10, type=int)
+    parser.add_argument('-rl', '--rollout_length', default=20, type=int)
     parser.add_argument('-ns', '--num_samples', default=40, type=int)
     parser.add_argument('-mr', '--min_reward', default=-999, type=int)
-    parser.add_argument('-l', '--limit', default=200, type=int)
-    parser.add_argument('-n', '--max_generations', default=70, type=int)
-    parser.add_argument('-gg', '--generate_gif', action='store_true', default=False)
-    parser.add_argument('--train_only', action='store_true', default=False)
-    parser.add_argument('--test_only', action='store_true', default=False)
+    parser.add_argument('-lim', '--limit', default=1000, type=int)
 
     args = parser.parse_args()
     if args.action_saliency:
@@ -259,7 +255,7 @@ if __name__ == '__main__':
     forward_info = forward_model_dict['info']
     forward_largs = forward_info['args'][-1]
 
-    vq_model_loadpath = forward_largs.train_data_file.replace('train_forward.npz', '.pt')
+    vq_model_loadpath = forward_largs.train_data_file.replace('_train_forward.npz', '.pt')
     vq_model_dict = torch.load(vq_model_loadpath, map_location=lambda storage, loc: storage)
     vq_info = vq_model_dict['info']
     vq_largs = vq_info['args'][-1]
@@ -318,6 +314,7 @@ if __name__ == '__main__':
 
     conv_forward_model = ForwardResNet(BasicBlock, data_width=forward_info['hsize'],
                                        num_channels=forward_info['num_channels'],
+                                       num_actions=forward_info['num_actions'],
                                        num_output_channels=num_k,
                                        num_rewards=forward_info['num_rewards'])
     conv_forward_model.load_state_dict(forward_model_dict['conv_forward_model'])

@@ -15,21 +15,42 @@ def generate_forward_datasets():
     with torch.no_grad():
         for dname, data_loader in {'valid':valid_data_loader, 'train':train_data_loader}.items():
             rmax = data_loader.relative_indexes.max()
-            for st in np.arange(0, rmax, args.batch_size, dtype=np.int):
+            st = 1
+            en = 0
+            while en < rmax-1:
                 en = min(st+args.batch_size, rmax-1)
-                print('generating from %s to %s' %(st,en))
-                data = data_loader.get_data(np.arange(st, en, dtype=np.int))
+                fdata = data_loader.get_data(np.arange(st, en, dtype=np.int))
+                fterminals = list(fdata[5])
+                # end at end of episode
+                if 1 in fterminals:
+                    en = st+list(fterminals).index(1)+1
+                    data = data_loader.get_data(np.arange(st, en, dtype=np.int))
+                else:
+                    data = fdata
+                print('generating from %s to %s of %s' %(st,en,rmax))
                 states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
+                assert np.sum(terminals[:-1]) == 0
                 prev_relative_indexes = relative_indexes-1
                 prev_data = data_loader.get_data(prev_relative_indexes)
                 pstates, pactions, prewards, pvalues, pnext_states, pterminals, preset, prelative_indexes = prev_data
                 ps = (2*reshape_input(torch.FloatTensor(pstates))-1).to(DEVICE)
                 s = (2*reshape_input(torch.FloatTensor(states))-1).to(DEVICE)
                 ns = (2*reshape_input(torch.FloatTensor(next_states))-1).to(DEVICE)
+                for xx in range(s.shape[0]):
+                    try:
+                        assert ps[xx,-1].sum() == s[xx,-2].sum() ==  ns[xx,-3].sum()
+                    except:
+                        print("assert broke", xx)
+                        embed()
+                if 1 in fterminals:
+                    # skip ahead one so that prev state is correct
+                    st = en+1
+                else:
+                    st = en
                 px_d, zp_e_x, pz_q_x, platents, _, _ = vqvae_model(ps)
                 x_d, z_e_x, z_q_x, latents, _, _ = vqvae_model(s)
                 nx_d, nz_e_x, nz_q_x, nlatents, _, _ = vqvae_model(ns)
-                if not st:
+                if st==1:
                     all_prev_latents = platents.cpu()
                     all_latents = latents.cpu()
                     all_next_latents = nlatents.cpu()
@@ -81,7 +102,7 @@ if __name__ == '__main__':
                         default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex.pt')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=True)
-    parser.add_argument('-bs', '--batch_size', default=10, type=int)
+    parser.add_argument('-bs', '--batch_size', default=256, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
