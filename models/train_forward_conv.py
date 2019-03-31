@@ -83,31 +83,43 @@ def train_forward(train_cnt):
     while train_cnt < args.num_examples_to_train:
         conv_forward_model.train()
         opt.zero_grad()
-        latents, actions, rewards, values, next_latents, is_new_epoch, data_indexes = train_data_loader.get_minibatch()
-        latents = latents[:,None].to(DEVICE)
+        data = train_data_loader.get_minibatch()
+        prev_latents, prev_actions, prev_rewards, prev_values, latents, actions, rewards, values, next_latents, is_new_epoch, data_indexes = data
+        # want to predict the action taken between the prev and observed
+        # we are given the current action and need to predict next latent
+        prev_latents = torch.FloatTensor(prev_latents[:,None]).to(DEVICE)
+        latents = torch.FloatTensor(latents[:,None]).to(DEVICE)
+        # next_latents is long because of prediction
+        next_latents = torch.LongTensor(next_latents[:,None]).to(DEVICE)
+        actions = torch.LongTensor(actions).to(DEVICE)
+
+        # put actions into channel for conditioning
         bs, _, h, w = latents.shape
         channel_actions = torch.zeros((bs,num_actions,h,w)).to(DEVICE)
         for a in range(num_actions):
-            channel_actions[actions==a,a] = 1.0
-        state_input = torch.cat((channel_actions, latents), dim=1)
-        next_latents = next_latents[:,None].to(DEVICE)
+            channel_actions[actions==a,a] = 1
+        # combine input together
+        state_input = torch.cat((channel_actions, prev_latents, latents), dim=1)
+
         bs = float(latents.shape[0])
-        rewards = rewards.to(DEVICE)
-        pred_next_latents, pred_rewards = conv_forward_model(state_input)
+        rewards = torch.LongTensor(rewards).to(DEVICE)
+        prev_actions = torch.LongTensor(prev_actions).to(DEVICE)
+
+        pred_next_latents, pred_prev_actions, pred_rewards = conv_forward_model(state_input)
         # pred_next_latents shape is bs, c, h, w - need to permute shape for
         # cross entropy loss
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
         loss_rec = F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
-        #loss_act = F.nll_loss(pred_actions, actions)
+        loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
         loss_reward = F.nll_loss(pred_rewards, rewards)
-        loss = loss_rec+loss_reward
+        loss = loss_rec+loss_reward+loss_prev_act
         # cant do act because i dont have this data for the "next action"
         loss.backward(retain_graph=True)
         parameters = list(conv_forward_model.parameters())
         clip_grad_value_(parameters, 10)
         opt.step()
-        loss_list = [loss_reward.item()/bs, loss_rec.item()/bs]
+        loss_list = [loss_reward.item()/bs, loss_prev_act.item()/bs, loss_rec.item()/bs]
         if batches > 100:
             handle_checkpointing(train_cnt, loss_list)
         train_cnt+=bs
@@ -119,24 +131,38 @@ def train_forward(train_cnt):
 def valid_forward(train_cnt, do_plot=False):
     conv_forward_model.eval()
     opt.zero_grad()
-    latents, actions, rewards, values, next_latents, is_new_epoch, data_indexes = valid_data_loader.get_minibatch()
-    latents = latents[:,None].to(DEVICE)
+    valid_data = valid_data_loader.get_minibatch()
+    prev_latents, prev_actions, prev_rewards, prev_values, latents, actions, rewards, values, next_latents, is_new_epoch, data_indexes = valid_data
+    # want to predict the action taken between the prev and observed
+    # we are given the current action and need to predict next latent
+    prev_latents = torch.FloatTensor(prev_latents[:,None]).to(DEVICE)
+    latents = torch.FloatTensor(latents[:,None]).to(DEVICE)
+    # next_latents is long because of prediction
+    next_latents = torch.LongTensor(next_latents[:,None]).to(DEVICE)
+
+    # put actions into channel for conditioning
     bs, _, h, w = latents.shape
+    actions = torch.LongTensor(actions).to(DEVICE)
     channel_actions = torch.zeros((bs,num_actions,h,w)).to(DEVICE)
     for a in range(num_actions):
         channel_actions[actions==a,a] = 1.0
-    state_input = torch.cat((channel_actions, latents), dim=1)
-    next_latents = next_latents[:,None].to(DEVICE)
+    # combine input together
+    state_input = torch.cat((channel_actions, prev_latents, latents), dim=1)
+
     bs = float(latents.shape[0])
-    rewards = rewards.to(DEVICE)
-    pred_next_latents, pred_rewards = conv_forward_model(state_input)
+    rewards = torch.LongTensor(rewards).to(DEVICE)
+    prev_actions = torch.LongTensor(prev_actions).to(DEVICE)
+
+    pred_next_latents, pred_prev_actions, pred_rewards = conv_forward_model(state_input)
     # pred_next_latents shape is bs, c, h, w - need to permute shape for
     # cross entropy loss
     pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
     next_latents = next_latents.permute(0,2,3,1).contiguous()
-    loss_rec = F.cross_entropy(pred_next_latents.view(-1, num_k),  next_latents.view(-1))
+    loss_rec = F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
+    loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
     loss_reward = F.nll_loss(pred_rewards, rewards)
-    loss_list = [loss_reward.item()/bs, loss_rec.item()/bs]
+    # cant do act because i dont have this data for the "next action"
+    loss_list = [loss_reward.item()/bs, loss_prev_act.item()/bs, loss_rec.item()/bs]
     return loss_list
 
 if __name__ == '__main__':
@@ -144,9 +170,9 @@ if __name__ == '__main__':
 
     debug = 0
     parser = ArgumentParser(description='train acn')
-    parser.add_argument('--train_data_file', default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0111511596extrain_forward.npz')
+    parser.add_argument('--train_data_file', default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convnr')
+    parser.add_argument('--savename', default='convnrpa')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
         parser.add_argument('-se', '--save_every', default=100000*5, type=int)
@@ -214,12 +240,13 @@ if __name__ == '__main__':
     wsize = train_data_loader.data_w
     info['num_rewards'] = len(train_data_loader.unique_rewards)
     info['hsize'] = hsize
-    info['num_channels'] = num_actions+1
+    info['num_channels'] = num_actions+1+1
     #  !!!! TODO save this in npz and pull out
     num_k = info['num_k'] = 512
 
     conv_forward_model = ForwardResNet(BasicBlock, data_width=info['hsize'],
                                        num_channels=info['num_channels'],
+                                       num_actions=num_actions,
                                        num_output_channels=num_k,
                                        num_rewards=num_rewards)
     conv_forward_model = conv_forward_model.to(DEVICE)

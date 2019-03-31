@@ -116,7 +116,7 @@ if __name__ == '__main__':
         all_ends.extend(eends)
         file_names.extend([f for x in range(len(erewards))])
 
-    n_training = 100000
+    n_training = 1000000
     n_val = n_training*.1
     n_test = n_training*.05
     seed = 1903

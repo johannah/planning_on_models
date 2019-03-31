@@ -13,38 +13,62 @@ torch.manual_seed(394)
 
 def generate_forward_datasets():
     with torch.no_grad():
-        for dname in ['valid', 'train']:
-            reset = False
-            ecnt = 0
-            while not reset:
-                data = eval('%s_data_loader.get_unique_minibatch()'%dname)
+        for dname, data_loader in {'valid':valid_data_loader, 'train':train_data_loader}.items():
+            rmax = data_loader.relative_indexes.max()
+            for st in np.arange(0, rmax, args.batch_size, dtype=np.int):
+                en = min(st+args.batch_size, rmax-1)
+                print('generating from %s to %s' %(st,en))
+                data = data_loader.get_data(np.arange(st, en, dtype=np.int))
                 states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
-                s = (2*reshape_input(states)-1).to(DEVICE)
-                ns = (2*reshape_input(next_states)-1).to(DEVICE)
+                prev_relative_indexes = relative_indexes-1
+                prev_data = data_loader.get_data(prev_relative_indexes)
+                pstates, pactions, prewards, pvalues, pnext_states, pterminals, preset, prelative_indexes = prev_data
+                ps = (2*reshape_input(torch.FloatTensor(pstates))-1).to(DEVICE)
+                s = (2*reshape_input(torch.FloatTensor(states))-1).to(DEVICE)
+                ns = (2*reshape_input(torch.FloatTensor(next_states))-1).to(DEVICE)
+                px_d, zp_e_x, pz_q_x, platents, _, _ = vqvae_model(ps)
                 x_d, z_e_x, z_q_x, latents, _, _ = vqvae_model(s)
-                nx_d, nz_e_x, nz_q_x, next_latents, _, _ = vqvae_model(ns)
-                if not ecnt:
+                nx_d, nz_e_x, nz_q_x, nlatents, _, _ = vqvae_model(ns)
+                if not st:
+                    all_prev_latents = platents.cpu()
                     all_latents = latents.cpu()
-                    all_next_latents = next_latents.cpu()
+                    all_next_latents = nlatents.cpu()
+
+                    all_prev_actions = pactions
+                    all_prev_rewards = prewards
+                    all_prev_values = pvalues
+
                     all_rewards = rewards
                     all_values = values
                     all_actions = actions
+                    all_rel_inds = relative_indexes
                 else:
-                    all_latents = torch.cat((all_latents, latents.cpu()), dim=0)
-                    all_next_latents = torch.cat((all_next_latents, next_latents.cpu()), dim=0)
-                    all_rewards = torch.cat((all_rewards, rewards))
-                    all_values = torch.cat((all_values, values))
-                    all_actions = torch.cat((all_actions, actions))
-                ecnt +=1
+                    all_prev_latents = np.concatenate((all_prev_latents, platents.cpu().numpy()), axis=0)
+                    all_latents = np.concatenate((all_latents, latents.cpu().numpy()), axis=0)
+                    all_next_latents = np.concatenate((all_next_latents, nlatents.cpu().numpy()), axis=0)
+
+                    all_prev_rewards = np.concatenate((all_prev_rewards, prewards))
+                    all_prev_values =  np.concatenate((all_prev_values, pvalues))
+                    all_prev_actions = np.concatenate((all_prev_actions, pactions))
+
+                    all_rewards = np.concatenate((all_rewards, rewards))
+                    all_values =  np.concatenate((all_values, values))
+                    all_actions = np.concatenate((all_actions, actions))
+                    all_rel_inds = np.concatenate((all_rel_inds, relative_indexes))
 
             forward_filename = args.model_loadname.replace('.pt', '_%s_forward.npz'%dname)
             np.savez(forward_filename,
-                                latents=all_latents.numpy(),
-                                next_latents=all_next_latents.numpy(),
-                                rewards=all_rewards.numpy(),
-                                values=all_values.numpy(),
-                                actions=all_actions.numpy(),
-                                num_k=largs.num_k)
+                     relative_indexes=all_rel_inds,
+                     prev_latents=all_prev_latents,
+                     latents=all_latents,
+                     next_latents=all_next_latents,
+                     rewards=all_rewards,
+                     values=all_values,
+                     actions=all_actions,
+                     prev_rewards=all_prev_rewards,
+                     prev_values= all_prev_values,
+                     prev_actions=all_prev_actions,
+                     num_k=largs.num_k)
 
 
 if __name__ == '__main__':
@@ -53,10 +77,11 @@ if __name__ == '__main__':
     if not os.path.exists(default_base_savedir):
         os.makedirs(default_base_savedir)
     parser = argparse.ArgumentParser(description='generate vq-vae')
-    parser.add_argument('model_loadname', help='full path to model')
+    parser.add_argument('-l', '--model_loadname', help='full path to vq model',
+                        default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex.pt')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('-ri', '--reward_int', action='store_true', default=False)
-    parser.add_argument('-bs', '--batch_size', default=64, type=int)
+    parser.add_argument('-ri', '--reward_int', action='store_true', default=True)
+    parser.add_argument('-bs', '--batch_size', default=10, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
@@ -90,7 +115,7 @@ if __name__ == '__main__':
                                    valid_data_file,
                                    number_condition=4,
                                    steps_ahead=1,
-                                   batch_size=largs.batch_size,
+                                   batch_size=args.batch_size,
                                    norm_by=255.0,)
 
     args.size_training_set = valid_data_loader.num_examples

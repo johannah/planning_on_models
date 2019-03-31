@@ -247,6 +247,10 @@ class ForwardLatentDataset(Dataset):
         self.data_file = os.path.abspath(data_file)
         self.data_file = np.load(self.data_file)
         # output of vqvae embedding
+        self.prev_latents = self.data_file['prev_latents']
+        self.prev_actions = self.data_file['prev_actions']
+        self.prev_rewards = self.data_file['prev_rewards']
+        self.prev_values = self.data_file['prev_values']
         self.latents = self.data_file['latents']
         self.next_latents = self.data_file['next_latents']
         self.rewards = self.data_file['rewards']
@@ -264,7 +268,16 @@ class ForwardLatentDataset(Dataset):
 
     def get_data(self, indexes, reset=False):
         # action corresponds to the action that moves s_t to s_t+1
-        return torch.FloatTensor(self.latents[indexes]), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]), torch.LongTensor(self.next_latents[indexes]), reset, indexes
+        #return torch.FloatTensor(self.latents[indexes]),
+        #torch.LongTensor(self.actions[indexes]),
+        #torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]),
+        #torch.LongTensor(self.next_latents[indexes]), reset, indexes
+        data = (self.prev_latents[indexes], self.prev_actions[indexes],
+                self.prev_rewards[indexes], self.prev_values[indexes],
+                self.latents[indexes], self.actions[indexes],
+                self.rewards[indexes], self.values[indexes],
+                self.next_latents[indexes], reset, indexes)
+        return data
 
     def get_minibatch(self):
         indexes = self.random_state.choice(self.index_array, self.batch_size)
@@ -298,22 +311,19 @@ class AtariDataset(Dataset):
         assert(self.steps_ahead>=0)
         self.norm_by = float(norm_by)
         self.data_file = np.load(self.data_file)
-        self.frames = self.data_file['frames'].astype(np.float)/255.
         # TODO! Rewards should be normalized
-        self.rewards = self.data_file['rewards']
-        self.values = self.data_file['values']
+        self.rewards = self.data_file['rewards'].astype(np.int16)
+        self.values = self.data_file['values'].astype(np.float32)
         self.unique_rewards = list(set(self.rewards))
-        self.terminals = self.data_file['terminals'].astype(np.int)
-        self.actions = self.data_file['actions']
+        self.terminals = self.data_file['terminals'].astype(np.int16)
+        self.actions = self.data_file['actions'].astype(np.int16)
         self.action_space = sorted(list(set(self.actions)))
         self.n_actions = len(self.action_space)
         self.episodic_reward=self.data_file['episodic_reward']
-
+        self.frames = self.data_file['frames']
+        #self.num_examples,self.data_h,self.data_w = self.data_file['frames'].shape
         self.num_examples,self.data_h,self.data_w = self.frames.shape
 
-        self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
-        self.mb_next_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
-        self.mb_pred_states = np.zeros((batch_size, 2, self.data_h, self.data_w), np.float32)
 
         self.index_array = list(np.arange(self.num_condition, self.num_examples, dtype=np.int))
         # ending indexes cannot be selected
@@ -331,10 +341,16 @@ class AtariDataset(Dataset):
         self.reset_batch()
         # location of start and ends of episodes in "relative indexes"
         self.ends = list(np.where(self.terminals[self.index_array[self.relative_indexes]] == 1)[0])[:-1]
-        self.starts = [e+1 for e in self.ends]
+        #self.starts = [e+1 for e in self.ends]
+        # dont start at very beginning because need-1 states in generating
+        # latents
+        self.starts = [e+2 for e in self.ends]
         self.starts.insert(0,0)
         self.ends.append(len(self.relative_indexes))
         self.episode_indexes = [x for x in range(len(self.starts))]
+        self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
+        self.mb_next_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
+        self.mb_pred_states = np.zeros((batch_size, 2, self.data_h, self.data_w), np.float32)
 
     def reset_batch(self):
         self.unique_index_array = deepcopy(self.relative_indexes)
@@ -342,7 +358,7 @@ class AtariDataset(Dataset):
     def __getstates__(self, index):
         # determine if this is beginning of episode
         # index refers to the next_state index
-
+        #frames = self.data_file['frames'][index-self.num_condition:index+1].astype(np.float32)/255.0
         frames = self.frames[index-self.num_condition:index+1]
         try:
             assert (np.sum(self.terminals[index-self.num_condition:index]) == 0)
@@ -359,17 +375,22 @@ class AtariDataset(Dataset):
 
     def get_data(self, relative_indexes, reset=False):
         # action corresponds to the action that moves s_t to s_t+1
+
         indexes = self.index_array[relative_indexes]
         batch_size = len(relative_indexes)
-        if (batch_size != self.mb_next_states.shape[0]):
+        if batch_size != self.mb_next_states.shape[0]:
             self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
             self.mb_next_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
         for i, idx in enumerate(indexes):
             # todo - proper norm
             st, nst = self.__getstates__(idx)
+            #print(i, idx, st.sum())
             self.mb_states[i] = st
             self.mb_next_states[i] = nst
-        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]), torch.FloatTensor(self.mb_next_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
+        self.mb_states = self.mb_states/255.0
+        self.mb_next_states = self.mb_states/255.0
+        #print('finished getting data', relative_indexes)
+        return self.mb_states, self.actions[indexes], self.rewards[indexes], self.values[indexes], self.mb_next_states, self.terminals[indexes], reset, relative_indexes
 
     def get_minibatch(self):
         relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
@@ -409,7 +430,7 @@ class AtariDataset(Dataset):
     def get_framediff_data(self, relative_indexes, reset=False):
         indexes = self.index_array[relative_indexes]
         batch_size = len(relative_indexes)
-        if (batch_size != self.mb_pred_states.shape[0]):
+        if batch_size != self.mb_pred_states.shape[0]:
             self.mb_states = np.zeros((batch_size, self.num_condition, self.data_h, self.data_w), np.float32)
             self.mb_pred_states = np.zeros((batch_size, 2, self.data_h, self.data_w), np.float32)
         for i, idx in enumerate(indexes):
@@ -424,7 +445,12 @@ class AtariDataset(Dataset):
             self.mb_pred_states[i,1] = nst[-2]-nst[-1]
             # the action is the action which brings us from nst[-2] to nst[-1] (
             # (or st[-1] to nst[-1])
-        return torch.FloatTensor(self.mb_states), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]), torch.FloatTensor(self.mb_pred_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
+        #return torch.FloatTensor(mb_states), torch.LongTensor(self.actions[indexes]), torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]), torch.FloatTensor(mb_pred_states), torch.LongTensor(self.terminals[indexes]), reset, relative_indexes
+        # TODO - reinstate self.mb_states to save time
+        # TODO - also fix all the code i broke by making this not a tensor
+        self.mb_states = self.mb_states/255.0
+        self.mb_pred_states = self.mb_pred_states/255.0
+        return self.mb_states, self.actions[indexes], self.rewards[indexes], self.values[indexes], self.mb_pred_states, self.terminals[indexes], reset, relative_indexes
 
     def get_framediff_minibatch(self):
         relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
