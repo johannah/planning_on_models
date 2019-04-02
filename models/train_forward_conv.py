@@ -173,7 +173,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file', default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convndropp2')
+    parser.add_argument('--savename', default='convndropar100xrec')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
         parser.add_argument('-se', '--save_every', default=100000*5, type=int)
