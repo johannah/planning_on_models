@@ -166,7 +166,10 @@ class VQVAE(nn.Module):
         # broadcast to determine distance from encoder output to clusters
         # NHWC -> NHWCK
         measure = z_e_x_transposed.unsqueeze(4) - emb[None, None, None]
+        # num_clusters=512, num_z=64
+        # measure is of shape bs,10,10,64,512
         # square each element, then sum over channels
+        # take sum over each z - find min
         dists = torch.pow(measure, 2).sum(-2)
         # pytorch gives real min and arg min - select argmin
         # this is the closest k for each sample - Equation 1

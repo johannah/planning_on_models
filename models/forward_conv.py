@@ -49,7 +49,8 @@ class BasicBlock(nn.Module):
 
 
 class ForwardResNet(nn.Module):
-    def __init__(self, block, num_actions=5, data_width=10, num_channels=4, num_output_channels=512, num_rewards=3, zero_init_residual=False):
+    def __init__(self, block, num_actions=5, data_width=10, num_channels=4,
+                 num_output_channels=512, num_rewards=3, dropout_prob=0.0, zero_init_residual=False):
         # num output channels will be num clusters
         super(ForwardResNet, self).__init__()
 
@@ -59,6 +60,10 @@ class ForwardResNet(nn.Module):
 
         self.inplanes = 128
         netc = 128
+        # dropout the observed latent
+        self.dropout_s = nn.Dropout(p=dropout_prob)
+        # dropout the prev latent
+        self.dropout_sm1 = nn.Dropout(p=dropout_prob)
         self.conv1 = nn.Conv2d(num_channels, netc, kernel_size=1, stride=1, padding=0, bias=False)
         self.relu = nn.ReLU(inplace=True)
         self.layer1 = self._make_layer(block, netc, 2, stride=1)
@@ -107,19 +112,26 @@ class ForwardResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.relu(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
+        # observed state
+        do = self.dropout_s(x[:,-1][:,None])
+        # prev observed state
+        dpo = self.dropout_s(x[:,-2][:,None])
+        # feed dropped out data back into x
+        dx = torch.cat((x[:,:-2],do,dpo),dim=1)
+        dx = self.conv1(dx)
+        dx = self.relu(dx)
+        dx = self.layer1(dx)
+        dx = self.layer2(dx)
+        dx = self.layer3(dx)
         # action output should be bs,n_actions,1,1]
-        prev_act = F.log_softmax(self.layer_out_prev_action(self.layer_prev_action(x))[:,:,0,0], dim=1)
-        x = self.layer4(x)
+        prev_act = F.log_softmax(self.layer_out_prev_action(self.layer_prev_action(dx))[:,:,0,0], dim=1)
+        # give additional layer to reconstruction
+        dx = self.layer4(dx)
         # bs,c,h,w
-        nx = F.log_softmax(self.layer_last(self.layer_rec(x)), dim=1)
+        nx = F.log_softmax(self.layer_last(self.layer_rec(dx)), dim=1)
         # reward output should be bs,n_rewards,1,1]
         # should i feed in nx here?
-        reward = F.log_softmax(self.layer_out_reward(self.layer_reward(x))[:,:,0,0], dim=1)
+        reward = F.log_softmax(self.layer_out_reward(self.layer_reward(dx))[:,:,0,0], dim=1)
         return nx, prev_act, reward
 
 if __name__ == '__main__':

@@ -15,6 +15,7 @@ def generate_forward_datasets():
     with torch.no_grad():
         for dname, data_loader in {'valid':valid_data_loader, 'train':train_data_loader}.items():
             rmax = data_loader.relative_indexes.max()
+            new = True
             st = 1
             en = 0
             while en < rmax-1:
@@ -42,15 +43,10 @@ def generate_forward_datasets():
                     except:
                         print("assert broke", xx)
                         embed()
-                if 1 in fterminals:
-                    # skip ahead one so that prev state is correct
-                    st = en+1
-                else:
-                    st = en
                 px_d, zp_e_x, pz_q_x, platents, _, _ = vqvae_model(ps)
                 x_d, z_e_x, z_q_x, latents, _, _ = vqvae_model(s)
                 nx_d, nz_e_x, nz_q_x, nlatents, _, _ = vqvae_model(ns)
-                if st==1:
+                if new:
                     all_prev_latents = platents.cpu()
                     all_latents = latents.cpu()
                     all_next_latents = nlatents.cpu()
@@ -63,6 +59,7 @@ def generate_forward_datasets():
                     all_values = values
                     all_actions = actions
                     all_rel_inds = relative_indexes
+                    new = False
                 else:
                     all_prev_latents = np.concatenate((all_prev_latents, platents.cpu().numpy()), axis=0)
                     all_latents = np.concatenate((all_latents, latents.cpu().numpy()), axis=0)
@@ -76,6 +73,11 @@ def generate_forward_datasets():
                     all_values =  np.concatenate((all_values, values))
                     all_actions = np.concatenate((all_actions, actions))
                     all_rel_inds = np.concatenate((all_rel_inds, relative_indexes))
+                if 1 in fterminals:
+                    # skip ahead one so that prev state is correct
+                    st = en+1
+                else:
+                    st = en
 
             forward_filename = args.model_loadname.replace('.pt', '_%s_forward.npz'%dname)
             np.savez(forward_filename,
@@ -102,7 +104,7 @@ if __name__ == '__main__':
                         default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex.pt')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=True)
-    parser.add_argument('-bs', '--batch_size', default=256, type=int)
+    parser.add_argument('-bs', '--batch_size', default=128, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'

@@ -56,10 +56,10 @@ class ModelOutputs():
     1. The network output.
     2. Activations from intermediate targeted layers.
     3. Gradients from intermediate targeted layers. """
-    def __init__(self, model, target_layers):
+    def __init__(self, model, model_head, target_layers):
         self.model = model
+        self.model_head = self.model_head
         self.feature_extractor = FeatureExtractor(self.model, target_layers)
-        #self.feature_extractor = FeatureExtractor(self.model.action_conv, ['4'])
 
     def get_gradients(self):
         return self.feature_extractor.gradients
@@ -67,21 +67,25 @@ class ModelOutputs():
     def __call__(self, x):
         target_activations, output  = self.feature_extractor(x)
         #output = output.view(output.size(0), -1)
-        if args.action_saliency:
-            output = self.model.action_conv(output)[:,:,0,0]
-        if args.reward_saliency:
-            output = self.model.int_reward_conv(output)[:,:,0,0]
+        #if args.action_saliency:
+        #    output = self.model.action_conv(output)[:,:,0,0]
+        #if args.reward_saliency:
+        #    output = self.model.int_reward_conv(output)[:,:,0,0]
+        output = self.model_head(output)[:,:,0,0]
         return target_activations, output
 
 class GradCam:
-    def __init__(self, model, target_layer_names, use_cuda):
+    def __init__(self, model, model_head, target_layer_names, use_cuda):
         self.model = model
+        # which output head to run through
+        # self.model_head = self.model.action_conv(output)[:,:,0,0]
+        self.model_head = self.model_head
         self.model.eval()
         self.cuda = use_cuda
         if self.cuda:
             self.model = model.cuda()
 
-        self.extractor = ModelOutputs(self.model, target_layer_names)
+        self.extractor = ModelOutputs(self.model, self.model_head, target_layer_names)
 
     def forward(self, input):
         x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = self.model(input)
@@ -180,15 +184,14 @@ class GuidedBackpropReLUModel:
         # self.model.features.zero_grad()
         # self.model.classifier.zero_grad()
         one_hot.backward(retain_graph=True)
-
         output = input.grad.cpu().data.numpy()
         output = output[0,:,:,:]
-
         return output
 
 def sample_batch(data, episode_number, episode_reward, name):
     nmix = int(info['num_output_mixtures']/2)
-    grad_cam = GradCam(model=vqvae_model, target_layer_names=['10'], use_cuda=args.use_cuda)
+    grad_cam = GradCam(model=vqvae_model, model_head=vqvae_model.action_conv,
+                       target_layer_names=['10'], use_cuda=args.use_cuda)
     # If None, returns the map for the highest scoring category.
     # Otherwise, targets the requested index.
     target_index = None

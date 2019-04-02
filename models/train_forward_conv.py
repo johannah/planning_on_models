@@ -110,10 +110,11 @@ def train_forward(train_cnt):
         # cross entropy loss
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
-        loss_rec = F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
+        loss_rec = args.alpha_rec*F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
         loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
         loss_reward = F.nll_loss(pred_rewards, rewards)
         loss = loss_rec+loss_reward+loss_prev_act
+        #loss = loss_rec
         # cant do act because i dont have this data for the "next action"
         loss.backward(retain_graph=True)
         parameters = list(conv_forward_model.parameters())
@@ -158,7 +159,7 @@ def valid_forward(train_cnt, do_plot=False):
     # cross entropy loss
     pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
     next_latents = next_latents.permute(0,2,3,1).contiguous()
-    loss_rec = F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
+    loss_rec = args.alpha_rec*F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
     loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
     loss_reward = F.nll_loss(pred_rewards, rewards)
     # cant do act because i dont have this data for the "next action"
@@ -172,7 +173,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file', default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convnrpa')
+    parser.add_argument('--savename', default='convndropp2')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
         parser.add_argument('-se', '--save_every', default=100000*5, type=int)
@@ -183,6 +184,9 @@ if __name__ == '__main__':
         parser.add_argument('-pe', '--plot_every', default=10, type=int)
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
+    # increased the alpha rec
+    parser.add_argument('-ar', '--alpha_rec', default=150.0, type=float)
+    parser.add_argument('-d', '--dropout_prob', default=0.5, type=float)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=int(1e10), type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-5)
@@ -244,11 +248,13 @@ if __name__ == '__main__':
     #  !!!! TODO save this in npz and pull out
     num_k = info['num_k'] = 512
 
+    args.alpha_rec = 100.0
     conv_forward_model = ForwardResNet(BasicBlock, data_width=info['hsize'],
                                        num_channels=info['num_channels'],
                                        num_actions=num_actions,
                                        num_output_channels=num_k,
-                                       num_rewards=num_rewards)
+                                       num_rewards=num_rewards,
+                                       dropout_prob=args.dropout_prob)
     conv_forward_model = conv_forward_model.to(DEVICE)
     parameters = list(conv_forward_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
