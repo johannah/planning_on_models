@@ -93,13 +93,13 @@ def train_vqvae(train_cnt):
         #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
         states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_framediff_minibatch()
         # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
-        states = (2*reshape_input(states)-1).to(DEVICE)
-        rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)
-        actions = actions.to(DEVICE)
-        rewards = rewards.to(DEVICE)
-        x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(states)
+        states = (2*reshape_input(torch.FloatTensor(states))-1).to(DEVICE)
+        rec = (2*reshape_input(torch.FloatTensor(pred_states)[:,0][:,None])-1).to(DEVICE)
+        actions = torch.LongTensor(actions).to(DEVICE)
+        rewards = torch.LongTensor(rewards).to(DEVICE)
         # dont normalize diff
-        diff = (reshape_input(pred_states[:,1][:,None])).to(DEVICE)
+        diff = (reshape_input(torch.FloatTensor(pred_states)[:,1][:,None])).to(DEVICE)
+        x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(states)
         # (args.nr_logistic_mix/2)*3 is needed for each reconstruction
         z_q_x.retain_grad()
         rec_est =  x_d[:, :nmix]
@@ -134,14 +134,19 @@ def train_vqvae(train_cnt):
 
 def valid_vqvae(train_cnt, do_plot=False):
     vqvae_model.eval()
-    #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_unique_minibatch()
     states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_framediff_minibatch()
-    # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
-    states = (2*reshape_input(states)-1).to(DEVICE)
-    rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)
-    diff = (2*reshape_input(pred_states[:,1][:,None])-1).to(DEVICE)
-    actions = actions.to(DEVICE)
-    rewards = rewards.to(DEVICE)
+    states = (2*reshape_input(torch.FloatTensor(states))-1).to(DEVICE)
+    rec = (2*reshape_input(torch.FloatTensor(pred_states)[:,0][:,None])-1).to(DEVICE)
+    actions = torch.LongTensor(actions).to(DEVICE)
+    rewards = torch.LongTensor(rewards).to(DEVICE)
+    # dont normalize diff
+    diff = (reshape_input(torch.FloatTensor(pred_states)[:,1][:,None])).to(DEVICE)
+    ## because we have 4 layers in vqvae, need to be divisible by 2, 4 times
+    #states = (2*reshape_input(states)-1).to(DEVICE)
+    #rec = (2*reshape_input(pred_states[:,0][:,None])-1).to(DEVICE)
+    #diff = (2*reshape_input(pred_states[:,1][:,None])-1).to(DEVICE)
+    #actions = actions.to(DEVICE)
+    #rewards = rewards.to(DEVICE)
     x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(states)
     # (args.nr_logistic_mix/2)*3 is needed for each reconstruction
     z_q_x.retain_grad()
@@ -158,7 +163,6 @@ def valid_vqvae(train_cnt, do_plot=False):
     bs,yc,yh,yw = x_d.shape
     yhat = sample_from_discretized_mix_logistic(rec_est, args.nr_logistic_mix)
     if do_plot:
-        print('writing img')
         n_imgs = 8
         n = min(states.shape[0], n_imgs)
         gold = (rec.to('cpu')+1)/2.0
@@ -183,7 +187,8 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='vqdiffactintreward')
+    #parser.add_argument('--savename', default='vqdiffactintreward')
+    parser.add_argument('--savename', default='DEBUGvqdiffactintreward')
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     if not debug:
