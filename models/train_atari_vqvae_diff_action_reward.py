@@ -47,7 +47,7 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
         tot_plot_dict = {
                          'valid loss':{'index':info['valid_cnts'],
                                             'val':valid_losses.sum(axis=1)},
-                         'train loss %s'%i:{'index':info['train_cnts'],
+                         'train loss':{'index':info['train_cnts'],
                                             'val':train_losses.sum(axis=1)},
                     }
         plot_dict_losses(tot_plot_dict, name=tot_plot_name, rolling_length=rolling)
@@ -191,7 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     #parser.add_argument('--savename', default='vqdiffactintreward')
-    parser.add_argument('--savename', default='vqdiffactintreward256q')
+    parser.add_argument('--savename', default='vqdiffactintreward512q')
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     if not debug:
