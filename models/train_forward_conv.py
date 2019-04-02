@@ -13,6 +13,7 @@ from IPython import embed
 from lstm_utils import plot_dict_losses
 from ae_utils import save_checkpoint
 from datasets import ForwardLatentDataset
+from vqvae import VQVAE
 torch.manual_seed(394)
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
@@ -111,10 +112,12 @@ def train_forward(train_cnt):
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
         loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='sum')
-        loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
-        loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
-        loss = loss_rec+loss_reward+loss_prev_act
-        #loss = loss_rec
+
+        #TODO - need to add vq loss for action, reward
+        #loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
+        #loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+        #loss = loss_rec+loss_reward+loss_prev_act
+        loss = loss_rec
         # cant do act because i dont have this data for the "next action"
         loss.backward(retain_graph=True)
         parameters = list(conv_forward_model.parameters())
@@ -259,7 +262,42 @@ if __name__ == '__main__':
     info['num_channels'] = num_actions+1+1
 
     #  !!!! TODO save this in npz and pull out
-    num_k = info['num_k'] = 512
+    #num_k = info['num_k'] = 512
+    ###########################################3
+    # load vq model
+    vq_model_loadpath = args.train_data_file.replace('_train_forward.npz', '.pt')
+    vq_model_dict = torch.load(vq_model_loadpath, map_location=lambda storage, loc: storage)
+    vq_info = vq_model_dict['info']
+    vq_largs = vq_info['args'][-1]
+    ###########################################3
+
+    #train_data_loader = AtariDataset(
+    #                               train_data_file,
+    #                               number_condition=4,
+    #                               steps_ahead=1,
+    #                               batch_size=args.batch_size,
+    #                               norm_by=255.,)
+    #valid_data_loader = AtariDataset(
+    #                               valid_data_file,
+    #                               number_condition=4,
+    #                               steps_ahead=1,
+    #                               batch_size=args.batch_size,
+    #                               norm_by=255.0,)
+
+    #args.size_training_set = valid_data_loader.num_examples
+    #hsize = valid_data_loader.data_h
+    #wsize = valid_data_loader.data_w
+
+    num_k = vq_largs.num_k
+    if vq_largs.reward_int:
+        int_reward = vq_info['num_rewards']
+        vqvae_model = VQVAE(num_clusters=num_k,
+                            encoder_output_size=vq_largs.num_z,
+                            num_output_mixtures=vq_info['num_output_mixtures'],
+                            in_channels_size=vq_largs.number_condition,
+                            n_actions=vq_info['num_actions'],
+                            int_reward=vq_info['num_rewards']).to(DEVICE)
+    vqvae_model.load_state_dict(vq_model_dict['vqvae_state_dict'])
 
     conv_forward_model = ForwardResNet(BasicBlock, data_width=info['hsize'],
                                        num_channels=info['num_channels'],

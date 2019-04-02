@@ -137,25 +137,28 @@ class VQVAE(nn.Module):
                                  )
 
     def decode_clusters(self, latents, N, H, W, C):
+        action = -1
+        reward = -1
+        #z_q_x, x_tilde = self.decode_clusters(latents, N, H, W, C)
         z_q_x = self.embedding(latents.view(latents.shape[0], -1))
         # back to NCHW (orig) - now cluster centers/class
         z_q_x = z_q_x.view(N, H, W, C).permute(0, 3, 1, 2)
         # put quantized data through decoder
         x_tilde = self.decoder(z_q_x)
-        return z_q_x, x_tilde
-
-    def forward(self, x):
-        action = -1
-        reward = -1
-        # get continuous output directly from encoder
-        z_e_x = self.encoder(x)
+        # Move prediction to the z_q_x from z_e_x so that I can decode forward
         if self.n_actions > 0:
-            action = F.log_softmax(self.action_conv(z_e_x)[:,:,0,0], dim=1)
+            action = F.log_softmax(self.action_conv(z_q_x)[:,:,0,0], dim=1)
         # can predict value or reward
         if self.int_reward > 0:
-            reward = F.log_softmax(self.int_reward_conv(z_e_x)[:,:,0,0], dim=1)
+            reward = F.log_softmax(self.int_reward_conv(z_q_x)[:,:,0,0], dim=1)
         if self.reward_value:
-            reward = self.reward_val_conv(z_e_x)[:,0,0,0]
+            reward = self.reward_val_conv(z_q_x)[:,0,0,0]
+        return x_tilde, z_e_x, z_q_x, latents, action, reward
+        #return z_q_x, x_tilde
+
+    def forward(self, x):
+        # get continuous output directly from encoder
+        z_e_x = self.encoder(x)
         # NCHW is the order in the encoder
         # (num, channels, height, width)
         N, C, H, W = z_e_x.size()
@@ -176,9 +179,17 @@ class VQVAE(nn.Module):
         # latents is a array of integers
         latents = dists.min(-1)[1]
         # look up cluster centers
-        z_q_x, x_tilde = self.decode_clusters(latents, N, H, W, C)
-        return x_tilde, z_e_x, z_q_x, latents, action, reward
-
+        return self.decode_clusters(latents, N, H, W, C)
+        #z_q_x, x_tilde = self.decode_clusters(latents, N, H, W, C)
+        ## Move prediction to the z_q_x from z_e_x so that I can decode forward
+        #if self.n_actions > 0:
+        #    action = F.log_softmax(self.action_conv(z_q_x)[:,:,0,0], dim=1)
+        ## can predict value or reward
+        #if self.int_reward > 0:
+        #    reward = F.log_softmax(self.int_reward_conv(z_q_x)[:,:,0,0], dim=1)
+        #if self.reward_value:
+        #    reward = self.reward_val_conv(z_q_x)[:,0,0,0]
+        #return x_tilde, z_e_x, z_q_x, latents, action, reward
 
 if __name__ == '__main__':
     use_cuda = False

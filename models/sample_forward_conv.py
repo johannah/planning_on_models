@@ -18,9 +18,9 @@ from grad_cam import GradCam
 import cv2
 
 def sample_episode(data, episode_number, episode_reward, name):
-    params = (episode_number, episode_reward, name)
      # rollout for number of steps and decode with vqvae decoder
     states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
+    params = (episode_number, episode_reward, name, actions, rewards)
     snp = reshape_input(deepcopy(states))
     s = (2*reshape_input(torch.FloatTensor(states))-1)
     nsnp = reshape_input(next_states)
@@ -65,15 +65,15 @@ def sample_episode(data, episode_number, episode_reward, name):
         pred_next_latents = torch.argmax(out_pred_next_latents, dim=1)
         # replace true with this
         all_pred_latents[i] = pred_next_latents[0].float()
-        all_pred_rewards.append(pred_rewards)
+        all_pred_rewards.append(torch.argmax(pred_rewards).item())
 
     all_pred_latents = all_pred_latents.cpu().numpy()
     all_real_latents = all_real_latents.cpu().numpy()
-    #plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, all_pred_rewards, params)
     plot_reconstructions(snp, nsnp, all_real_latents, all_tf_pred_latents, all_pred_latents, all_pred_rewards, params)
+    plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, all_pred_rewards, params)
 
 def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, all_pred_rewards, params):
-    episode_number, episode_reward, name = params
+    episode_number, episode_reward, name, actions, rewards = params
     for i in range(3, args.rollout_length-1):
         f,ax = plt.subplots(3,3)
         # true latent at time i
@@ -132,7 +132,6 @@ def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, all_pr
     print('creating gif', gif_path)
     os.system(cmd)
 
-
 def sample_from_vq(latents):
     latents = torch.LongTensor(latents)
     N,H,W,C = latents.shape[0],10,10,vq_largs.num_z
@@ -164,6 +163,7 @@ def get_grad_cams(s):
     # s should be np of shape [bs,4,80,80]
     s = (2*(torch.FloatTensor(s))-1)
     nn = s.shape[0]
+    print("getting grad cams for %s"%nn)
     grad_cam = GradCam(model=vqvae_model, model_head=vqvae_model.action_conv,
                        target_layer_names=['10'], use_cuda=args.use_cuda)
     target_index = None
@@ -188,8 +188,7 @@ def get_grad_cams(s):
     return heatmaps
 
 def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, all_pred_rewards, params):
-    episode_number, episode_reward, name = params
-
+    episode_number, episode_reward, name, actions, rewards = params
     real_est, real_mean = sample_from_vq(all_real_latents)
     pred_est, pred_mean = sample_from_vq(all_pred_latents)
     # tf so every forward was only one step ahead
@@ -224,10 +223,10 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         else:
             # given state was a rollout
             s_rec = pred_est[i,0]
-            ax[1,0].set_title('s rollout self')
+            ax[1,0].set_title('s roll self')
         ax[1,0].imshow(s_rec, interpolation="None")
 
-        ax[1,1].set_title('s1 rollout sam')
+        ax[1,1].set_title('s1 roll R%sPR%s'%(int(rewards[i]), int(all_pred_rewards[i])))
         ax[1,1].imshow(pred_est[i,0], interpolation="None")
 
         ax[2,0].set_title('error s')
@@ -239,9 +238,9 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         ax[2,1].imshow(s1error, interpolation="None")
 
         ax[1,2].imshow(tf_pred_est[i, 0], interpolation="None")
-        ax[1,2].set_title('%02d forward tf s1'%(i+1))
+        ax[1,2].set_title('%02d for tf s1'%(i+1))
 
-        ax[2,2].set_title('error forward tf s1')
+        ax[2,2].set_title('error for tf s1')
         s1error = np.square(true_next_states[i,-1]-tf_pred_est[i,0])
         ax[2,2].imshow(s1error, interpolation="None")
 
@@ -369,14 +368,15 @@ if __name__ == '__main__':
     vqvae_model.load_state_dict(vq_model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
     args.limit = args.rollout_length+15
+    num_k = vq_largs.num_k
     valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
     #train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
-
     conv_forward_model = ForwardResNet(BasicBlock, data_width=forward_info['hsize'],
                                        num_channels=forward_info['num_channels'],
                                        num_actions=forward_info['num_actions'],
                                        num_output_channels=num_k,
-                                       num_rewards=forward_info['num_rewards'])
+                                       num_rewards=forward_info['num_rewards'],
+                                       dropout_prob=0.0)
     conv_forward_model.load_state_dict(forward_model_dict['conv_forward_model'])
     conv_forward_model = conv_forward_model.to(DEVICE)
 
