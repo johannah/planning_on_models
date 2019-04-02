@@ -104,21 +104,24 @@ def train_vqvae(train_cnt):
         z_q_x.retain_grad()
         rec_est =  x_d[:, :nmix]
         diff_est = x_d[:, nmix:]
-        loss_rec = discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
+        loss_rec = args.alpha_rec*discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
         loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
         loss_act = F.nll_loss(pred_actions, actions)
-        loss_act.backward(retain_graph=True)
-        # TODO - should be ordinal???
-        loss_rewards = F.nll_loss(pred_rewards, rewards)
-        loss_rewards.backward(retain_graph=True)
+        loss_rewards = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
         loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
-        loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
+
+        loss_act.backward(retain_graph=True)
+        loss_rewards.backward(retain_graph=True)
+
         loss_rec.backward(retain_graph=True)
         loss_diff.backward(retain_graph=True)
+
+        loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
         vqvae_model.embedding.zero_grad()
         z_e_x.backward(z_q_x.grad, retain_graph=True)
         loss_2.backward(retain_graph=True)
         loss_3.backward()
+
         parameters = list(vqvae_model.parameters())
         clip_grad_value_(parameters, 10)
         opt.step()
@@ -152,11 +155,11 @@ def valid_vqvae(train_cnt, do_plot=False):
     z_q_x.retain_grad()
     rec_est =  x_d[:, :nmix]
     diff_est = x_d[:, nmix:]
-    loss_rec = discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
+    loss_rec = args.alpha_rec*discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
     loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
     loss_act = F.nll_loss(pred_actions, actions)
     loss_act.backward(retain_graph=True)
-    loss_rewards = F.nll_loss(pred_rewards, rewards)
+    loss_rewards = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
     loss_rewards.backward(retain_graph=True)
     loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
     loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
@@ -200,6 +203,7 @@ if __name__ == '__main__':
         parser.add_argument('-pe', '--plot_every', default=10, type=int)
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-b', '--beta', default=0.25, type=float, help='scale for loss 3, commitment loss in vqvae')
+    parser.add_argument('-ar', '--alpha_rec', default=10, type=float, help='scale for loss 3, commitment loss in vqvae')
     parser.add_argument('-z', '--num_z', default=64, type=int)
     parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
@@ -238,8 +242,8 @@ if __name__ == '__main__':
                  'last_save':0,
                  'last_plot':0,
                  'norm_by':255.0,
+                 'reward_weights': [1,100]
                   }
-
 
          ## size of latents flattened - dependent on architecture of vqvae
          #info['float_condition_size'] = 100*args.num_z
@@ -253,6 +257,8 @@ if __name__ == '__main__':
         model_base_filepath = os.path.join(model_base_filedir, args.savename)
         train_cnt = info['train_cnts'][-1]
         info['loaded_from'] = args.model_loadpath
+        if 'reward_weights' not in info.keys():
+            info['reward_weights'] = [1,100]
     train_data_loader = AtariDataset(
                                    train_data_file,
                                    number_condition=args.number_condition,
@@ -270,6 +276,11 @@ if __name__ == '__main__':
     hsize = train_data_loader.data_h
     wsize = train_data_loader.data_w
     info['num_rewards'] = len(train_data_loader.unique_rewards)
+
+    reward_loss_weight = torch.ones(info['num_rewards']).to(DEVICE)
+    for i, w  in enumerate(info['reward_weights']):
+        reward_loss_weight[i] *= w
+
     # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
     # decorelated channel
     info['num_channels'] = 2

@@ -16,6 +16,7 @@ from datasets import ForwardLatentDataset
 torch.manual_seed(394)
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
+    print('train loss', avg_train_losses)
     info['train_losses_list'].append(avg_train_losses)
     info['train_cnts'].append(train_cnt)
     avg_valid_losses = valid_forward(train_cnt, do_plot)
@@ -107,12 +108,11 @@ def train_forward(train_cnt):
 
         pred_next_latents, pred_prev_actions, pred_rewards = conv_forward_model(state_input)
         # pred_next_latents shape is bs, c, h, w - need to permute shape for
-        # cross entropy loss
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
-        loss_rec = args.alpha_rec*F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
+        loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
         loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
-        loss_reward = F.nll_loss(pred_rewards, rewards)
+        loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
         loss = loss_rec+loss_reward+loss_prev_act
         #loss = loss_rec
         # cant do act because i dont have this data for the "next action"
@@ -159,11 +159,14 @@ def valid_forward(train_cnt, do_plot=False):
     # cross entropy loss
     pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
     next_latents = next_latents.permute(0,2,3,1).contiguous()
-    loss_rec = args.alpha_rec*F.cross_entropy(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
+    # log_softmax is dont in the forward pass
+    loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
     loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
-    loss_reward = F.nll_loss(pred_rewards, rewards)
+    # weight rewards according to the
+    loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
     # cant do act because i dont have this data for the "next action"
     loss_list = [loss_reward.item()/bs, loss_prev_act.item()/bs, loss_rec.item()/bs]
+    print('valid', loss_list)
     return loss_list
 
 if __name__ == '__main__':
@@ -220,6 +223,7 @@ if __name__ == '__main__':
                  'args':[args],
                  'last_save':0,
                  'last_plot':0,
+                 'reward_weights':[1,100], # should be same as num_rewards
                   }
     else:
         print('loading model from: %s' %args.model_loadpath)
@@ -229,6 +233,9 @@ if __name__ == '__main__':
         model_base_filepath = os.path.join(model_base_filedir, args.savename)
         train_cnt = info['train_cnts'][-1]
         info['loaded_from'] = args.model_loadpath
+        if 'reward_weights' not in info.keys():
+            info['reward_weights'] = [1,100]
+
     train_data_loader = ForwardLatentDataset(
                                    train_data_file,
                                    batch_size=args.batch_size,
@@ -243,8 +250,14 @@ if __name__ == '__main__':
     hsize = train_data_loader.data_h
     wsize = train_data_loader.data_w
     info['num_rewards'] = len(train_data_loader.unique_rewards)
+
+    reward_loss_weight = torch.ones(info['num_rewards']).to(DEVICE)
+    for i, w  in enumerate(info['reward_weights']):
+        reward_loss_weight[i] *= w
+
     info['hsize'] = hsize
     info['num_channels'] = num_actions+1+1
+
     #  !!!! TODO save this in npz and pull out
     num_k = info['num_k'] = 512
 
