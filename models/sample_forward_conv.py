@@ -270,7 +270,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         ax[1,1].set_title('s1 roll R%sPR%s'%(int(rewards[i]), int(pred_vq_rewards[i])))
         ax[1,1].imshow(pred_est[i,0], interpolation="None")
 
-        ax[2,0].set_title('error s')
+        ax[2,0].set_title('error s A%sPA%s'%(int(actions[i]), int(pred_vq_actions[i])))
         serror = np.square(true_states[i,-1]-s_rec)
         ax[2,0].imshow(serror, interpolation="None")
 
