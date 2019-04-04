@@ -34,76 +34,84 @@ def sample_episode(data, episode_number, episode_reward, name):
     all_real_latents = torch.zeros((args.rollout_length, 10, 10)).to(DEVICE).float()
     # first pred index is zeros - since we cant predict it
     all_pred_latents = torch.zeros((args.rollout_length, 10, 10)).to(DEVICE).float()
-    all_pred_rewards = []
     assert args.lead_in >= 2
     for i in range(args.rollout_length):
         x_d, z_e_x, z_q_x, real_latents, pred_actions, pred_signals = vqvae_model(s[i:i+1])
         # for the ith index
         all_real_latents[i] = real_latents.float()
-
         if i > 2:
             tf_state_input = torch.cat((channel_actions[i][None,:],
                                         all_real_latents[i-2][None, None],
                                         all_real_latents[i-1][None, None]), dim=1)
-            tf_pred_next_latents, tf_pred_prev_actions, tf_pred_rewards = conv_forward_model(tf_state_input)
+            #tf_pred_next_latents, tf_pred_prev_actions, tf_pred_rewards = conv_forward_model(tf_state_input)
+            tf_pred_next_latents = conv_forward_model(tf_state_input)
             # prediction for the i + 1 index
             tf_pred_next_latents = torch.argmax(tf_pred_next_latents, dim=1)
+            # THIS is pred s+1 so the indexes are different
             all_tf_pred_latents[i] = tf_pred_next_latents[0].cpu().numpy()
 
     for i in range(2, args.rollout_length):
         if i > args.lead_in:
             print('using predicted', i)
             state_input = torch.cat((channel_actions[i][None,:],
-                                         all_pred_latents[i-2][None, None].float(),
-                                         all_pred_latents[i-1][None, None].float()), dim=1)
+                                     all_pred_latents[i-2][None, None].float(),
+                                     all_pred_latents[i-1][None, None].float()), dim=1)
         else:
             state_input = torch.cat((channel_actions[i][None,:],
                                      all_real_latents[i-2][None, None],
                                      all_real_latents[i-1][None, None]), dim=1)
-        out_pred_next_latents, pred_prev_actions, pred_rewards = conv_forward_model(state_input)
+        out_pred_next_latents = conv_forward_model(state_input)
         # take argmax over channels axis
         pred_next_latents = torch.argmax(out_pred_next_latents, dim=1)
         # replace true with this
         all_pred_latents[i] = pred_next_latents[0].float()
-        all_pred_rewards.append(torch.argmax(pred_rewards).item())
 
     all_pred_latents = all_pred_latents.cpu().numpy()
     all_real_latents = all_real_latents.cpu().numpy()
-    plot_reconstructions(snp, nsnp, all_real_latents, all_tf_pred_latents, all_pred_latents, all_pred_rewards, params)
-    plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, all_pred_rewards, params)
+    plot_reconstructions(snp, nsnp, all_real_latents, all_pred_latents, all_tf_pred_latents, params)
+    plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params)
 
-def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, all_pred_rewards, params):
+def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params):
     episode_number, episode_reward, name, actions, rewards = params
     for i in range(3, args.rollout_length-1):
         f,ax = plt.subplots(3,3)
         # true latent at time i
-        ax[0,0].imshow(all_real_latents[i], interpolation="None")
+        true_s_latent = all_real_latents[i]
+        pred_s_latent = all_pred_latents[i-1]
+        true_s1_latent = all_real_latents[i+1]
+        pred_s1_latent = all_pred_latents[i]
+
+        ax[0,0].imshow(true_s_latent, interpolation="None")
         ax[0,0].set_title('s-%02d true'% i)
 
         # was this teacher forced or rolled out?
         if i <  args.lead_in:
             ax[1,0].set_title('s-%02d given'%i)
+            s_latent = true_s_latent
         else:
             ax[1,0].set_title('s-%02d self '%i)
-        ax[1,0].imshow(all_pred_latents[i], interpolation="None")
+            s_latent = pred_s_latent
+
+        ax[1,0].imshow(s_latent, interpolation="None")
         ax[2,0].set_title('s-%02d error'%i)
-        s_error = np.square(all_pred_latents[i] - all_real_latents[i])
+        s_error = np.square(s_latent - true_s_latent)
         ax[2,0].imshow(s_error, interpolation="None")
 
         ax[0,1].set_title('s1-%02d true latent'%(i+1))
-        ax[0,1].imshow(all_real_latents[i+1], interpolation="None")
-        ax[1,1].set_title('s1-%02d pred'%(i+1))
-        ax[1,1].imshow(all_pred_latents[i], interpolation="None")
+        ax[0,1].imshow(true_s1_latent, interpolation="None")
 
-        s1_error = np.square(all_real_latents[i+1] - all_pred_latents[i])
+        ax[1,1].set_title('s1-%02d pred'%(i+1))
+        ax[1,1].imshow(pred_s1_latent, interpolation="None")
+
+        s1_error = np.square(true_s1_latent - pred_s1_latent)
         ax[2,1].set_title('s1-%02d error'%(i+1))
         ax[2,1].imshow(s1_error, interpolation="None")
 
-        ts_diff = np.square(all_real_latents[i]-all_real_latents[i+1])
+        ts_diff = np.square(true_s_latent-true_s1_latent)
         ax[0,2].imshow(ts_diff, interpolation="None")
         ax[0,2].set_title('s-s1-true diff')
 
-        ts_pred_diff = np.square(all_real_latents[i+1]-all_pred_latents[i])
+        ts_pred_diff = np.square(pred_s_latent-pred_s1_latent)
         ax[1,2].imshow(ts_pred_diff, interpolation="None")
         ax[1,2].set_title('s-s1-pred diff')
 
@@ -134,8 +142,14 @@ def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, all_pr
 
 def sample_from_vq(latents):
     latents = torch.LongTensor(latents)
-    N,H,W,C = latents.shape[0],10,10,vq_largs.num_z
-    z_q_x,x_d = vqvae_model.decode_clusters(latents,N,H,W,C)
+    N,H,W = latents.shape
+    C = vq_largs.num_z
+    x_d, z_q_x, actions, rewards = vqvae_model.decode_clusters(latents,N,H,W,C)
+    # vqvae_model predicts the action that took this particular latent from t-1
+    # to t-0
+    # vqvae_model predcts the reward that was seen at t=0
+    pred_actions = torch.argmax(actions, dim=1).cpu().numpy()
+    pred_rewards = torch.argmax(rewards, dim=1).cpu().numpy()
     # TODO
     nmix = 30
     rec_mest = x_d[:,:nmix].detach()
@@ -147,7 +161,7 @@ def sample_from_vq(latents):
         rec_est = np.mean(rec_sams, axis=1)
     rec_mean = sample_from_discretized_mix_logistic(rec_mest, vq_largs.nr_logistic_mix, only_mean=True)
     rec_mean = (((rec_mean+1)/2.0)).cpu().numpy()
-    return rec_est, rec_mean
+    return rec_est, rec_mean, pred_actions, pred_rewards
 
 def get_grad_cams_rec(rec):
     # we'll do grad cam on the predicted data
@@ -187,14 +201,39 @@ def get_grad_cams(s):
     heatmaps /= heatmaps.max()
     return heatmaps
 
-def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, all_pred_rewards, params):
+def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, params):
     episode_number, episode_reward, name, actions, rewards = params
-    real_est, real_mean = sample_from_vq(all_real_latents)
-    pred_est, pred_mean = sample_from_vq(all_pred_latents)
+    real_est, real_mean, real_vq_actions, real_vq_rewards = sample_from_vq(all_real_latents)
+    pred_est, pred_mean, pred_vq_actions, pred_vq_rewards = sample_from_vq(all_pred_latents)
+    # vqvae_model predicts the action which took from t-1 to t-0
+    real_vq_actions = real_vq_actions[1:]
+    real_vq_rewards = real_vq_rewards[1:]
+    f,axp=plt.subplots(2,1)
+    aname = os.path.join(output_savepath, '%s_rec_forward_actions.png'%(name))
+    axp[0].plot(range(real_vq_actions.shape[0]), real_vq_actions, label='true vq', c='b')
+    axp[0].plot(range(actions.shape[0]), actions, label='actual', c='g')
+    axp[0].legend()
+    axp[1].plot(range(pred_vq_actions.shape[0]), pred_vq_actions, label='pred vq', c='r')
+    axp[1].plot(range(actions.shape[0]), actions, label='actual', c='g')
+    axp[1].legend()
+    plt.savefig(aname)
+    plt.close()
+
+    f,axr=plt.subplots(2,1)
+    rname = os.path.join(output_savepath, '%s_rec_forward_rewards.png'%(name))
+    axr[0].plot(range(real_vq_rewards.shape[0]), real_vq_rewards, label='true vq', c='b')
+    axr[0].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
+    axr[0].legend()
+    axr[1].plot(range(pred_vq_rewards.shape[0]), pred_vq_rewards, label='pred vq', c='r')
+    axr[1].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
+    axr[1].legend()
+    plt.savefig(rname)
+    plt.close()
+
     # tf so every forward was only one step ahead
-    tf_pred_est, tf_pred_mean = sample_from_vq(all_tf_pred_latents)
-    pred_heatmaps = get_grad_cams_rec(pred_est)
-    true_heatmaps = get_grad_cams(true_next_states)
+    tf_pred_est, tf_pred_mean, pred_tf_vq_actions, pred_tf_vq_rewards = sample_from_vq(all_tf_pred_latents)
+    #pred_heatmaps = get_grad_cams_rec(pred_est)
+    #true_heatmaps = get_grad_cams(true_next_states)
 
     for i in range(3, args.rollout_length-1):
        ##########################################
@@ -202,15 +241,17 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         ax[0,0].imshow(true_states[i,-1], interpolation="None")
         ax[0,0].set_title('%02d true s '%i)
 
-        s1ctrue = cv2.cvtColor(true_next_states[i,-1], cv2.COLOR_GRAY2RGB).astype(np.float32)
-        gs1 = true_heatmaps[i]*.4+s1ctrue*.6
-        #ax[0,1].imshow(true_next_states[i,-1], interpolation="None")
-        ax[0,1].imshow(gs1, interpolation="None")
+        #s1ctrue = cv2.cvtColor(true_next_states[i,-1], cv2.COLOR_GRAY2RGB).astype(np.float32)
+        #gs1 = true_heatmaps[i]*.4+s1ctrue*.6
+        ax[0,1].imshow(true_next_states[i,-1], interpolation="None")
+        #ax[0,1].imshow(gs1, interpolation="None")
         ax[0,1].set_title('%02d true s1 gc'%(i+1))
 
-        s1cest = cv2.cvtColor(pred_est[i,0].astype(np.float32), cv2.COLOR_GRAY2RGB).astype(np.float32)
-        gse1 = pred_heatmaps[i]*.4+s1cest*.6
-        ax[0,2].imshow(gse1, interpolation="None")
+        #s1cest = cv2.cvtColor(pred_est[i,0].astype(np.float32), cv2.COLOR_GRAY2RGB).astype(np.float32)
+        #gse1 = pred_heatmaps[i]*.4+s1cest*.6
+        #gse1 = s1cest
+        #ax[0,2].imshow(gse1, interpolation="None")
+        ax[0,2].imshow(pred_est[i,0], interpolation="None")
         ax[0,2].set_title('%02d est s1 gc'%(i+1))
 
         #ax[1,0].imshow(rec_est[0,0], interpolation="None")
@@ -226,7 +267,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
             ax[1,0].set_title('s roll self')
         ax[1,0].imshow(s_rec, interpolation="None")
 
-        ax[1,1].set_title('s1 roll R%sPR%s'%(int(rewards[i]), int(all_pred_rewards[i])))
+        ax[1,1].set_title('s1 roll R%sPR%s'%(int(rewards[i]), int(pred_vq_rewards[i])))
         ax[1,1].imshow(pred_est[i,0], interpolation="None")
 
         ax[2,0].set_title('error s')
@@ -261,7 +302,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         plt.savefig(iname)
         plt.close()
     gif_path = iname[:-10:] + '.gif'
-    search_path = iname[:-10:] + '*.png'
+    search_path = iname[:-10] + '*.png'
     cmd = 'convert %s %s' %(search_path, gif_path)
     print('creating gif', gif_path)
     os.system(cmd)
@@ -272,8 +313,7 @@ if __name__ == '__main__':
     if not os.path.exists(default_base_savedir):
         os.makedirs(default_base_savedir)
     parser = argparse.ArgumentParser(description='generate vq-vae')
-    parser.add_argument('-l', '--forward_model_loadname', help='full path to model',
-                        default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/convnrpa00/convnrpa_0052009984ex.pt')
+    parser.add_argument('-l', '--forward_model_loadname', help='full path to model')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-as', '--action_saliency', action='store_true', default=True)
     parser.add_argument('-rs', '--reward_saliency', action='store_true', default=False)
@@ -340,30 +380,13 @@ if __name__ == '__main__':
     wsize = valid_data_loader.data_w
 
     num_k = vq_largs.num_k
-    if args.reward_int:
-        int_reward = vq_info['num_rewards']
-        vqvae_model = VQVAE(num_clusters=num_k,
-                            encoder_output_size=vq_largs.num_z,
-                            num_output_mixtures=vq_info['num_output_mixtures'],
-                            in_channels_size=vq_largs.number_condition,
-                            n_actions=vq_info['num_actions'],
-                            int_reward=vq_info['num_rewards']).to(DEVICE)
-    elif 'num_rewards' in vq_info.keys():
-        print("CREATING model with est future reward")
-        vqvae_model = VQVAE(num_clusters=num_k,
-                            encoder_output_size=vq_largs.num_z,
-                            num_output_mixtures=vq_info['num_output_mixtures'],
-                            in_channels_size=vq_largs.number_condition,
-                            n_actions=vq_info['num_actions'],
-                            int_reward=False,
-                            reward_value=True).to(DEVICE)
-    else:
-        vqvae_model = VQVAE(num_clusters=num_k,
-                            encoder_output_size=vq_largs.num_z,
-                            num_output_mixtures=vq_info['num_output_mixtures'],
-                            in_channels_size=vq_largs.number_condition,
-                            n_actions=vq_info['num_actions'],
-                            ).to(DEVICE)
+    int_reward = vq_info['num_rewards']
+    vqvae_model = VQVAE(num_clusters=num_k,
+                        encoder_output_size=vq_largs.num_z,
+                        num_output_mixtures=vq_info['num_output_mixtures'],
+                        in_channels_size=vq_largs.number_condition,
+                        n_actions=vq_info['num_actions'],
+                        int_reward=vq_info['num_rewards']).to(DEVICE)
 
     vqvae_model.load_state_dict(vq_model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
@@ -373,9 +396,7 @@ if __name__ == '__main__':
     #train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
     conv_forward_model = ForwardResNet(BasicBlock, data_width=forward_info['hsize'],
                                        num_channels=forward_info['num_channels'],
-                                       num_actions=forward_info['num_actions'],
                                        num_output_channels=num_k,
-                                       num_rewards=forward_info['num_rewards'],
                                        dropout_prob=0.0)
     conv_forward_model.load_state_dict(forward_model_dict['conv_forward_model'])
     conv_forward_model = conv_forward_model.to(DEVICE)
