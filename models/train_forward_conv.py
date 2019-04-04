@@ -7,14 +7,19 @@ from torch.nn import functional as F
 from torch.nn.utils.clip_grad import clip_grad_value_
 from forward_conv import ForwardResNet, BasicBlock
 torch.set_num_threads(4)
-import config
-from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_dict_losses
 from ae_utils import save_checkpoint
 from datasets import ForwardLatentDataset
 from vqvae import VQVAE
 torch.manual_seed(394)
+
+"""
+things to try
+- training multiple steps out with rollout
+- mask so there is a loss on changed latents only between steps
+
+"""
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_losses):
     print('train loss', avg_train_losses)
@@ -87,8 +92,8 @@ def train_forward(train_cnt):
         opt.zero_grad()
         data = train_data_loader.get_minibatch()
         prev_latents, prev_actions, prev_rewards, prev_values, latents, actions, rewards, values, next_latents, is_new_epoch, data_indexes = data
-        # want to predict the action taken between the prev and observed
-        # we are given the current action and need to predict next latent
+        # we want the forward model to produce a next latent in which the vq
+        # model can determine the action we gave it.
         prev_latents = torch.FloatTensor(prev_latents[:,None]).to(DEVICE)
         latents = torch.FloatTensor(latents[:,None]).to(DEVICE)
         # next_latents is long because of prediction
@@ -106,11 +111,14 @@ def train_forward(train_cnt):
 
         pred_next_latents = conv_forward_model(state_input)
         # pred_next_latents shape is bs, c, h, w - need to permute shape for
-        # don't optimize vqmodel
-        N, _, H, W = latents.shape
-        C = vq_largs.num_z
-        pred_next_latent_inds = torch.argmax(pred_next_latents, dim=1)
-        x_tilde, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
+        # don't optimize vqmodel - just optimize against its understanding of
+        # the latent data
+        with torch.no_grad():
+            N, _, H, W = latents.shape
+            C = vq_largs.num_z
+            pred_next_latent_inds = torch.argmax(pred_next_latents, dim=1)
+            x_tilde, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
+
         # should be able to predict the input action that got us to this
         # timestep
         loss_act = F.nll_loss(pred_actions, actions)
@@ -119,13 +127,6 @@ def train_forward(train_cnt):
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
         loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='sum')
-
-        #TODO - need to add vq loss for action, reward
-        #loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
-        #loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
-        #loss = loss_rec+loss_reward+loss_prev_act
-        #loss = loss_rec
-        # cant do act because i dont have this data for the "next action"
 
         loss = loss_reward+loss_act+loss_rec
         loss.backward(retain_graph=True)
@@ -162,17 +163,16 @@ def valid_forward(train_cnt, do_plot=False):
         channel_actions[actions==a,a] = 1.0
     # combine input together
     state_input = torch.cat((channel_actions, prev_latents, latents), dim=1)
-
     bs = float(latents.shape[0])
-
     pred_next_latents = conv_forward_model(state_input)
 
-    # don't optimize vqmodel
-    N, _, H, W = latents.shape
-    C = vq_largs.num_z
-
-    pred_next_latent_inds = torch.argmax(pred_next_latents, dim=1)
-    x_tilde, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
+    # don't optimize vqmodel - we are just trying to figure out how good the
+    # prediction was
+    with torch.no_grad():
+        N, _, H, W = latents.shape
+        C = vq_largs.num_z
+        pred_next_latent_inds = torch.argmax(pred_next_latents, dim=1)
+        x_tilde, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
 
     # pred_next_latents shape is bs, c, h, w - need to permute shape for
     # cross entropy loss
