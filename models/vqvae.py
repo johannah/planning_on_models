@@ -153,7 +153,7 @@ class VQVAE(nn.Module):
             reward = F.log_softmax(self.int_reward_conv(z_q_x)[:,:,0,0], dim=1)
         if self.reward_value:
             reward = self.reward_val_conv(z_q_x)[:,0,0,0]
-        return x_tilde, z_q_x, latents, action, reward
+        return x_tilde, z_q_x, action, reward
         #return z_q_x, x_tilde
 
     def forward(self, x):
@@ -179,7 +179,7 @@ class VQVAE(nn.Module):
         # latents is a array of integers
         latents = dists.min(-1)[1]
         # look up cluster centers
-        x_tilde, z_q_x, latents, action, reward = self.decode_clusters(latents, N, H, W, C)
+        x_tilde, z_q_x, action, reward = self.decode_clusters(latents, N, H, W, C)
         #z_q_x, x_tilde = self.decode_clusters(latents, N, H, W, C)
         ## Move prediction to the z_q_x from z_e_x so that I can decode forward
         #if self.n_actions > 0:

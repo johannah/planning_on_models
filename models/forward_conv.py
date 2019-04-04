@@ -49,14 +49,16 @@ class BasicBlock(nn.Module):
 
 
 class ForwardResNet(nn.Module):
-    def __init__(self, block, num_actions=5, data_width=10, num_channels=4,
-                 num_output_channels=512, num_rewards=3, dropout_prob=0.0, zero_init_residual=False):
+    #def __init__(self, block, num_actions=5, data_width=10, num_channels=4,
+    #             num_output_channels=512, num_rewards=3, dropout_prob=0.0, zero_init_residual=False):
+    def __init__(self, block, data_width=10, num_channels=4,
+                 num_output_channels=512, dropout_prob=0.0, zero_init_residual=False):
         # num output channels will be num clusters
         super(ForwardResNet, self).__init__()
 
-        self.num_rewards = num_rewards
+        #self.num_rewards = num_rewards
         # predict the previous action, given current action
-        self.num_actions = num_actions
+        #self.num_actions = num_actions
 
         self.inplanes = 128
         netc = 128
@@ -77,10 +79,10 @@ class ForwardResNet(nn.Module):
         #self.layer_action = self._make_layer(block, netc, 1, stride=1)
         #self.layer_out_action = nn.Conv2d(netc, self.num_actions, kernel_size=data_width)
 
-        self.layer_reward = self._make_layer(block, netc, 1, stride=1)
-        self.layer_out_reward = nn.Conv2d(netc, self.num_rewards, kernel_size=data_width)
-        self.layer_prev_action = self._make_layer(block, netc, 1, stride=1)
-        self.layer_out_prev_action = nn.Conv2d(netc, self.num_actions, kernel_size=data_width)
+        #self.layer_reward = self._make_layer(block, netc, 1, stride=1)
+        #self.layer_out_reward = nn.Conv2d(netc, self.num_rewards, kernel_size=data_width)
+        #self.layer_prev_action = self._make_layer(block, netc, 1, stride=1)
+        #self.layer_out_prev_action = nn.Conv2d(netc, self.num_actions, kernel_size=data_width)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -124,15 +126,16 @@ class ForwardResNet(nn.Module):
         dx = self.layer2(dx)
         dx = self.layer3(dx)
         # action output should be bs,n_actions,1,1]
-        prev_act = F.log_softmax(self.layer_out_prev_action(self.layer_prev_action(dx))[:,:,0,0], dim=1)
+        #prev_act = F.log_softmax(self.layer_out_prev_action(self.layer_prev_action(dx))[:,:,0,0], dim=1)
         # give additional layer to reconstruction
         dx = self.layer4(dx)
         # bs,c,h,w
         nx = F.log_softmax(self.layer_last(self.layer_rec(dx)), dim=1)
         # reward output should be bs,n_rewards,1,1]
         # should i feed in nx here?
-        reward = F.log_softmax(self.layer_out_reward(self.layer_reward(dx))[:,:,0,0], dim=1)
-        return nx, prev_act, reward
+        #reward = F.log_softmax(self.layer_out_reward(self.layer_reward(dx))[:,:,0,0], dim=1)
+        #return nx, prev_act, reward
+        return nx
 
 if __name__ == '__main__':
     model = ForwardResNet(BasicBlock, data_width=10, num_channels=1)

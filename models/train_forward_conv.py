@@ -93,8 +93,8 @@ def train_forward(train_cnt):
         latents = torch.FloatTensor(latents[:,None]).to(DEVICE)
         # next_latents is long because of prediction
         next_latents = torch.LongTensor(next_latents[:,None]).to(DEVICE)
+        rewards = torch.LongTensor(rewards).to(DEVICE)
         actions = torch.LongTensor(actions).to(DEVICE)
-
         # put actions into channel for conditioning
         bs, _, h, w = latents.shape
         channel_actions = torch.zeros((bs,num_actions,h,w)).to(DEVICE)
@@ -102,13 +102,20 @@ def train_forward(train_cnt):
             channel_actions[actions==a,a] = 1
         # combine input together
         state_input = torch.cat((channel_actions, prev_latents, latents), dim=1)
-
         bs = float(latents.shape[0])
-        rewards = torch.LongTensor(rewards).to(DEVICE)
-        prev_actions = torch.LongTensor(prev_actions).to(DEVICE)
 
-        pred_next_latents, pred_prev_actions, pred_rewards = conv_forward_model(state_input)
+        pred_next_latents = conv_forward_model(state_input)
         # pred_next_latents shape is bs, c, h, w - need to permute shape for
+        # don't optimize vqmodel
+        N, _, H, W = latents.shape
+        C = vq_largs.num_z
+        pred_next_latent_inds = torch.argmax(pred_next_latents, dim=1)
+        x_tilde, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
+        # should be able to predict the input action that got us to this
+        # timestep
+        loss_act = F.nll_loss(pred_actions, actions)
+        loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
         loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='sum')
@@ -117,13 +124,15 @@ def train_forward(train_cnt):
         #loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
         #loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
         #loss = loss_rec+loss_reward+loss_prev_act
-        loss = loss_rec
+        #loss = loss_rec
         # cant do act because i dont have this data for the "next action"
+
+        loss = loss_reward+loss_act+loss_rec
         loss.backward(retain_graph=True)
         parameters = list(conv_forward_model.parameters())
         clip_grad_value_(parameters, 10)
         opt.step()
-        loss_list = [loss_reward.item()/bs, loss_prev_act.item()/bs, loss_rec.item()/bs]
+        loss_list = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs]
         if batches > 100:
             handle_checkpointing(train_cnt, loss_list)
         train_cnt+=bs
@@ -146,6 +155,7 @@ def valid_forward(train_cnt, do_plot=False):
 
     # put actions into channel for conditioning
     bs, _, h, w = latents.shape
+    rewards = torch.LongTensor(rewards).to(DEVICE)
     actions = torch.LongTensor(actions).to(DEVICE)
     channel_actions = torch.zeros((bs,num_actions,h,w)).to(DEVICE)
     for a in range(num_actions):
@@ -154,21 +164,28 @@ def valid_forward(train_cnt, do_plot=False):
     state_input = torch.cat((channel_actions, prev_latents, latents), dim=1)
 
     bs = float(latents.shape[0])
-    rewards = torch.LongTensor(rewards).to(DEVICE)
-    prev_actions = torch.LongTensor(prev_actions).to(DEVICE)
 
-    pred_next_latents, pred_prev_actions, pred_rewards = conv_forward_model(state_input)
+    pred_next_latents = conv_forward_model(state_input)
+
+    # don't optimize vqmodel
+    N, _, H, W = latents.shape
+    C = vq_largs.num_z
+
+    pred_next_latent_inds = torch.argmax(pred_next_latents, dim=1)
+    x_tilde, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
+
     # pred_next_latents shape is bs, c, h, w - need to permute shape for
     # cross entropy loss
     pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
     next_latents = next_latents.permute(0,2,3,1).contiguous()
-    # log_softmax is dont in the forward pass
+
+    # log_softmax is done in the forward pass
     loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='sum')
-    loss_prev_act = F.nll_loss(pred_prev_actions, prev_actions)
+    loss_act = F.nll_loss(pred_actions, actions)
     # weight rewards according to the
     loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
     # cant do act because i dont have this data for the "next action"
-    loss_list = [loss_reward.item()/bs, loss_prev_act.item()/bs, loss_rec.item()/bs]
+    loss_list = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs]
     print('valid', loss_list)
     return loss_list
 
@@ -177,9 +194,11 @@ if __name__ == '__main__':
 
     debug = 0
     parser = ArgumentParser(description='train acn')
-    parser.add_argument('--train_data_file', default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
+    parser.add_argument('--train_data_file',
+                        #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
+                        default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex_train_forward.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convndropar1000xrecsum')
+    parser.add_argument('--savename', default='convVQout')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
         parser.add_argument('-se', '--save_every', default=100000*5, type=int)
@@ -191,7 +210,7 @@ if __name__ == '__main__':
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     # increased the alpha rec
-    parser.add_argument('-ar', '--alpha_rec', default=1000.0, type=float)
+    parser.add_argument('-ar', '--alpha_rec', default=10.0, type=float)
     parser.add_argument('-d', '--dropout_prob', default=0.5, type=float)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=int(1e10), type=int)
@@ -289,23 +308,27 @@ if __name__ == '__main__':
     #wsize = valid_data_loader.data_w
 
     num_k = vq_largs.num_k
-    if vq_largs.reward_int:
-        int_reward = vq_info['num_rewards']
-        vqvae_model = VQVAE(num_clusters=num_k,
-                            encoder_output_size=vq_largs.num_z,
-                            num_output_mixtures=vq_info['num_output_mixtures'],
-                            in_channels_size=vq_largs.number_condition,
-                            n_actions=vq_info['num_actions'],
-                            int_reward=vq_info['num_rewards']).to(DEVICE)
+    vqvae_model = VQVAE(num_clusters=num_k,
+                        encoder_output_size=vq_largs.num_z,
+                        num_output_mixtures=vq_info['num_output_mixtures'],
+                        in_channels_size=vq_largs.number_condition,
+                        n_actions=vq_info['num_actions'],
+                        int_reward=vq_info['num_rewards']).to(DEVICE)
     vqvae_model.load_state_dict(vq_model_dict['vqvae_state_dict'])
+    vqvae_model.eval()
+    #conv_forward_model = ForwardResNet(BasicBlock, data_width=info['hsize'],
+    #                                   num_channels=info['num_channels'],
+    #                                   num_actions=num_actions,
+    #                                   num_output_channels=num_k,
+    #                                   num_rewards=num_rewards,
+    #                                   dropout_prob=args.dropout_prob).to(DEVICE)
+
 
     conv_forward_model = ForwardResNet(BasicBlock, data_width=info['hsize'],
                                        num_channels=info['num_channels'],
-                                       num_actions=num_actions,
                                        num_output_channels=num_k,
-                                       num_rewards=num_rewards,
-                                       dropout_prob=args.dropout_prob)
-    conv_forward_model = conv_forward_model.to(DEVICE)
+                                       dropout_prob=args.dropout_prob).to(DEVICE)
+
     parameters = list(conv_forward_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     if args.model_loadpath != '':

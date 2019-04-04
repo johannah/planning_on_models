@@ -101,7 +101,8 @@ if __name__ == '__main__':
         os.makedirs(default_base_savedir)
     parser = argparse.ArgumentParser(description='generate vq-vae')
     parser.add_argument('-l', '--model_loadname', help='full path to vq model',
-                        default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex.pt')
+                        #default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex.pt')
+                        default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex.pt')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=True)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
