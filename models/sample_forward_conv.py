@@ -21,6 +21,8 @@ def sample_episode(data, episode_number, episode_reward, name):
      # rollout for number of steps and decode with vqvae decoder
     states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
     params = (episode_number, episode_reward, name, actions, rewards)
+    pred_actions = []
+    real_pred_actions = []
     snp = reshape_input(deepcopy(states))
     s = (2*reshape_input(torch.FloatTensor(states))-1)
     nsnp = reshape_input(next_states)
@@ -35,6 +37,8 @@ def sample_episode(data, episode_number, episode_reward, name):
     # first pred index is zeros - since we cant predict it
     all_pred_latents = torch.zeros((args.rollout_length, 10, 10)).to(DEVICE).float()
     assert args.lead_in >= 2
+    # at beginning
+    # 0th real action is actually for 1
     for i in range(args.rollout_length):
         x_d, z_e_x, z_q_x, real_latents, pred_actions, pred_signals = vqvae_model(s[i:i+1])
         # for the ith index
@@ -134,7 +138,7 @@ def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params
         #plt.suptitle(title)
         plt.savefig(iname)
         plt.close()
-    gif_path = iname[:-10:] + '.gif'
+    gif_path = os.path.join(output_savepath, + '_latents.gif')
     search_path = iname[:-10:] + '*.png'
     cmd = 'convert %s %s' %(search_path, gif_path)
     print('creating gif', gif_path)
@@ -203,29 +207,56 @@ def get_grad_cams(s):
 
 def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, params):
     episode_number, episode_reward, name, actions, rewards = params
+    # true (label) action is at transition 3-4, 4-5, 5-6
+    # real (tf vq) action is at transition 2-3, 3-4, 4-5
+    # forward pred action is the action which got to the predicted state (same
+    # as true)
     real_est, real_mean, real_vq_actions, real_vq_rewards = sample_from_vq(all_real_latents)
     pred_est, pred_mean, pred_vq_actions, pred_vq_rewards = sample_from_vq(all_pred_latents)
     # vqvae_model predicts the action which took from t-1 to t-0
-    real_vq_actions = real_vq_actions[1:]
-    real_vq_rewards = real_vq_rewards[1:]
     f,axp=plt.subplots(2,1)
-    aname = os.path.join(output_savepath, '%s_rec_forward_actions.png'%(name))
-    axp[0].plot(range(real_vq_actions.shape[0]), real_vq_actions, label='true vq', c='b')
-    axp[0].plot(range(actions.shape[0]), actions, label='actual', c='g')
+    aname = os.path.join(output_savepath, '_%s_rec_forward_actions.png'%(name))
+    na = real_vq_actions.shape[0]
+    pa = pred_vq_actions.shape[0]
+    real_action_error = (real_vq_actions!=actions[:na]).astype(np.int)
+    rerror = np.where(real_action_error == 1)[0]
+
+    real_action_error = (real_action_error*real_vq_actions)[rerror]
+    pred_action_error = (pred_vq_actions!=actions[:pa]).astype(np.int)
+    perror = np.where(pred_action_error == 1)[0]
+    pred_action_error = (pred_action_error*pred_vq_actions)[perror]
+
+    axp[0].plot(range(na), real_vq_actions, label='true vq', c='b')
+    axp[0].plot(range(na), actions[:na], label='actual', c='g')
+    axp[0].scatter(rerror, real_action_error, c='r')
     axp[0].legend()
-    axp[1].plot(range(pred_vq_actions.shape[0]), pred_vq_actions, label='pred vq', c='r')
+    axp[1].plot(range(pred_vq_actions.shape[0]), pred_vq_actions, label='pred vq', c='k')
     axp[1].plot(range(actions.shape[0]), actions, label='actual', c='g')
+    axp[1].scatter(perror, pred_action_error, c='r')
     axp[1].legend()
     plt.savefig(aname)
     plt.close()
 
     f,axr=plt.subplots(2,1)
-    rname = os.path.join(output_savepath, '%s_rec_forward_rewards.png'%(name))
+    rname = os.path.join(output_savepath, '_%s_rec_forward_rewards.png'%(name))
+
+    nr = real_vq_rewards.shape[0]
+    pr = pred_vq_rewards.shape[0]
+    real_rewards_error = (real_vq_rewards!=rewards[:nr]).astype(np.int)
+    pred_rewards_error = (pred_vq_rewards!=rewards[:pr]).astype(np.int)
+
+    rrerror = np.where(real_rewards_error == 1)[0]
+    real_rewards_error = (real_rewards_error*real_vq_rewards)[rrerror]
+    prerror = np.where(pred_rewards_error == 1)[0]
+    pred_rewards_error = (pred_rewards_error*pred_vq_rewards)[prerror]
+
     axr[0].plot(range(real_vq_rewards.shape[0]), real_vq_rewards, label='true vq', c='b')
     axr[0].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
+    axp[0].scatter(rrerror, real_rewards_error, c='r')
     axr[0].legend()
-    axr[1].plot(range(pred_vq_rewards.shape[0]), pred_vq_rewards, label='pred vq', c='r')
+    axr[1].plot(range(pred_vq_rewards.shape[0]), pred_vq_rewards, label='pred vq', c='k')
     axr[1].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
+    axp[1].scatter(prerror, pred_rewards_error, c='r')
     axr[1].legend()
     plt.savefig(rname)
     plt.close()
@@ -251,7 +282,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         #gse1 = pred_heatmaps[i]*.4+s1cest*.6
         #gse1 = s1cest
         #ax[0,2].imshow(gse1, interpolation="None")
-        ax[0,2].imshow(real_est[i,0], interpolation="None")
+        ax[0,2].imshow(real_est[i+1,0], interpolation="None")
         ax[0,2].set_title('%02d vq tf s1'%(i+1))
 
         #ax[1,0].imshow(rec_est[0,0], interpolation="None")
@@ -286,7 +317,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         ax[2,2].imshow(s1error, interpolation="None")
 
         #ax[2,2].set_title('error vq tf s1')
-        #s1error = np.square(true_next_states[i,-1]-real_est[i,0])
+        #s1error = np.square(true_next_states[i,-1]-real_est[i+1,0])
         #ax[2,2].imshow(s1error, interpolation="None")
 
         iname = os.path.join(output_savepath, '%s_rec_forward_E%05d_R%03d_%05d.png'%(name, int(episode_number), int(episode_reward), i))
@@ -301,7 +332,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         #plt.suptitle(title)
         plt.savefig(iname)
         plt.close()
-    gif_path = iname[:-10:] + '.gif'
+    gif_path = os.path.join(output_savepath, + '_reconstruction.gif')
     search_path = iname[:-10] + '*.png'
     cmd = 'convert %s %s' %(search_path, gif_path)
     print('creating gif', gif_path)
