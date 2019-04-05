@@ -210,7 +210,7 @@ if __name__ == '__main__':
                         #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
                         default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex_train_forward.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convVQoutmdiff')
+    parser.add_argument('--savename', default='convVQoutmdiffl1')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
         parser.add_argument('-se', '--save_every', default=100000*5, type=int)
@@ -222,7 +222,7 @@ if __name__ == '__main__':
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     # increased the alpha rec
-    parser.add_argument('-ar', '--alpha_rec', default=10.0, type=float)
+    parser.add_argument('-ar', '--alpha_rec', default=1.0, type=float)
     parser.add_argument('-d', '--dropout_prob', default=0.5, type=float)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=int(1e10), type=int)
