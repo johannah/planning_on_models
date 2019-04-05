@@ -106,8 +106,8 @@ def train_vqvae(train_cnt):
         diff_est = x_d[:, nmix:]
         loss_rec = args.alpha_rec*discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
         loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
-        loss_act = F.nll_loss(pred_actions, actions)
-        loss_rewards = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+        loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
+        loss_rewards = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
         loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
 
         loss_act.backward(retain_graph=True)
@@ -157,9 +157,9 @@ def valid_vqvae(train_cnt, do_plot=False):
     diff_est = x_d[:, nmix:]
     loss_rec = args.alpha_rec*discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
     loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
-    loss_act = F.nll_loss(pred_actions, actions)
+    loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
     loss_act.backward(retain_graph=True)
-    loss_rewards = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+    loss_rewards = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
     loss_rewards.backward(retain_graph=True)
     loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
     loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
@@ -203,9 +203,12 @@ if __name__ == '__main__':
         parser.add_argument('-pe', '--plot_every', default=10, type=int)
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-b', '--beta', default=0.25, type=float, help='scale for loss 3, commitment loss in vqvae')
-    parser.add_argument('-ar', '--alpha_rec', default=10, type=float, help='scale for rec loss')
+    parser.add_argument('-arec', '--alpha_rec', default=1, type=float, help='scale for rec loss')
+    parser.add_argument('-aa', '--alpha_act', default=10, type=float, help='scale for rec loss')
+    parser.add_argument('-ar', '--alpha_rew', default=10, type=float, help='scale for rec loss')
     parser.add_argument('-z', '--num_z', default=64, type=int)
-    parser.add_argument('-k', '--num_k', default=256, type=int)
+    # 512 greatly outperformed 256 in freeway
+    parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-bs', '--batch_size', default=84, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
@@ -256,6 +259,7 @@ if __name__ == '__main__':
         model_base_filedir = os.path.split(args.model_loadpath)[0]
         model_base_filepath = os.path.join(model_base_filedir, args.savename)
         train_cnt = info['train_cnts'][-1]
+        info['args'].append(args)
         info['loaded_from'] = args.model_loadpath
         if 'reward_weights' not in info.keys():
             info['reward_weights'] = [1,100]
@@ -293,9 +297,11 @@ if __name__ == '__main__':
                         n_actions=info['num_actions'],
                         int_reward=info['num_rewards']).to(DEVICE)
 
+    print('using args', args)
     parameters = list(vqvae_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     if args.model_loadpath != '':
+        print("loading weights from:%s" %args.model_loadpath)
         vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
         opt.load_state_dict(model_dict['optimizer'])
         vqvae_model.embedding = model_dict['embedding']
