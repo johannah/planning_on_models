@@ -228,11 +228,11 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     perror = np.where(pred_action_error == 1)[0]
     pred_action_error = (pred_action_error*pred_vq_actions)[perror]
 
-    axp[0].plot(range(na), real_vq_actions, label='true vq', c='b')
+    axp[0].plot(range(na), real_vq_actions, label='tf vq', c='b')
     axp[0].plot(range(na), actions[:na], label='actual', c='g')
     axp[0].scatter(rerror, real_action_error, c='r')
     axp[0].legend()
-    axp[1].plot(range(pred_vq_actions.shape[0]), pred_vq_actions, label='pred vq', c='k')
+    axp[1].plot(range(pred_vq_actions.shape[0]), pred_vq_actions, label='froll vq', c='k')
     axp[1].plot(range(actions.shape[0]), actions, label='actual', c='g')
     axp[1].scatter(perror, pred_action_error, c='r')
     axp[1].legend()
@@ -252,11 +252,11 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     prerror = np.where(pred_rewards_error == 1)[0]
     pred_rewards_error = (pred_rewards_error*pred_vq_rewards)[prerror]
 
-    axr[0].plot(range(real_vq_rewards.shape[0]), real_vq_rewards, label='true vq', c='b')
+    axr[0].plot(range(real_vq_rewards.shape[0]), real_vq_rewards, label='tf vq', c='b')
     axr[0].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
     axp[0].scatter(rrerror, real_rewards_error, c='r')
     axr[0].legend()
-    axr[1].plot(range(pred_vq_rewards.shape[0]), pred_vq_rewards, label='pred vq', c='k')
+    axr[1].plot(range(pred_vq_rewards.shape[0]), pred_vq_rewards, label='froll vq', c='k')
     axr[1].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
     axp[1].scatter(prerror, pred_rewards_error, c='r')
     axr[1].legend()
@@ -300,14 +300,14 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
             ax[1,0].set_title('s roll self')
         ax[1,0].imshow(s_rec, interpolation="None")
 
-        ax[1,1].set_title('s1 roll R%sPR%s'%(int(rewards[i]), int(pred_vq_rewards[i])))
+        ax[1,1].set_title('s1 roll')
         ax[1,1].imshow(pred_est[i,0], interpolation="None")
 
         ax[2,0].set_title('error s A%sPA%s'%(int(actions[i]), int(pred_vq_actions[i])))
         serror = np.square(true_states[i,-1]-s_rec)
         ax[2,0].imshow(serror, interpolation="None")
 
-        ax[2,1].set_title('error s1')
+        ax[2,1].set_title('error s1 roll R%sPR%s'%(int(rewards[i]), int(pred_vq_rewards[i])))
         s1error = np.square(true_next_states[i,-1]-pred_est[i,0])
         ax[2,1].imshow(s1error, interpolation="None")
 

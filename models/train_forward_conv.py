@@ -126,7 +126,7 @@ def train_forward(train_cnt):
 
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
-        loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='sum')
+        loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
 
         loss = loss_reward+loss_act+loss_rec
         loss.backward(retain_graph=True)
@@ -180,7 +180,7 @@ def valid_forward(train_cnt, do_plot=False):
     next_latents = next_latents.permute(0,2,3,1).contiguous()
 
     # log_softmax is done in the forward pass
-    loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='sum')
+    loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
     loss_act = F.nll_loss(pred_actions, actions)
     # weight rewards according to the
     loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
@@ -198,7 +198,7 @@ if __name__ == '__main__':
                         #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
                         default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex_train_forward.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convVQout')
+    parser.add_argument('--savename', default='convVQoutm')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
         parser.add_argument('-se', '--save_every', default=100000*5, type=int)
