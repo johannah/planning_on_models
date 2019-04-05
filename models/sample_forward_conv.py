@@ -245,14 +245,14 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         #gs1 = true_heatmaps[i]*.4+s1ctrue*.6
         ax[0,1].imshow(true_next_states[i,-1], interpolation="None")
         #ax[0,1].imshow(gs1, interpolation="None")
-        ax[0,1].set_title('%02d true s1 gc'%(i+1))
+        ax[0,1].set_title('%02d true s1'%(i+1))
 
         #s1cest = cv2.cvtColor(pred_est[i,0].astype(np.float32), cv2.COLOR_GRAY2RGB).astype(np.float32)
         #gse1 = pred_heatmaps[i]*.4+s1cest*.6
         #gse1 = s1cest
         #ax[0,2].imshow(gse1, interpolation="None")
-        ax[0,2].imshow(pred_est[i,0], interpolation="None")
-        ax[0,2].set_title('%02d est s1 gc'%(i+1))
+        ax[0,2].imshow(real_est[i,0], interpolation="None")
+        ax[0,2].set_title('%02d vq tf s1'%(i+1))
 
         #ax[1,0].imshow(rec_est[0,0], interpolation="None")
         #ax[1,0].set_title('s rec true sam')
@@ -279,9 +279,9 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         ax[2,1].imshow(s1error, interpolation="None")
 
         ax[1,2].imshow(tf_pred_est[i, 0], interpolation="None")
-        ax[1,2].set_title('%02d for tf s1'%(i+1))
+        ax[1,2].set_title('%02d forw tf s1'%(i+1))
 
-        ax[2,2].set_title('error for tf s1')
+        ax[2,2].set_title('error forw tf s1')
         s1error = np.square(true_next_states[i,-1]-tf_pred_est[i,0])
         ax[2,2].imshow(s1error, interpolation="None")
 
