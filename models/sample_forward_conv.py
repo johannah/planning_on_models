@@ -205,6 +205,50 @@ def get_grad_cams(s):
     heatmaps /= heatmaps.max()
     return heatmaps
 
+def plot_over_time(data, true_data, over_time_name):
+    # expects data is [real, pred_tf, pred_rollout]
+    aname = os.path.join(output_savepath, '_%s_rec_forward_%s.png'%(name, over_time_name))
+    f,axp=plt.subplots(3,1)
+    plot_names = ['tf vq roll', 'tf roll', 'roll']
+    for i in range(3):
+        na = data[i].shape[0]
+        data_error = (data[i]!=true_data[:na]).astype(np.int)
+        rerror = np.where(data_error == 1)[0]
+        data_error = (data_error*data[i][:na])[rerror]
+        axp[i].scatter(range(na), true_data[:na], label='actual', alpha=0.4, c='g')
+        axp[i].scatter(range(na), data[i][:na], label=plot_names[i], alpha=0.4)
+        axp[i].scatter(rerror, data_error, c='r', label='error')
+        axp[i].set_title(plot_names[i])
+        #axp[i].legend()
+    plt.savefig(aname)
+    plt.close()
+
+    #pred_tf_action_error = (pred_tf_vq_actions!=actions[:pa]).astype(np.int)
+    #pterror = np.where(pred_tf_action_error == 1)[0]
+    #pred_tf_action_error = (pred_tf_action_error*pred_tf_vq_actions)[pterror]
+
+    #pred_action_error = (pred_vq_actions!=actions[:ta]).astype(np.int)
+    #perror = np.where(pred_action_error == 1)[0]
+    #pred_action_error = (pred_action_error*pred_vq_actions)[perror]
+
+    #axp[0].scatter(range(na), actions[:na], label='actual', alpha=0.4, c='g')
+    #axp[0].scatter(range(na), real_vq_actions[:na], label='tf vq', alpha=0.4, c='b')
+    #axp[0].scatter(rerror, real_action_error, c='r', label='error')
+    #axp[0].legend()
+
+    #axp[1].scatter(range(ta), actions[:ta], label='actual', c='g', alpha=0.4)
+    #axp[1].scatter(range(ta), pred_tf_vq_actions[:ta], label='tffroll vq', c='b', alpha=0.4)
+    #axp[1].scatter(pterror, pred_tf_action_error, c='r', label='error')
+    #axp[1].legend()
+
+    #axp[2].scatter(range(pa), actions[:pa], label='actual', c='g', alpha=0.4)
+    #axp[2].scatter(range(pa), pred_vq_actions[:pa], label='froll vq', c='b', alpha=0.4)
+    #axp[2].scatter(perror, pred_action_error, c='r', label='error')
+    #axp[2].legend()
+    #plt.savefig(aname)
+    #plt.close()
+
+
 def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, params):
     episode_number, episode_reward, name, actions, rewards = params
     # true (label) action is at transition 3-4, 4-5, 5-6
@@ -213,62 +257,15 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     # as true)
     real_est, real_mean, real_vq_actions, real_vq_rewards = sample_from_vq(all_real_latents)
     pred_est, pred_mean, pred_vq_actions, pred_vq_rewards = sample_from_vq(all_pred_latents)
+    # tf so every forward was only one step ahead
+    pred_tf_est, pred_tf_mean, pred_tf_vq_actions, pred_tf_vq_rewards = sample_from_vq(all_tf_pred_latents)
     # vqvae_model predicts the action which took from t-1 to t-0
-
-    aname = os.path.join(output_savepath, '_%s_rec_forward_actions.png'%(name))
     real_vq_actions = real_vq_actions[1:]
     real_vq_rewards = real_vq_rewards[1:]
-    na = real_vq_actions.shape[0]
-    pa = pred_vq_actions.shape[0]
 
-    real_action_error = (real_vq_actions!=actions[:na]).astype(np.int)
-    rerror = np.where(real_action_error == 1)[0]
-    real_action_error = (real_action_error*real_vq_actions)[rerror]
+    plot_over_time([real_vq_actions, pred_tf_vq_actions, pred_vq_actions], actions, 'actions')
+    plot_over_time([real_vq_rewards, pred_tf_vq_rewards, pred_vq_rewards], rewards, 'rewards')
 
-    pred_action_error = (pred_vq_actions!=actions[:pa]).astype(np.int)
-    perror = np.where(pred_action_error == 1)[0]
-    pred_action_error = (pred_action_error*pred_vq_actions)[perror]
-
-    f,axp=plt.subplots(2,1)
-    axp[0].scatter(range(na), actions[:na], label='actual', alpha=0.4, c='g')
-    axp[0].scatter(range(na), real_vq_actions[:na], label='tf vq', alpha=0.4, c='b')
-    axp[0].scatter(rerror, real_action_error, c='r', label='error')
-    axp[0].legend()
-
-    axp[1].scatter(range(pa), actions[:pa], label='actual', c='g', alpha=0.4)
-    axp[1].scatter(range(pa), pred_vq_actions[:pa], label='froll vq', c='b', alpha=0.4)
-    axp[1].scatter(perror, pred_action_error, c='r', label='error')
-    axp[1].legend()
-    plt.savefig(aname)
-    plt.close()
-
-    f,axr=plt.subplots(2,1)
-    rname = os.path.join(output_savepath, '_%s_rec_forward_rewards.png'%(name))
-
-    nr = real_vq_rewards.shape[0]
-    pr = pred_vq_rewards.shape[0]
-    real_rewards_error = (real_vq_rewards!=rewards[:nr]).astype(np.int)
-    pred_rewards_error = (pred_vq_rewards!=rewards[:pr]).astype(np.int)
-
-    rrerror = np.where(real_rewards_error == 1)[0]
-    real_rewards_error = (real_rewards_error*real_vq_rewards)[rrerror]
-    prerror = np.where(pred_rewards_error == 1)[0]
-    pred_rewards_error = (pred_rewards_error*pred_vq_rewards)[prerror]
-    print(prerror, pred_rewards_error)
-
-    axr[0].scatter(range(nr), rewards[:nr], label='actual', c='g', alpha=0.4)
-    axr[0].scatter(range(nr), real_vq_rewards[:nr], label='tf vq', c='b', alpha=0.4)
-    axr[0].scatter(rrerror, real_rewards_error, c='r', label='error')
-    axr[0].legend()
-    axr[1].scatter(range(pr), rewards[:pr], label='actual', c='g', alpha=0.4)
-    axr[1].scatter(range(pr), pred_vq_rewards[:pr], label='froll vq', c='b', alpha=0.4)
-    axr[1].scatter(prerror, pred_rewards_error, c='r', label='error')
-    axr[1].legend()
-    plt.savefig(rname)
-    plt.close()
-
-    # tf so every forward was only one step ahead
-    tf_pred_est, tf_pred_mean, pred_tf_vq_actions, pred_tf_vq_rewards = sample_from_vq(all_tf_pred_latents)
     #pred_heatmaps = get_grad_cams_rec(pred_est)
     #true_heatmaps = get_grad_cams(true_next_states)
 
@@ -315,11 +312,11 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         s1error = np.square(true_next_states[i,-1]-pred_est[i,0])
         ax[2,1].imshow(s1error, interpolation="None")
 
-        ax[1,2].imshow(tf_pred_est[i, 0], interpolation="None")
+        ax[1,2].imshow(pred_tf_est[i, 0], interpolation="None")
         ax[1,2].set_title('forw tf s1 R%sPR%sTR%s'%(int(rewards[i]), int(pred_vq_rewards[i]), int(real_vq_rewards[i])))
 
         ax[2,2].set_title('error forw tf s1')
-        s1error = np.square(true_next_states[i,-1]-tf_pred_est[i,0])
+        s1error = np.square(true_next_states[i,-1]-pred_tf_est[i,0])
         ax[2,2].imshow(s1error, interpolation="None")
 
         #ax[2,2].set_title('error vq tf s1')
