@@ -190,10 +190,10 @@ def valid_forward(train_cnt, do_plot=False):
     next_latents = next_latents.permute(0,2,3,1).contiguous()
 
     # log_softmax is done in the forward pass
-    loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='sum')
+    loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
     loss_act = F.nll_loss(pred_actions, actions)
     # we want to penalize when these are wrong in particular
-    loss_diff_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k)[ts_change==1], next_latents.view(-1)[ts_change==1], reduction='sum')
+    loss_diff_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k)[ts_change==1], next_latents.view(-1)[ts_change==1], reduction='mean')
     # weight rewards according to the
     loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
     # cant do act because i dont have this data for the "next action"
