@@ -138,7 +138,7 @@ def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params
         #plt.suptitle(title)
         plt.savefig(iname)
         plt.close()
-    gif_path = os.path.join(output_savepath, + '_latents.gif')
+    gif_path = os.path.join(output_savepath, '_latents.gif')
     search_path = iname[:-10:] + '*.png'
     cmd = 'convert %s %s' %(search_path, gif_path)
     print('creating gif', gif_path)
@@ -215,7 +215,9 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     pred_est, pred_mean, pred_vq_actions, pred_vq_rewards = sample_from_vq(all_pred_latents)
     # vqvae_model predicts the action which took from t-1 to t-0
     f,axp=plt.subplots(2,1)
+
     aname = os.path.join(output_savepath, '_%s_rec_forward_actions.png'%(name))
+    real_vq_actions = real_vq_actions[1:]
     na = real_vq_actions.shape[0]
     pa = pred_vq_actions.shape[0]
     real_action_error = (real_vq_actions!=actions[:na]).astype(np.int)
@@ -332,7 +334,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         #plt.suptitle(title)
         plt.savefig(iname)
         plt.close()
-    gif_path = os.path.join(output_savepath, + '_reconstruction.gif')
+    gif_path = os.path.join(output_savepath, '_reconstruction.gif')
     search_path = iname[:-10] + '*.png'
     cmd = 'convert %s %s' %(search_path, gif_path)
     print('creating gif', gif_path)
