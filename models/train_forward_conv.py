@@ -121,8 +121,8 @@ def train_forward(train_cnt):
 
         # should be able to predict the input action that got us to this
         # timestep
-        loss_act = F.nll_loss(pred_actions, actions)
-        loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+        loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
+        loss_reward = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
 
         pred_next_latents = pred_next_latents.permute(0,2,3,1).contiguous()
         next_latents = next_latents.permute(0,2,3,1).contiguous()
@@ -181,9 +181,9 @@ def valid_forward(train_cnt, do_plot=False):
 
     # log_softmax is done in the forward pass
     loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
-    loss_act = F.nll_loss(pred_actions, actions)
+    loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
     # weight rewards according to the
-    loss_reward = F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+    loss_reward = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
     # cant do act because i dont have this data for the "next action"
     loss_list = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs]
     print('valid', loss_list)
@@ -210,6 +210,8 @@ if __name__ == '__main__':
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     # increased the alpha rec
+    parser.add_argument('-ad', '--alpha_rew', default=2.0, type=float)
+    parser.add_argument('-aa', '--alpha_act', default=10.0, type=float)
     parser.add_argument('-ar', '--alpha_rec', default=1.0, type=float)
     parser.add_argument('-d', '--dropout_prob', default=0.5, type=float)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)

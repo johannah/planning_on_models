@@ -214,27 +214,30 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     real_est, real_mean, real_vq_actions, real_vq_rewards = sample_from_vq(all_real_latents)
     pred_est, pred_mean, pred_vq_actions, pred_vq_rewards = sample_from_vq(all_pred_latents)
     # vqvae_model predicts the action which took from t-1 to t-0
-    f,axp=plt.subplots(2,1)
 
     aname = os.path.join(output_savepath, '_%s_rec_forward_actions.png'%(name))
     real_vq_actions = real_vq_actions[1:]
+    real_vq_rewards = real_vq_rewards[1:]
     na = real_vq_actions.shape[0]
     pa = pred_vq_actions.shape[0]
+
     real_action_error = (real_vq_actions!=actions[:na]).astype(np.int)
     rerror = np.where(real_action_error == 1)[0]
-
     real_action_error = (real_action_error*real_vq_actions)[rerror]
+
     pred_action_error = (pred_vq_actions!=actions[:pa]).astype(np.int)
     perror = np.where(pred_action_error == 1)[0]
     pred_action_error = (pred_action_error*pred_vq_actions)[perror]
 
-    axp[0].plot(range(na), real_vq_actions, label='tf vq', c='b')
-    axp[0].plot(range(na), actions[:na], label='actual', c='g')
-    axp[0].scatter(rerror, real_action_error, c='r')
+    f,axp=plt.subplots(2,1)
+    axp[0].scatter(range(na), actions[:na], label='actual', alpha=0.4, c='g')
+    axp[0].scatter(range(na), real_vq_actions[:na], label='tf vq', alpha=0.4, c='b')
+    axp[0].scatter(rerror, real_action_error, c='r', label='error')
     axp[0].legend()
-    axp[1].plot(range(pred_vq_actions.shape[0]), pred_vq_actions, label='froll vq', c='k')
-    axp[1].plot(range(actions.shape[0]), actions, label='actual', c='g')
-    axp[1].scatter(perror, pred_action_error, c='r')
+
+    axp[1].scatter(range(pa), actions[:pa], label='actual', c='g', alpha=0.4)
+    axp[1].scatter(range(pa), pred_vq_actions[:pa], label='froll vq', c='b', alpha=0.4)
+    axp[1].scatter(perror, pred_action_error, c='r', label='error')
     axp[1].legend()
     plt.savefig(aname)
     plt.close()
@@ -251,14 +254,15 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     real_rewards_error = (real_rewards_error*real_vq_rewards)[rrerror]
     prerror = np.where(pred_rewards_error == 1)[0]
     pred_rewards_error = (pred_rewards_error*pred_vq_rewards)[prerror]
+    print(prerror, pred_rewards_error)
 
-    axr[0].plot(range(real_vq_rewards.shape[0]), real_vq_rewards, label='tf vq', c='b')
-    axr[0].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
-    axp[0].scatter(rrerror, real_rewards_error, c='r')
+    axr[0].scatter(range(nr), rewards[:nr], label='actual', c='g', alpha=0.4)
+    axr[0].scatter(range(nr), real_vq_rewards[:nr], label='tf vq', c='b', alpha=0.4)
+    axr[0].scatter(rrerror, real_rewards_error, c='r', label='error')
     axr[0].legend()
-    axr[1].plot(range(pred_vq_rewards.shape[0]), pred_vq_rewards, label='froll vq', c='k')
-    axr[1].plot(range(rewards.shape[0]), rewards, label='actual', c='g')
-    axp[1].scatter(prerror, pred_rewards_error, c='r')
+    axr[1].scatter(range(pr), rewards[:pr], label='actual', c='g', alpha=0.4)
+    axr[1].scatter(range(pr), pred_vq_rewards[:pr], label='froll vq', c='b', alpha=0.4)
+    axr[1].scatter(prerror, pred_rewards_error, c='r', label='error')
     axr[1].legend()
     plt.savefig(rname)
     plt.close()
@@ -300,19 +304,19 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
             ax[1,0].set_title('s roll self')
         ax[1,0].imshow(s_rec, interpolation="None")
 
-        ax[1,1].set_title('s1 roll')
+        ax[1,1].set_title('s1 rollA%sPA%sTA%s'%(int(actions[i]), int(pred_vq_actions[i]), int(real_vq_actions[i])))
         ax[1,1].imshow(pred_est[i,0], interpolation="None")
 
-        ax[2,0].set_title('error s A%sPA%s'%(int(actions[i]), int(pred_vq_actions[i])))
+        ax[2,0].set_title('error s')
         serror = np.square(true_states[i,-1]-s_rec)
         ax[2,0].imshow(serror, interpolation="None")
 
-        ax[2,1].set_title('error s1 roll R%sPR%s'%(int(rewards[i]), int(pred_vq_rewards[i])))
+        ax[2,1].set_title('error s1')
         s1error = np.square(true_next_states[i,-1]-pred_est[i,0])
         ax[2,1].imshow(s1error, interpolation="None")
 
         ax[1,2].imshow(tf_pred_est[i, 0], interpolation="None")
-        ax[1,2].set_title('%02d forw tf s1'%(i+1))
+        ax[1,2].set_title('forw tf s1 R%sPR%sTR%s'%(int(rewards[i]), int(pred_vq_rewards[i]), int(real_vq_rewards[i])))
 
         ax[2,2].set_title('error forw tf s1')
         s1error = np.square(true_next_states[i,-1]-tf_pred_est[i,0])
@@ -348,6 +352,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='generate vq-vae')
     parser.add_argument('-l', '--forward_model_loadname', help='full path to model')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
+    parser.add_argument('-tr', '--train', action='store_true', default=False)
     parser.add_argument('-as', '--action_saliency', action='store_true', default=True)
     parser.add_argument('-rs', '--reward_saliency', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=False)
@@ -395,25 +400,31 @@ if __name__ == '__main__':
     train_data_file = vq_largs.train_data_file
     valid_data_file = vq_largs.train_data_file.replace('training', 'valid')
 
-    #train_data_loader = AtariDataset(
-    #                               train_data_file,
-    #                               number_condition=4,
-    #                               steps_ahead=1,
-    #                               batch_size=args.batch_size,
-    #                               norm_by=255.,)
-    valid_data_loader = AtariDataset(
+    if args.train:
+        name = 'train'
+        data_loader = AtariDataset(
+                                   train_data_file,
+                                   number_condition=4,
+                                   steps_ahead=1,
+                                   batch_size=args.batch_size,
+                                   norm_by=255.,)
+        episode_batch, episode_index, episode_reward = data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
+    else:
+        name = 'valid'
+        data_loader = AtariDataset(
                                    valid_data_file,
                                    number_condition=4,
                                    steps_ahead=1,
                                    batch_size=args.batch_size,
                                    norm_by=255.0,)
-
-    args.size_training_set = valid_data_loader.num_examples
-    hsize = valid_data_loader.data_h
-    wsize = valid_data_loader.data_w
+        episode_batch, episode_index, episode_reward = data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
+    args.size_training_set = data_loader.num_examples
+    hsize = data_loader.data_h
+    wsize = data_loader.data_w
 
     num_k = vq_largs.num_k
     int_reward = vq_info['num_rewards']
+
     vqvae_model = VQVAE(num_clusters=num_k,
                         encoder_output_size=vq_largs.num_z,
                         num_output_mixtures=vq_info['num_output_mixtures'],
@@ -425,7 +436,6 @@ if __name__ == '__main__':
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
     args.limit = args.rollout_length+15
     num_k = vq_largs.num_k
-    valid_episode_batch, episode_index, episode_reward = valid_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
     #train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
     conv_forward_model = ForwardResNet(BasicBlock, data_width=forward_info['hsize'],
                                        num_channels=forward_info['num_channels'],
@@ -434,4 +444,4 @@ if __name__ == '__main__':
     conv_forward_model.load_state_dict(forward_model_dict['conv_forward_model'])
     conv_forward_model = conv_forward_model.to(DEVICE)
 
-    sample_episode(valid_episode_batch, episode_index, episode_reward, 'valid')
+    sample_episode(episode_batch, episode_index, episode_reward, name)
