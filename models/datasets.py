@@ -272,6 +272,12 @@ class ForwardLatentDataset(Dataset):
         #torch.LongTensor(self.actions[indexes]),
         #torch.LongTensor(self.rewards[indexes]), torch.FloatTensor(self.values[indexes]),
         #torch.LongTensor(self.next_latents[indexes]), reset, indexes
+        # S0  S1  S2**S3 - prev
+        #               A0
+        #     S1  S2  S3**S4  - state
+        #                   A1
+        #          S2  S3  S4**S5  - next
+        #                          A3
         data = (self.prev_latents[indexes], self.prev_actions[indexes],
                 self.prev_rewards[indexes], self.prev_values[indexes],
                 self.latents[indexes], self.actions[indexes],

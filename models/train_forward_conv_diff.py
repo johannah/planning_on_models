@@ -208,14 +208,15 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file',
                         #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
-                        default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex_train_forward.npz')
+                        #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex_train_forward.npz')
+                        default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0131013624ex_train_forwarddebug.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convVQoutmdiffl1')
+    parser.add_argument('--savename', default='convVQoutmdiff_overfit_episode')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
-        parser.add_argument('-se', '--save_every', default=100000*5, type=int)
-        parser.add_argument('-pe', '--plot_every', default=100000*5, type=int)
-        parser.add_argument('-le', '--log_every',  default=100000*5, type=int)
+        parser.add_argument('-se', '--save_every', default=1000000*1, type=int)
+        parser.add_argument('-pe', '--plot_every', default=1000000*1, type=int)
+        parser.add_argument('-le', '--log_every',  default=1000000*1, type=int)
     else:
         parser.add_argument('-se', '--save_every', default=10, type=int)
         parser.add_argument('-pe', '--plot_every', default=10, type=int)
@@ -299,6 +300,9 @@ if __name__ == '__main__':
     ###########################################3
     # load vq model
     vq_model_loadpath = args.train_data_file.replace('_train_forward.npz', '.pt')
+    if '.pt' not in vq_model_loadpath:
+        vq_model_loadpath = args.train_data_file.replace('_train_forwarddebug.npz', '.pt')
+
     vq_model_dict = torch.load(vq_model_loadpath, map_location=lambda storage, loc: storage)
     vq_info = vq_model_dict['info']
     vq_largs = vq_info['args'][-1]

@@ -138,7 +138,7 @@ def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params
         #plt.suptitle(title)
         plt.savefig(iname)
         plt.close()
-    gif_path = os.path.join(output_savepath, '_latents.gif')
+    gif_path = os.path.join(output_savepath, '_latents_%s.gif'%name)
     search_path = iname[:-10:] + '*.png'
     cmd = 'convert %s %s' %(search_path, gif_path)
     print('creating gif', gif_path)
@@ -335,7 +335,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         #plt.suptitle(title)
         plt.savefig(iname)
         plt.close()
-    gif_path = os.path.join(output_savepath, '_reconstruction.gif')
+    gif_path = os.path.join(output_savepath, '_reconstruction_%s.gif'%name)
     search_path = iname[:-10] + '*.png'
     cmd = 'convert %s %s' %(search_path, gif_path)
     print('creating gif', gif_path)
