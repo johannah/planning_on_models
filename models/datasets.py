@@ -239,6 +239,15 @@ class FreewayForwardDataset(Dataset):
         y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
         return x,y
 
+def find_component_proportion(data):
+    unique = list(set(data))
+    component_percentages = []
+    num = data.shape[0]
+    for u in unique:
+        num_u = np.where(data == u)[0].shape[0]
+        component_percentages.append(num_u/float(num))
+    return num, unique, component_percentages
+
 class ForwardLatentDataset(Dataset):
     def __init__(self,  data_file, batch_size=128, seed=9):
         self.random_state = np.random.RandomState(seed)
@@ -255,10 +264,10 @@ class ForwardLatentDataset(Dataset):
         self.next_latents = self.data_file['next_latents']
         self.rewards = self.data_file['rewards']
         self.values = self.data_file['values']
-        self.unique_rewards = list(set(self.rewards))
-        # should probably add terminals
         self.actions = self.data_file['actions']
-        self.action_space = sorted(list(set(self.actions)))
+        _, self.unique_rewards, self.percentages_rewards = find_component_proportion(self.rewards)
+        _, self.action_space, self.percentages_actions = find_component_proportion(self.actions)
+        # should probably add terminals
         self.n_actions = len(self.action_space)
         self.num_examples,self.data_h,self.data_w = self.latents.shape
         self.index_array = list(np.arange(0, self.num_examples, dtype=np.int))

@@ -121,8 +121,8 @@ def train_forward(train_cnt):
 
         # should be able to predict the input action that got us to this
         # timestep
-        loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
-        loss_reward = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+        loss_act = args.alpha_act*F.nll_loss(pred_actions, actions,    weight=actions_weight)
+        loss_reward = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=rewards_weight)
 
         # determine which values of latents change over this time step
         ts_change = (torch.abs(latents.long()-next_latents)>1).view(-1)
@@ -141,7 +141,7 @@ def train_forward(train_cnt):
         clip_grad_value_(parameters, 10)
         opt.step()
         loss_list = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff_rec.item()/bs]
-        if batches > 100:
+        if batches > 1000:
             handle_checkpointing(train_cnt, loss_list)
         train_cnt+=bs
         batches+=1
@@ -191,11 +191,12 @@ def valid_forward(train_cnt, do_plot=False):
 
     # log_softmax is done in the forward pass
     loss_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k), next_latents.view(-1), reduction='mean')
-    loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
+
+    loss_act = args.alpha_act*F.nll_loss(pred_actions, actions,    weight=actions_weight)
+    loss_reward = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=rewards_weight)
     # we want to penalize when these are wrong in particular
     loss_diff_rec = args.alpha_rec*F.nll_loss(pred_next_latents.view(-1, num_k)[ts_change==1], next_latents.view(-1)[ts_change==1], reduction='mean')
     # weight rewards according to the
-    loss_reward = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
     # cant do act because i dont have this data for the "next action"
     loss_list = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff_rec.item()/bs]
     print('valid', loss_list)
@@ -211,12 +212,13 @@ if __name__ == '__main__':
                         #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex_train_forward.npz')
                         default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0131013624ex_train_forwarddebug.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convVQoutmdiff_overfit_episode')
+    parser.add_argument('--savename', default='convVQoutmdiff_tiny_overfit_episode')
+    #parser.add_argument('--savename', default='DEBUG')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
-        parser.add_argument('-se', '--save_every', default=1000000*1, type=int)
-        parser.add_argument('-pe', '--plot_every', default=1000000*1, type=int)
-        parser.add_argument('-le', '--log_every',  default=1000000*1, type=int)
+        parser.add_argument('-se', '--save_every', default=100000*5, type=int)
+        parser.add_argument('-pe', '--plot_every', default=100000*5, type=int)
+        parser.add_argument('-le', '--log_every',  default=100000*5, type=int)
     else:
         parser.add_argument('-se', '--save_every', default=10, type=int)
         parser.add_argument('-pe', '--plot_every', default=10, type=int)
@@ -224,9 +226,9 @@ if __name__ == '__main__':
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     # increased the alpha rec
     parser.add_argument('-ad', '--alpha_rew', default=2.0, type=float)
-    parser.add_argument('-aa', '--alpha_act', default=10.0, type=float)
+    parser.add_argument('-aa', '--alpha_act', default=2.0, type=float)
     parser.add_argument('-ar', '--alpha_rec', default=1.0, type=float)
-    parser.add_argument('-d', '--dropout_prob', default=0.5, type=float)
+    parser.add_argument('-d', '--dropout_prob', default=0.25, type=float)
     parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=int(1e10), type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-5)
@@ -288,10 +290,6 @@ if __name__ == '__main__':
     wsize = train_data_loader.data_w
     info['num_rewards'] = len(train_data_loader.unique_rewards)
 
-    reward_loss_weight = torch.ones(info['num_rewards']).to(DEVICE)
-    for i, w  in enumerate(info['reward_weights']):
-        reward_loss_weight[i] *= w
-
     info['hsize'] = hsize
     info['num_channels'] = num_actions+1+1
 
@@ -307,24 +305,6 @@ if __name__ == '__main__':
     vq_info = vq_model_dict['info']
     vq_largs = vq_info['args'][-1]
     ###########################################3
-
-    #train_data_loader = AtariDataset(
-    #                               train_data_file,
-    #                               number_condition=4,
-    #                               steps_ahead=1,
-    #                               batch_size=args.batch_size,
-    #                               norm_by=255.,)
-    #valid_data_loader = AtariDataset(
-    #                               valid_data_file,
-    #                               number_condition=4,
-    #                               steps_ahead=1,
-    #                               batch_size=args.batch_size,
-    #                               norm_by=255.0,)
-
-    #args.size_training_set = valid_data_loader.num_examples
-    #hsize = valid_data_loader.data_h
-    #wsize = valid_data_loader.data_w
-
     num_k = vq_largs.num_k
     vqvae_model = VQVAE(num_clusters=num_k,
                         encoder_output_size=vq_largs.num_z,
@@ -347,6 +327,11 @@ if __name__ == '__main__':
                                        num_output_channels=num_k,
                                        dropout_prob=args.dropout_prob).to(DEVICE)
 
+    # reweight the data based on its frequency
+    info['actions_weight'] = 1-np.array(train_data_loader.percentages_actions)
+    info['rewards_weight'] = 1-np.array(train_data_loader.percentages_rewards)
+    actions_weight = torch.FloatTensor(info['actions_weight']).to(DEVICE)
+    rewards_weight = torch.FloatTensor(info['rewards_weight']).to(DEVICE)
     parameters = list(conv_forward_model.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     if args.model_loadpath != '':

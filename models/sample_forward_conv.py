@@ -22,13 +22,16 @@ def sample_episode(data, episode_number, episode_reward, name):
     states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
     params = (episode_number, episode_reward, name, actions, rewards)
     pred_actions = []
-    real_pred_actions = []
+    bs = min(states.shape[0], args.rollout_length)
     snp = reshape_input(deepcopy(states))
     s = (2*reshape_input(torch.FloatTensor(states))-1)
     nsnp = reshape_input(next_states)
     # make channels for actions which is the size of the latents
+    gen_method = []
     actions = torch.LongTensor(actions).to(DEVICE)
     elen = actions.shape[0]
+    print("setting all actions to one")
+    actions[2:] = 1
     channel_actions = torch.zeros((elen, forward_info['num_actions'], forward_info['hsize'], forward_info['hsize']))
     for a in range(forward_info['num_actions']):
         channel_actions[actions==a,a] = 1.0
@@ -39,11 +42,19 @@ def sample_episode(data, episode_number, episode_reward, name):
     assert args.lead_in >= 2
     # at beginning
     # 0th real action is actually for 1
-    for i in range(args.rollout_length):
+    # all_real_latents represents i
+    # tf_pred_latents is constructing i, given latents from latents of i-1,i-2
+    # from tf_pred_latents[i], you can find obs[i]
+    for i in range(bs):
         x_d, z_e_x, z_q_x, real_latents, pred_actions, pred_signals = vqvae_model(s[i:i+1])
         # for the ith index
         all_real_latents[i] = real_latents.float()
-        if i > 2:
+        gmethod = 'NOT'
+        if i >= 2:
+            # get a teacher force result - where past real latents are used to
+            # predict this state
+            assert(np.abs(all_real_latents[i-2]).sum() > 0)
+            assert(np.abs(all_real_latents[i-1]).sum() > 0)
             tf_state_input = torch.cat((channel_actions[i][None,:],
                                         all_real_latents[i-2][None, None],
                                         all_real_latents[i-1][None, None]), dim=1)
@@ -52,32 +63,43 @@ def sample_episode(data, episode_number, episode_reward, name):
             # prediction for the i + 1 index
             tf_pred_next_latents = torch.argmax(tf_pred_next_latents, dim=1)
             # THIS is pred s+1 so the indexes are different
-            all_tf_pred_latents[i] = tf_pred_next_latents[0].cpu().numpy()
+            all_tf_pred_latents[i] = deepcopy(tf_pred_next_latents[0].cpu().numpy())
+            print('tf', i, all_tf_pred_latents[i].sum())
+            if i > args.lead_in:
+                # use last prediction
+                print('i', i)
+                assert(np.abs(all_pred_latents[i-2]).sum() > 0)
+                assert(np.abs(all_pred_latents[i-1]).sum() > 0)
+                state_input = torch.cat((channel_actions[i][None,:],
+                                         all_pred_latents[i-2][None, None].float(),
+                                         all_pred_latents[i-1][None, None].float()), dim=1)
+                gmethod = 'SLF'
+                # use teacher forced version if we are in "lead in"
+            else:
+                gmethod = 'FTF'
+                state_input = torch.cat((channel_actions[i][None,:],
+                                         all_real_latents[i-2][None, None].float(),
+                                         all_real_latents[i-1][None, None].float()), dim=1)
 
-    for i in range(2, args.rollout_length):
-        if i > args.lead_in:
-            print('using predicted', i)
-            state_input = torch.cat((channel_actions[i][None,:],
-                                     all_pred_latents[i-2][None, None].float(),
-                                     all_pred_latents[i-1][None, None].float()), dim=1)
+            out_pred_next_latents = conv_forward_model(state_input)
+            # take argmax over channels axis
+            pred_next_latents = torch.argmax(out_pred_next_latents, dim=1)
+            # replace true with this
+            all_pred_latents[i] = pred_next_latents[0].float()
+            print('pred', i, all_pred_latents[i].sum())
         else:
-            state_input = torch.cat((channel_actions[i][None,:],
-                                     all_real_latents[i-2][None, None],
-                                     all_real_latents[i-1][None, None]), dim=1)
-        out_pred_next_latents = conv_forward_model(state_input)
-        # take argmax over channels axis
-        pred_next_latents = torch.argmax(out_pred_next_latents, dim=1)
-        # replace true with this
-        all_pred_latents[i] = pred_next_latents[0].float()
+            print("feeding beginning of preds with real", i)
+            all_pred_latents[i] = real_latents.float()
+        gen_method.append(gmethod)
 
     all_pred_latents = all_pred_latents.cpu().numpy()
     all_real_latents = all_real_latents.cpu().numpy()
-    plot_reconstructions(snp, nsnp, all_real_latents, all_pred_latents, all_tf_pred_latents, params)
-    plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params)
+    plot_reconstructions(snp, nsnp, all_real_latents, all_pred_latents, all_tf_pred_latents, params, gen_method)
+    plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params, gen_method)
 
-def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params):
+def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params, gen_method):
     episode_number, episode_reward, name, actions, rewards = params
-    for i in range(3, args.rollout_length-1):
+    for i in range(0, args.rollout_length-1):
         f,ax = plt.subplots(3,3)
         # true latent at time i
         true_s_latent = all_real_latents[i]
@@ -89,13 +111,8 @@ def plot_latents(all_real_latents, all_pred_latents, all_tf_pred_latents, params
         ax[0,0].set_title('s-%02d true'% i)
 
         # was this teacher forced or rolled out?
-        if i <  args.lead_in:
-            ax[1,0].set_title('s-%02d given'%i)
-            s_latent = true_s_latent
-        else:
-            ax[1,0].set_title('s-%02d self '%i)
-            s_latent = pred_s_latent
-
+        ax[1,0].set_title('s-%02d %s'%(i,gen_method[i]))
+        s_latent = pred_s_latent
         ax[1,0].imshow(s_latent, interpolation="None")
         ax[2,0].set_title('s-%02d error'%i)
         s_error = np.square(s_latent - true_s_latent)
@@ -249,7 +266,7 @@ def plot_over_time(data, true_data, over_time_name):
     #plt.close()
 
 
-def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, params):
+def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, params, gen_method):
     episode_number, episode_reward, name, actions, rewards = params
     # true (label) action is at transition 3-4, 4-5, 5-6
     # real (tf vq) action is at transition 2-3, 3-4, 4-5
@@ -260,8 +277,8 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     # tf so every forward was only one step ahead
     pred_tf_est, pred_tf_mean, pred_tf_vq_actions, pred_tf_vq_rewards = sample_from_vq(all_tf_pred_latents)
     # vqvae_model predicts the action which took from t-1 to t-0
-    real_vq_actions = real_vq_actions[1:]
-    real_vq_rewards = real_vq_rewards[1:]
+    real_vq_actions = np.append(real_vq_actions[1:], np.array(-9))
+    real_vq_rewards = np.append(real_vq_rewards[1:], np.array(-9))
 
     plot_over_time([real_vq_actions, pred_tf_vq_actions, pred_vq_actions], actions, 'actions')
     plot_over_time([real_vq_rewards, pred_tf_vq_rewards, pred_vq_rewards], rewards, 'rewards')
@@ -269,7 +286,7 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     #pred_heatmaps = get_grad_cams_rec(pred_est)
     #true_heatmaps = get_grad_cams(true_next_states)
 
-    for i in range(3, args.rollout_length-1):
+    for i in range(0, args.rollout_length):
        ##########################################
         f,ax = plt.subplots(3,3)
         ax[0,0].imshow(true_states[i,-1], interpolation="None")
@@ -285,23 +302,28 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
         #gse1 = pred_heatmaps[i]*.4+s1cest*.6
         #gse1 = s1cest
         #ax[0,2].imshow(gse1, interpolation="None")
-        ax[0,2].imshow(real_est[i+1,0], interpolation="None")
-        ax[0,2].set_title('%02d vq tf s1'%(i+1))
+        try:
+            ax[0,2].imshow(real_est[i+1,0], interpolation="None")
+            ax[0,2].set_title('%02d vq tf s1'%(i+1))
+        except:
+            print("no next real est")
 
         #ax[1,0].imshow(rec_est[0,0], interpolation="None")
         #ax[1,0].set_title('s rec true sam')
 
         ## was this teacher forced or rolled out?
-        if i <  args.lead_in:
-            s_rec = real_est[i,0]
-            ax[1,0].set_title('s rollout given')
-        else:
+        #if i <  args.lead_in:
+        #    s_rec = real_est[i,0]
+        #    ax[1,0].set_title('s rollout given')
+        #else:
             # given state was a rollout
-            s_rec = pred_est[i,0]
-            ax[1,0].set_title('s roll self')
+        s_rec = pred_est[i,0]
+        ax[1,0].set_title('s roll %s'%gen_method[i])
         ax[1,0].imshow(s_rec, interpolation="None")
 
-        ax[1,1].set_title('s1 rollA%sPA%sTA%s'%(int(actions[i]), int(pred_vq_actions[i]), int(real_vq_actions[i])))
+        ax[1,1].set_title('s1 rollA%sPA%sTA%s'%(int(actions[i]),
+                                                int(pred_vq_actions[i]),
+                                                int(real_vq_actions[i])))
         ax[1,1].imshow(pred_est[i,0], interpolation="None")
 
         ax[2,0].set_title('error s')
@@ -349,13 +371,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='generate vq-vae')
     parser.add_argument('-l', '--forward_model_loadname', help='full path to model')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
+    parser.add_argument('-d', '--debug', action='store_true', default=False)
     parser.add_argument('-tr', '--train', action='store_true', default=False)
     parser.add_argument('-as', '--action_saliency', action='store_true', default=True)
     parser.add_argument('-rs', '--reward_saliency', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=False)
     parser.add_argument('-s', '--generate_savename', default='g')
     parser.add_argument('-bs', '--batch_size', default=5, type=int)
-    parser.add_argument('-li', '--lead_in', default=5, type=int)
+    parser.add_argument('-li', '--lead_in', default=3, type=int)
     parser.add_argument('-rl', '--rollout_length', default=30, type=int)
     parser.add_argument('-ns', '--num_samples', default=40, type=int)
     parser.add_argument('-mr', '--min_reward', default=-999, type=int)
@@ -377,7 +400,7 @@ if __name__ == '__main__':
 
     forward_model_loadpath = os.path.abspath(args.forward_model_loadname)
     if not os.path.exists(forward_model_loadpath):
-        print("Error: given forwrad model load path does not exist")
+        print("Error: given forward model load path does not exist")
         print(forward_model_loadpath)
         sys.exit()
 
@@ -389,36 +412,58 @@ if __name__ == '__main__':
     forward_largs = forward_info['args'][-1]
 
     vq_model_loadpath = forward_largs.train_data_file.replace('_train_forward.npz', '.pt')
+    if '.pt' not in vq_model_loadpath:
+        print("Loading training data")
+        vq_model_loadpath = forward_largs.train_data_file.replace('_train_forwarddebug.npz', '.pt')
     vq_model_dict = torch.load(vq_model_loadpath, map_location=lambda storage, loc: storage)
     vq_info = vq_model_dict['info']
     vq_largs = vq_info['args'][-1]
 
     run_num = 0
-    train_data_file = vq_largs.train_data_file
-    valid_data_file = vq_largs.train_data_file.replace('training', 'valid')
+    if args.debug:
+        print("DEBUG with fake data file")
+        name = 'debug'
+        train_data_file = '../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0131013624ex_train_forwarddebug.npz'
+        df = np.load(train_data_file)
+        episode_reward = 1
+        episode_index = 0
 
-    if args.train:
-        name = 'train'
-        data_loader = AtariDataset(
-                                   train_data_file,
-                                   number_condition=4,
-                                   steps_ahead=1,
-                                   batch_size=args.batch_size,
-                                   norm_by=255.,)
-        episode_batch, episode_index, episode_reward = data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
+        args.size_training_set = nn = df['rewards'].shape[0]
+        hsize = df['states'][0].shape[-2]
+        wsize = df['states'][0].shape[-2]
+        fake_terminals = np.zeros_like(df['rewards'])
+        fake_terminals[-1] = 1
+        episode_batch = (df['states'], df['actions'], df['rewards'], df['values'], df['next_states'], fake_terminals, False, np.arange(nn))
+        #states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
+
     else:
-        name = 'valid'
-        data_loader = AtariDataset(
-                                   valid_data_file,
-                                   number_condition=4,
-                                   steps_ahead=1,
-                                   batch_size=args.batch_size,
-                                   norm_by=255.0,)
-        episode_batch, episode_index, episode_reward = data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
-    args.size_training_set = data_loader.num_examples
-    hsize = data_loader.data_h
-    wsize = data_loader.data_w
+        train_data_file = vq_largs.train_data_file
+        valid_data_file = vq_largs.train_data_file.replace('training', 'valid')
 
+        if args.train:
+            print("USING TRAINING DATA")
+            name = 'train'
+            data_loader = AtariDataset(
+                                       train_data_file,
+                                       number_condition=4,
+                                       steps_ahead=1,
+                                       batch_size=args.batch_size,
+                                       norm_by=255.,)
+            episode_batch, episode_index, episode_reward = data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
+        else:
+            name = 'valid'
+            data_loader = AtariDataset(
+                                       valid_data_file,
+                                       number_condition=4,
+                                       steps_ahead=1,
+                                       batch_size=args.batch_size,
+                                       norm_by=255.0,)
+            episode_batch, episode_index, episode_reward = data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
+            args.size_training_set = data_loader.num_examples
+            hsize = data_loader.data_h
+            wsize = data_loader.data_w
+    args.rollout_length = min(args.rollout_length, args.size_training_set)
+    print("data has %s samples" %args.size_training_set)
     num_k = vq_largs.num_k
     int_reward = vq_info['num_rewards']
 
@@ -431,7 +476,7 @@ if __name__ == '__main__':
 
     vqvae_model.load_state_dict(vq_model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
-    args.limit = args.rollout_length+15
+    args.limit = args.rollout_length+5
     num_k = vq_largs.num_k
     #train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
     conv_forward_model = ForwardResNet(BasicBlock, data_width=forward_info['hsize'],
@@ -440,5 +485,4 @@ if __name__ == '__main__':
                                        dropout_prob=0.0)
     conv_forward_model.load_state_dict(forward_model_dict['conv_forward_model'])
     conv_forward_model = conv_forward_model.to(DEVICE)
-
     sample_episode(episode_batch, episode_index, episode_reward, name)

@@ -3,6 +3,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import sys
 import os
+from copy import deepcopy
 import torch
 from IPython import embed
 from vqvae import VQVAE
@@ -14,24 +15,36 @@ torch.manual_seed(394)
 
 def generate_forward_datasets():
     with torch.no_grad():
-        for dname, data_loader in {'valid':valid_data_loader, 'train':train_data_loader}.items():
+        #for dname, data_loader in {'valid':valid_data_loader, 'train':train_data_loader}.items():
+        for dname, data_loader in {'train':train_data_loader}.items():
             rmax = data_loader.relative_indexes.max()
             new = True
             st = 1
+            if args.debug:
+                st = 260
             en = 0
             keep_going = True
             while keep_going:
                 en = min(st+args.batch_size, rmax-1)
+                print("all", st, en)
                 fdata = data_loader.get_data(np.arange(st, en, dtype=np.int))
-                fterminals = list(fdata[5])
+                # use reward as endpoint
+                if args.debug:
+                    fterminals = list(fdata[2])
+                else:
+                    fterminals = list(fdata[5])
                 # end at end of episode
                 if 1 in fterminals:
                     en = st+list(fterminals).index(1)+1
                     print("end in terminals")
                     print(fterminals)
+                    print("SHOULD END NOW")
+                    print("DEBUG STOP AFTER ONE EPISODE")
                     data = data_loader.get_data(np.arange(st, en, dtype=np.int))
+                    keep_going = False
                 else:
                     data = fdata
+                    print("NO END")
                 print('generating from %s to %s of %s' %(st,en,rmax))
                 states, actions, rewards, values, next_states, terminals, reset, relative_indexes = data
                 assert np.sum(terminals[:-1]) == 0
@@ -55,9 +68,14 @@ def generate_forward_datasets():
                     all_latents = latents.cpu()
                     all_next_latents = nlatents.cpu()
 
-                    all_prev_states = pstates
-                    all_states = states
-                    all_next_states = next_states
+                    if args.debug:
+                        all_prev_states = pstates
+                        all_states = states
+                        all_next_states = next_states
+                        all_next_pred_actions = next_pred_actions.cpu().numpy()
+                        all_next_pred_rewards = next_pred_rewards.cpu().numpy()
+                        all_pred_actions = pred_actions.cpu().numpy()
+                        all_pred_rewards = pred_rewards.cpu().numpy()
 
                     all_prev_actions = pactions
                     all_prev_rewards = prewards
@@ -68,19 +86,20 @@ def generate_forward_datasets():
                     all_actions = actions
                     all_rel_inds = relative_indexes
 
-                    all_next_pred_actions = next_pred_actions.cpu().numpy()
-                    all_next_pred_rewards = next_pred_rewards.cpu().numpy()
-                    all_pred_actions = pred_actions.cpu().numpy()
-                    all_pred_rewards = pred_rewards.cpu().numpy()
                     new = False
                 else:
                     all_prev_latents = np.concatenate((all_prev_latents, platents.cpu().numpy()), axis=0)
                     all_latents = np.concatenate((all_latents, latents.cpu().numpy()), axis=0)
                     all_next_latents = np.concatenate((all_next_latents, nlatents.cpu().numpy()), axis=0)
 
-                    all_prev_states = np.concatenate((all_prev_states, pstates), axis=0)
-                    all_states = np.concatenate((all_states,  states), axis=0)
-                    all_next_states = np.concatenate((all_next_states, next_states), axis=0)
+                    if args.debug:
+                        all_prev_states = np.concatenate((all_prev_states, pstates), axis=0)
+                        all_states = np.concatenate((all_states,  states), axis=0)
+                        all_next_states = np.concatenate((all_next_states, next_states), axis=0)
+                        all_next_pred_rewards = np.concatenate((all_next_pred_rewards, next_pred_rewards.cpu().numpy()), axis=0)
+                        all_pred_rewards = np.concatenate((all_pred_rewards,  pred_rewards.cpu().numpy()), axis=0)
+                        all_next_pred_actions = np.concatenate((all_next_pred_actions, next_pred_actions.cpu().numpy()), axis=0)
+                        all_pred_actions = np.concatenate((all_pred_actions,  pred_actions.cpu().numpy()), axis=0)
 
                     all_prev_rewards = np.concatenate((all_prev_rewards, prewards))
                     all_prev_values =  np.concatenate((all_prev_values, pvalues))
@@ -91,30 +110,22 @@ def generate_forward_datasets():
                     all_actions = np.concatenate((all_actions, actions))
                     all_rel_inds = np.concatenate((all_rel_inds, relative_indexes))
 
-                    all_next_pred_rewards = np.concatenate((all_next_pred_rewards, next_pred_rewards.cpu().numpy()), axis=0)
-                    all_pred_rewards = np.concatenate((all_pred_rewards,  pred_rewards.cpu().numpy()), axis=0)
-                    all_next_pred_actions = np.concatenate((all_next_pred_actions, next_pred_actions.cpu().numpy()), axis=0)
-                    all_pred_actions = np.concatenate((all_pred_actions,  pred_actions.cpu().numpy()), axis=0)
 
                 if 1 in fterminals:
                     # skip ahead one so that prev state is correct
                     st = en+1
-                    if args.debug:
-                        keep_going = False
-                        print("DEBUG STOP AFTER ONE EPISODE")
                 else:
                     st = en
                 if en > rmax-2:
                     keep_going = False
-                forward_dir = args.model_loadname.replace('.pt','_%s_forward_imgs'%dname)
-                if not os.path.exists(forward_dir):
-                    os.makedirs(forward_dir)
+            forward_dir = args.model_loadname.replace('.pt','_%s_forward_imgs'%dname)
+            if not os.path.exists(forward_dir):
+                os.makedirs(forward_dir)
 
             forward_filename = args.model_loadname.replace('.pt', '_%s_forward.npz'%dname)
             if args.debug:
                 forward_filename = forward_filename.replace('.npz', 'debug.npz')
-            print('saving', forward_filename)
-            np.savez(forward_filename,
+                np.savez(forward_filename,
                      relative_indexes=all_rel_inds,
                      prev_latents=all_prev_latents,
                      latents=all_latents,
@@ -125,12 +136,29 @@ def generate_forward_datasets():
                      prev_rewards=all_prev_rewards,
                      prev_values= all_prev_values,
                      prev_actions=all_prev_actions,
+                     prev_states=all_prev_states,
+                     states=all_states,
+                     next_states=all_next_states,
                      num_k=largs.num_k)
+            else:
+                print('saving', forward_filename)
+                np.savez(forward_filename,
+                         relative_indexes=all_rel_inds,
+                         prev_latents=all_prev_latents,
+                         latents=all_latents,
+                         next_latents=all_next_latents,
+                         rewards=all_rewards,
+                         values=all_values,
+                         actions=all_actions,
+                         prev_rewards=all_prev_rewards,
+                         prev_values= all_prev_values,
+                         prev_actions=all_prev_actions,
+                         num_k=largs.num_k)
 
-            #if args.debug:
-            if False:
-                for i in range(all_prev_latents.shape[0]-3):
-                    f,ax=plt.subplots(2,3)
+
+            if args.debug:
+                for i in range(all_prev_latents.shape[0]):
+                    f,ax=plt.subplots(3,3)
                     ax[0,0].imshow(all_prev_states[i,-1])
                     # one ahead in action/reward because vq is predicting transition
                     ax[0,0].set_title('%04d A%sPA%s'%(i, all_prev_actions[i],
@@ -143,21 +171,38 @@ def generate_forward_datasets():
                     ax[0,2].imshow(all_next_states[i,-1])
                     ax[0,2].set_title('%04d'%(i+2))
 
-                    ax[1,0].imshow(all_prev_latents[i])
+                    ax[1,0].imshow(all_prev_latents[i], vmin=0, vmax=512)
                     ax[1,0].set_title('%04d R%sRA%s'%(i, all_prev_rewards[i],
                                                         np.argmax(all_pred_rewards[i])))
 
-                    ax[1,1].imshow(all_latents[i])
+                    ax[1,1].imshow(all_latents[i], vmin=0, vmax=512)
                     ax[1,1].set_title('%04d R%sRA%s'%(i+1, all_rewards[i],
                                                       np.argmax(all_next_pred_rewards[i])))
 
-                    ax[1,2].imshow(all_next_latents[i])
+                    ax[1,2].imshow(all_next_latents[i], vmin=0, vmax=512)
                     ax[1,2].set_title('%04d'%(i+2))
+
+                    s_mask = (all_latents[i]-all_prev_latents[i])==0
+                    diffnl = deepcopy(all_latents[i])
+                    diffnl[s_mask] *=0
+                    ax[2,1].imshow(diffnl, vmin=0, vmax=512)
+                    ax[2,1].set_title('diff %s-%s'%(i,i+1))
+
+                    s1_mask = (all_next_latents[i]-all_latents[i])==0
+                    diffs1nl = deepcopy(all_next_latents[i])
+                    diffs1nl[s1_mask] *=0
+                    ax[2,2].imshow(diffs1nl, vmin=0, vmax=512)
+                    ax[2,2].set_title('diff %s-%s'%(i+1,i+2))
+
                     pname = os.path.join(forward_dir, '%s_frame%05d.png'%(dname,i+1))
                     plt.savefig(pname)
                     plt.close()
-                    print('plotting', i, pname)
-                os.system('convert %s %s'%(os.path.join(forward_dir, '%s*.png'%dname), os.path.join(forward_dir, '%s.gif'%dname)))
+                    if not i%10:
+                        print('plotting', i, pname)
+                cmd = 'convert %s %s'%(os.path.join(forward_dir, '%s*.png'%dname), os.path.join(forward_dir, '%s.gif'%dname))
+                print("!!!! creating gif")
+                print(cmd)
+                os.system(cmd)
 
 if __name__ == '__main__':
     import argparse
@@ -172,7 +217,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-d', '--debug', action='store_true', default=False)
     parser.add_argument('-ri', '--reward_int', action='store_true', default=True)
-    parser.add_argument('-bs', '--batch_size', default=128, type=int)
+    parser.add_argument('-bs', '--batch_size', default=64, type=int)
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'

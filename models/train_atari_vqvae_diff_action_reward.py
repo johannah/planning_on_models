@@ -106,8 +106,8 @@ def train_vqvae(train_cnt):
         diff_est = x_d[:, nmix:]
         loss_rec = args.alpha_rec*discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
         loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
-        loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
-        loss_rewards = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+        loss_act = args.alpha_act*F.nll_loss(pred_actions, actions, weight=actions_weight)
+        loss_rewards = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=rewards_weight)
         loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
 
         loss_act.backward(retain_graph=True)
@@ -157,9 +157,9 @@ def valid_vqvae(train_cnt, do_plot=False):
     diff_est = x_d[:, nmix:]
     loss_rec = args.alpha_rec*discretized_mix_logistic_loss(rec_est, rec, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
     loss_diff = discretized_mix_logistic_loss(diff_est, diff, nr_mix=args.nr_logistic_mix, DEVICE=DEVICE)
-    loss_act = args.alpha_act*F.nll_loss(pred_actions, actions)
+    loss_act = args.alpha_act*F.nll_loss(pred_actions, actions, weight=actions_weight)
     loss_act.backward(retain_graph=True)
-    loss_rewards = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=reward_loss_weight)
+    loss_rewards = args.alpha_rew*F.nll_loss(pred_rewards, rewards, weight=rewards_weight)
     loss_rewards.backward(retain_graph=True)
     loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
     loss_3 = args.beta*F.mse_loss(z_e_x, z_q_x.detach())
@@ -245,7 +245,6 @@ if __name__ == '__main__':
                  'last_save':0,
                  'last_plot':0,
                  'norm_by':255.0,
-                 'reward_weights': [1,100]
                   }
 
          ## size of latents flattened - dependent on architecture of vqvae
@@ -261,8 +260,8 @@ if __name__ == '__main__':
         train_cnt = info['train_cnts'][-1]
         info['args'].append(args)
         info['loaded_from'] = args.model_loadpath
-        if 'reward_weights' not in info.keys():
-            info['reward_weights'] = [1,100]
+        #if 'reward_weights' not in info.keys():
+        #    info['reward_weights'] = [1,100]
     train_data_loader = AtariDataset(
                                    train_data_file,
                                    number_condition=args.number_condition,
@@ -281,9 +280,13 @@ if __name__ == '__main__':
     wsize = train_data_loader.data_w
     info['num_rewards'] = len(train_data_loader.unique_rewards)
 
-    reward_loss_weight = torch.ones(info['num_rewards']).to(DEVICE)
-    for i, w  in enumerate(info['reward_weights']):
-        reward_loss_weight[i] *= w
+    #reward_loss_weight = torch.ones(info['num_rewards']).to(DEVICE)
+    #for i, w  in enumerate(info['reward_weights']):
+    #    reward_loss_weight[i] *= w
+    info['actions_weight'] = 1-np.array(train_data_loader.percentages_actions)
+    info['rewards_weight'] = 1-np.array(train_data_loader.percentages_rewards)
+    actions_weight = torch.FloatTensor(info['actions_weight']).to(DEVICE)
+    rewards_weight = torch.FloatTensor(info['rewards_weight']).to(DEVICE)
 
     # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
     # decorelated channel
