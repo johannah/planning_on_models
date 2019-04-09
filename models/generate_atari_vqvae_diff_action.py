@@ -16,7 +16,7 @@ torch.manual_seed(394)
 def generate_forward_datasets():
     with torch.no_grad():
         #for dname, data_loader in {'valid':valid_data_loader, 'train':train_data_loader}.items():
-        for dname, data_loader in {'train':train_data_loader}.items():
+        for dname, data_loader in {'valid':valid_data_loader}.items():
             rmax = data_loader.relative_indexes.max()
             new = True
             st = 1
@@ -36,12 +36,7 @@ def generate_forward_datasets():
                 # end at end of episode
                 if 1 in fterminals:
                     en = st+list(fterminals).index(1)+1
-                    print("end in terminals")
-                    print(fterminals)
-                    print("SHOULD END NOW")
-                    print("DEBUG STOP AFTER ONE EPISODE")
                     data = data_loader.get_data(np.arange(st, en, dtype=np.int))
-                    keep_going = False
                 else:
                     data = fdata
                     print("NO END")

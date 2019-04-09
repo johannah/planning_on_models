@@ -30,8 +30,8 @@ def sample_episode(data, episode_number, episode_reward, name):
     gen_method = []
     actions = torch.LongTensor(actions).to(DEVICE)
     elen = actions.shape[0]
-    print("setting all actions to one")
-    actions[2:] = 1
+    #print("setting all actions to one")
+    #actions[2:] = 2
     channel_actions = torch.zeros((elen, forward_info['num_actions'], forward_info['hsize'], forward_info['hsize']))
     for a in range(forward_info['num_actions']):
         channel_actions[actions==a,a] = 1.0
@@ -64,7 +64,7 @@ def sample_episode(data, episode_number, episode_reward, name):
             tf_pred_next_latents = torch.argmax(tf_pred_next_latents, dim=1)
             # THIS is pred s+1 so the indexes are different
             all_tf_pred_latents[i] = deepcopy(tf_pred_next_latents[0].cpu().numpy())
-            print('tf', i, all_tf_pred_latents[i].sum())
+            #print('tf', i, all_tf_pred_latents[i].sum())
             if i > args.lead_in:
                 # use last prediction
                 print('i', i)
@@ -86,7 +86,7 @@ def sample_episode(data, episode_number, episode_reward, name):
             pred_next_latents = torch.argmax(out_pred_next_latents, dim=1)
             # replace true with this
             all_pred_latents[i] = pred_next_latents[0].float()
-            print('pred', i, all_pred_latents[i].sum())
+            #print('pred', i, all_pred_latents[i].sum())
         else:
             print("feeding beginning of preds with real", i)
             all_pred_latents[i] = real_latents.float()

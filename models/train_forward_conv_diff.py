@@ -7,6 +7,8 @@ from torch.nn import functional as F
 from torch.nn.utils.clip_grad import clip_grad_value_
 from forward_conv import ForwardResNet, BasicBlock
 torch.set_num_threads(4)
+from torchvision.utils import save_image
+from ae_utils import discretized_mix_logistic_loss, sample_from_discretized_mix_logistic
 from IPython import embed
 from lstm_utils import plot_dict_losses
 from ae_utils import save_checkpoint
@@ -179,7 +181,7 @@ def valid_forward(train_cnt, do_plot=False):
         N, _, H, W = latents.shape
         C = vq_largs.num_z
         pred_next_latent_inds = torch.argmax(pred_next_latents, dim=1)
-        x_tilde, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
+        x_d, pred_z_q_x, pred_actions, pred_rewards = vqvae_model.decode_clusters(pred_next_latent_inds, N, H, W, C)
 
     # determine which values of latents change over this time step
     ts_change = (torch.abs(latents.long()-next_latents)>1).view(-1)
@@ -200,6 +202,28 @@ def valid_forward(train_cnt, do_plot=False):
     # cant do act because i dont have this data for the "next action"
     loss_list = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff_rec.item()/bs]
     print('valid', loss_list)
+
+    bs,yc,yh,yw = x_d.shape
+    # only process 8 imgs
+    n = min(bs, 8)
+    rec_est =  x_d[:n, :nmix]
+    #loss_rec = args.alpha_rec*discretized_mix_logistic_loss(rec_est, rec, nr_mix=vq_largs.nr_logistic_mix, DEVICE=DEVICE)
+    yhat = sample_from_discretized_mix_logistic(rec_est, vq_largs.nr_logistic_mix)
+    if do_plot:
+        #gold = (rec.to('cpu')+1)/2.0
+        bs,_,h,w = yhat.shape
+        # sample from discretized should be between 0 and 255
+        #print("yhat sample", yhat[:,0].min().item(), yhat[:,0].max().item())
+        yimg = ((yhat + 1.0)/2.0).to('cpu')
+        print("yhat img", yhat.min().item(), yhat.max().item())
+        #print("gold img", gold.min().item(), gold.max().item())
+        #comparison = torch.cat([gold.view(bs,1,h,w)[:n],
+        #                        yimg.view(bs,1,h,w)[:n]])
+        img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
+        save_image(yimg.view(n,1,h,w), img_name, nrow=n)
+
+
+
     return loss_list
 
 if __name__ == '__main__':
@@ -210,9 +234,10 @@ if __name__ == '__main__':
     parser.add_argument('--train_data_file',
                         #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward00/vqdiffactintreward_0118012272ex_train_forward.npz')
                         #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex_train_forward.npz')
-                        default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0131013624ex_train_forwarddebug.npz')
+                        #default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0131013624ex_train_forwarddebug.npz')
+                        default='../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0131013624ex_train_forward.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='convVQoutmdiff_tiny_overfit_episode')
+    parser.add_argument('--savename', default='convVQoutmdiffRAB')
     #parser.add_argument('--savename', default='DEBUG')
     parser.add_argument('-l', '--model_loadpath', default='')
     if not debug:
@@ -225,7 +250,7 @@ if __name__ == '__main__':
         parser.add_argument('-le', '--log_every',  default=10, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     # increased the alpha rec
-    parser.add_argument('-ad', '--alpha_rew', default=2.0, type=float)
+    parser.add_argument('-ad', '--alpha_rew', default=10.0, type=float)
     parser.add_argument('-aa', '--alpha_act', default=2.0, type=float)
     parser.add_argument('-ar', '--alpha_rec', default=1.0, type=float)
     parser.add_argument('-d', '--dropout_prob', default=0.25, type=float)
@@ -304,6 +329,7 @@ if __name__ == '__main__':
     vq_model_dict = torch.load(vq_model_loadpath, map_location=lambda storage, loc: storage)
     vq_info = vq_model_dict['info']
     vq_largs = vq_info['args'][-1]
+    nmix = int(vq_info['num_output_mixtures']/2)
     ###########################################3
     num_k = vq_largs.num_k
     vqvae_model = VQVAE(num_clusters=num_k,
