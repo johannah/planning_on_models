@@ -31,7 +31,11 @@ def sample_episode(data, episode_number, episode_reward, name):
     actions = torch.LongTensor(actions).to(DEVICE)
     elen = actions.shape[0]
     #print("setting all actions to one")
-    #actions[2:] = 2
+    #actions[args.lead_in:] = 1
+    #actions[40:] = 0
+    #actions[args.lead_in:]=torch.LongTensor(np.random.randint(min(data_loader.action_space),
+    #                                                          max(data_loader.action_space),
+    #                                                          actions[args.lead_in:].shape[0])).to(DEVICE)
     channel_actions = torch.zeros((elen, forward_info['num_actions'], forward_info['hsize'], forward_info['hsize']))
     for a in range(forward_info['num_actions']):
         channel_actions[actions==a,a] = 1.0
@@ -171,6 +175,7 @@ def sample_from_vq(latents):
     # vqvae_model predcts the reward that was seen at t=0
     pred_actions = torch.argmax(actions, dim=1).cpu().numpy()
     pred_rewards = torch.argmax(rewards, dim=1).cpu().numpy()
+    embed()
     # TODO
     nmix = 30
     rec_mest = x_d[:,:nmix].detach()
@@ -240,32 +245,6 @@ def plot_over_time(data, true_data, over_time_name):
     plt.savefig(aname)
     plt.close()
 
-    #pred_tf_action_error = (pred_tf_vq_actions!=actions[:pa]).astype(np.int)
-    #pterror = np.where(pred_tf_action_error == 1)[0]
-    #pred_tf_action_error = (pred_tf_action_error*pred_tf_vq_actions)[pterror]
-
-    #pred_action_error = (pred_vq_actions!=actions[:ta]).astype(np.int)
-    #perror = np.where(pred_action_error == 1)[0]
-    #pred_action_error = (pred_action_error*pred_vq_actions)[perror]
-
-    #axp[0].scatter(range(na), actions[:na], label='actual', alpha=0.4, c='g')
-    #axp[0].scatter(range(na), real_vq_actions[:na], label='tf vq', alpha=0.4, c='b')
-    #axp[0].scatter(rerror, real_action_error, c='r', label='error')
-    #axp[0].legend()
-
-    #axp[1].scatter(range(ta), actions[:ta], label='actual', c='g', alpha=0.4)
-    #axp[1].scatter(range(ta), pred_tf_vq_actions[:ta], label='tffroll vq', c='b', alpha=0.4)
-    #axp[1].scatter(pterror, pred_tf_action_error, c='r', label='error')
-    #axp[1].legend()
-
-    #axp[2].scatter(range(pa), actions[:pa], label='actual', c='g', alpha=0.4)
-    #axp[2].scatter(range(pa), pred_vq_actions[:pa], label='froll vq', c='b', alpha=0.4)
-    #axp[2].scatter(perror, pred_action_error, c='r', label='error')
-    #axp[2].legend()
-    #plt.savefig(aname)
-    #plt.close()
-
-
 def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pred_latents, all_tf_pred_latents, params, gen_method):
     episode_number, episode_reward, name, actions, rewards = params
     # true (label) action is at transition 3-4, 4-5, 5-6
@@ -276,7 +255,8 @@ def plot_reconstructions(true_states, true_next_states, all_real_latents, all_pr
     pred_est, pred_mean, pred_vq_actions, pred_vq_rewards = sample_from_vq(all_pred_latents)
     # tf so every forward was only one step ahead
     pred_tf_est, pred_tf_mean, pred_tf_vq_actions, pred_tf_vq_rewards = sample_from_vq(all_tf_pred_latents)
-    # vqvae_model predicts the action which took from t-1 to t-0
+    # vqvae_model predicts the action which took from t-1 to t-0 of the input
+    # latent
     real_vq_actions = np.append(real_vq_actions[1:], np.array(-9))
     real_vq_rewards = np.append(real_vq_rewards[1:], np.array(-9))
 
@@ -420,6 +400,7 @@ if __name__ == '__main__':
     vq_largs = vq_info['args'][-1]
 
     run_num = 0
+    args.limit = args.rollout_length+5
     if args.debug:
         print("DEBUG with fake data file")
         name = 'debug'
@@ -476,7 +457,6 @@ if __name__ == '__main__':
 
     vqvae_model.load_state_dict(vq_model_dict['vqvae_state_dict'])
     #valid_data, valid_label, test_batch_index = data_loader.validation_ordered_batch()
-    args.limit = args.rollout_length+5
     num_k = vq_largs.num_k
     #train_episode_batch, episode_index, episode_reward = train_data_loader.get_entire_episode(diff=False, limit=args.limit, min_reward=args.min_reward)
     conv_forward_model = ForwardResNet(BasicBlock, data_width=forward_info['hsize'],
