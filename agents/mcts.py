@@ -127,6 +127,7 @@ class MCTS(object):
 
     def playout(self, state):
         # transform to latents state that is needed
+        prev_states = []
         node = self.root
         while True:
             if node.is_leaf():
@@ -149,6 +150,8 @@ class MCTS(object):
                 # if we've seen this state before -
                 action, node = node.get_best(self.c_uct)
                 state = self.state_manager.get_next_state(state, action)
+                prev_states.append(state)
+
 
     def get_action_probs(self, state, temp=1E-3):
         # low temp -> nearly argmax

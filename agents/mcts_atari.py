@@ -33,32 +33,72 @@ from replay import ReplayMemory
 import config
 from mcts import MCTS
 
+def plot_episode(mcts,true_obs, rec_obs, actions, rewards, latent_states_list):
+    epath = os.path.join(model_base_filepath, 'steps')
+    os.makedirs(epath)
+    print("plotting episode")
+    print(epath)
+    for i in range(true_obs.shape[0]):
+        f,ax=plt.subplots(2,3)
+        next_latent_state, next_x_d, _, pred_reward =  mcts.state_manager.get_next_latent(latent_states_list[i], actions[i])
+        next_s_est,next_s_mean = mcts.state_manager.sample_from_latents(next_x_d)
+        ax[0,0].imshow(true_obs[i])
+        ax[0,0].set_title('S%d'%i)
+        ax[0,1].imshow(rec_obs[i,0])
+        ax[0,1].set_title('A%sR%s'%(actions[i], rewards[i]))
+        ax[1,0].imshow(latent_states_list[i][0,0])
+        ax[1,0].set_title('S%d'%(i-1))
+        ax[1,1].imshow(latent_states_list[i][0,1])
+        ax[1,1].set_title('S%d'%i)
+        ax[0,2].imshow(next_s_est[0,0])
+        iname = os.path.join(epath, 'S%06d'%i)
+        plt.savefig(iname)
+        plt.close()
+    cmd = 'convert %s %s'%(os.path.join(epath, 'S*.png'),
+                           os.path.join(epath, '_steps.gif'))
+    os.system(cmd)
+
+
+
 def run(step_number, last_save):
     mcts_random = np.random.RandomState(1110)
-    vqfr_sm = VQRolloutStateManager(info['FORWARD_MODEL_LOADPATH'], rollout_limit=100)
-    mcts = MCTS(vqfr_sm, n_playout=5, random_state=mcts_random)
+    vqfr_sm = VQRolloutStateManager(info['FORWARD_MODEL_LOADPATH'], model_base_filedir, rollout_limit=info['ROLLOUT_LIMIT'])
+    mcts = MCTS(vqfr_sm, n_playout=info['NUM_PLAYOUTS'], random_state=mcts_random)
     terminal = False
     for e in range(info['N_EPISODES']):
         #state = mcts.state_manager.get_init_state()
-        state = env.reset()
-        latent_obs = mcts.state_manager.get_state_representation(state[None])
-        latent_state = torch.stack((latent_obs,latent_obs), dim=1)
+        _ = env.reset()
+        noop_action = 0
+        last_state, reward, life_lost, terminal = env.step(noop_action)
+        state, reward, life_lost, terminal = env.step(noop_action)
+        last_latent_obs,last_x_d = mcts.state_manager.get_state_representation(last_state[None])
+        latent_obs,x_d = mcts.state_manager.get_state_representation(state[None])
+        print(x_d.max(), x_d.min())
+        latent_state = torch.stack((last_latent_obs,latent_obs), dim=1)
+
         # can i pass env to something
         #winner, end = mcts.state_manager.is_finished(state)
         #states = [state]
         start_steps = step_number
         st = time.time()
         episode_reward_sum = 0
+        latent_state_list = []
+        obs_state_list = []
         actions = []
         rewards = []
-
+        x_ds = []
         while not terminal:
             # mcts will take this state and roll it forward
-            #action, ap = mcts.sample_action(state, temp=1, add_noise=False)
             action, ap = mcts.sample_action(latent_state, temp=1E-3, add_noise=False)
-            #a, ap = mcts.get_action(state)
+            latent_state_list.append(latent_state)
+            action = random_state.choice(np.array([0,1,2]),
+                                         p=np.array([0.05,.9,0.05]))
             next_state, reward, life_lost, terminal = env.step(action)
+            obs_state_list.append(next_state[-1])
+            if reward>0:
+                print("REWARD")
             print(step_number, action, reward)
+
             actions.append(action)
             rewards.append(reward)
             mcts.update_tree_root(action)
@@ -68,12 +108,15 @@ def run(step_number, last_save):
                 mcts.reconstruct_tree()
             step_number += 1
             episode_reward_sum += reward
-            next_latent = mcts.state_manager.get_state_representation(next_state[None])
+            next_latent,x_d = mcts.state_manager.get_state_representation(next_state[None])
+            x_ds.append(x_d)
+            print('real step', x_d.max(), x_d.min())
             # latent state needs previous latent and obs latent
             latent_state = torch.stack((latent_state[0,1][None], next_latent), dim=1)
             state = next_state
 
-        embed()
+        rec_est, rec_mean = mcts.state_manager.sample_from_latents(torch.cat(x_ds))
+        plot_episode(mcts,np.array(obs_state_list), rec_est, actions, rewards, latent_state_list)
         et = time.time()
         ep_time = et-st
         perf['episode_num']+=1
@@ -99,9 +142,11 @@ if __name__ == '__main__':
 
     info = {
         "GAME":'roms/freeway.bin', # ale binary
-        "FORWARD_MODEL_LOADPATH":"../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/convVQoutmdiffRAB01/convVQoutmdiffRAB_0182034944ex.pt",
+        "FORWARD_MODEL_LOADPATH":"../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/convVQoutmdiffRAB01/convVQoutmdiffRAB_0074514304ex.pt",
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
+        "NUM_PLAYOUTS":50,
+        "ROLLOUT_LIMIT":50,
         "NAME":'DEBUG_MCTS', # start files with name
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
@@ -124,6 +169,7 @@ if __name__ == '__main__':
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
         "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
+        #"MAX_EPISODE_STEPS":50, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
         "FRAME_SKIP":4, # deterministic frame skips to match deepmind
         "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life

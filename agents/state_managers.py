@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 from copy import deepcopy
 import os
@@ -34,14 +37,16 @@ class AtariStateManager(object):
         return self.env.finished
 
 class VQRolloutStateManager(object):
-    def __init__(self, forward_model_loadpath, rollout_limit=10, DEVICE='cpu', num_samples=40, seed=393):
+    def __init__(self, forward_model_loadpath, agent_filepath, rollout_limit=10, DEVICE='cpu', num_samples=40, seed=393):
         # env will be deepcopied version of true state
         self.DEVICE = DEVICE
         self.rollout_limit = rollout_limit
         self.num_samples = num_samples
         self.seed = seed
         self.random_state = np.random.RandomState(self.seed)
+        self.agent_filepath = agent_filepath
         self.load_models(forward_model_loadpath)
+        self.rollout_number = 0
 
     def load_models(self, forward_model_loadpath):
         self.forward_model_loadpath = forward_model_loadpath
@@ -90,7 +95,7 @@ class VQRolloutStateManager(object):
     def sample_from_latents(self, x_d):
         # TODO
         nmix = 30
-        rec_mest = x_d[:,:nmix].detach()
+        rec_mest = torch.Tensor(x_d[:,:nmix])
         if self.num_samples:
             rec_sams = np.zeros((x_d.shape[0], self.num_samples, 1, 80, 80))
             for n in range(self.num_samples):
@@ -103,9 +108,9 @@ class VQRolloutStateManager(object):
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        _,_,_,latents,_,r = self.get_vq_state(state/255.0)
+        x_d,_,_,latents,_,r = self.get_vq_state(state/255.0)
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
-        return latents.float()
+        return latents.float(), x_d
 
     def get_vq_state(self, states):
         # normalize and make 80x80
@@ -135,22 +140,52 @@ class VQRolloutStateManager(object):
         next_latent_state, x_d, pred_action, pred_reward = self.get_next_latent(latent_state, action)
         return next_latent_state
 
-    def rollout_from_state(self, latent_state, keep_traces=False):
+    def plot_rollout(self, rollout_number, x_ds, latents, actions, rewards):
+        rdir = os.path.join(self.agent_filepath, "R%06d"%rollout_number)
+        os.makedirs(rdir)
+        s_est,s_mean = self.sample_from_latents(x_ds)
+        print('rollout')
+        for i in range(actions.shape[0]-1):
+            f,ax=plt.subplots(2,2)
+            ax[0,0].imshow(s_est[i,0])
+            ax[0,0].set_title('S%s-S%s'%(i,i+1))
+            ax[0,1].set_title('A%s R%s'%(actions[i], rewards[i]))
+            ax[0,1].imshow(s_est[i+1,0])
+            ax[1,0].imshow(latents[i,1])
+            ax[1,1].imshow(latents[i+1,1])
+            plt.savefig(os.path.join(rdir, 'n%04d.png'%i))
+            plt.close()
+
+        cmd = 'convert %s %s' %(os.path.join(rdir, 'n*.png'), os.path.join(rdir, '_R%06d.gif'%rollout_number))
+        os.system(cmd)
+
+    def rollout_from_state(self, latent_state, keep_traces=True):
         # TODO - if we predicted end of life - this should be changed
         total_rollout_reward = 0
-        actions = np.zeros(self.rollout_limit)
+        actions = np.zeros(self.rollout_limit, dtype=np.int)
         latents = np.zeros((self.rollout_limit+1,2,10,10))
+        x_ds = np.zeros((self.rollout_limit+1, 60, 80, 80))
+        rewards = np.zeros(self.rollout_limit, dtype=np.int)
+
+        x_d, pred_vq_actions, pred_vq_rewards = self.decode_vq_from_latents(latent_state[:,1])
+        x_ds[0] = x_d
         latents[0] = latent_state.cpu().numpy()
-        rewards = np.zeros(self.rollout_limit)
         for i in range(self.rollout_limit):
-            #action = self.random_state.choice(self.action_space)
-            action = 1# self.random_state.choice(self.action_space)
-            next_latent_state, _, _, pred_reward = self.get_next_latent(latent_state, action)
+            #`action = self.random_state.choice(self.action_space)
+            # HACK!
+            action = self.random_state.choice(self.action_space, p=np.array([0.05, 0.9, 0.05]))
+            next_latent_state, x_d, _, pred_reward = self.get_next_latent(latent_state, action)
             total_rollout_reward += pred_reward
             if keep_traces:
-                latents[i+1] = next_latent_state.cpu().numpy()
+                latents[i] = next_latent_state.cpu().numpy()
                 actions[i] = action
                 rewards[i] = pred_reward
+                x_ds[i+1] = x_d
+                latents[i+1] = next_latent_state.cpu().numpy()
+            latent_state = next_latent_state
+        if keep_traces:
+            self.plot_rollout(self.rollout_number, x_ds, latents, actions, rewards)
+        self.rollout_number+=1
         return total_rollout_reward
 
     def get_valid_actions(self, state):
