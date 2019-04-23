@@ -335,6 +335,8 @@ class AtariDataset(Dataset):
         self.action_space = sorted(list(set(self.actions)))
         self.n_actions = len(self.action_space)
         self.episodic_reward=self.data_file['episodic_reward']
+        _, self.unique_rewards, self.percentages_rewards = find_component_proportion(self.rewards)
+        _, self.action_space, self.percentages_actions = find_component_proportion(self.actions)
         self.frames = self.data_file['frames']
         #self.num_examples,self.data_h,self.data_w = self.data_file['frames'].shape
         self.num_examples,self.data_h,self.data_w = self.frames.shape

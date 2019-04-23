@@ -11,6 +11,7 @@
 
 import numpy as np
 from IPython import embed
+import torch
 
 def softmax(x):
     assert len(x.shape) == 1
@@ -112,7 +113,7 @@ class TreeNode(object):
 
 
 class MCTS(object):
-    def __init__(self, state_manager, c_uct=1.4, n_playout=100, random_state=None):
+    def __init__(self, state_manager, c_uct=1.4, n_playout=100, rollout_limit=10, gamma=0.9, random_state=None):
         if random_state is None:
             raise ValueError("Must pass random_state object")
         self.random_state = random_state
@@ -124,40 +125,97 @@ class MCTS(object):
         self.n_playout = n_playout
         self.tree_subs_ = []
         self.warn_at_ = 10000
+        self.rollout_limit = rollout_limit
+        self.max_playout_steps = 10000
+        self.gamma = gamma
+        self.gammas = [self.gamma**i for i in range(self.max_playout_steps)]
+
+# CANT BE DONE by minibatch
+#    def playout(self, state):
+#        # transform to latents state that is needed
+#        node = self.root
+#        # all start in same node
+#        # 1 if the timestep is a rollout, 0 if we should look it up
+#        nodes = [node for xx in range(self.n_playout)]
+#        # countdown from rollout length
+#        rollout_cnt = np.ones(self.n_playout, dtype=np.int)*self.rollout_limit
+#        step_actions = torch.zeros((self.n_playout), dtype=torch.int)
+#        total_value = np.zeros((self.n_playout), dtype=np.float)
+#        is_rolling_out = np.ones((self.n_playout), dtype=np.float)
+#        states = torch.ones((self.n_playout, 1, 1, 1), dtype=torch.float)*state
+#        actions = self.state_manager.action_space
+#        uni_probs = np.ones((len(actions))) / float(len(actions))
+#        actions_and_probs = list(zip(actions, uni_probs))
+#        for i in range(self.max_playout_steps):
+#            random_actions = torch.LongTensor(self.random_state.choice(self.state_manager.action_space, self.n_playout))
+#            for p in range(self.n_playout):
+#                # find the new actions for this step
+#                print("P", p, nodes[p].is_leaf())
+#                if nodes[p].is_leaf():
+#                    if rollout_cnt[p] == self.rollout_limit:
+#                        # the first time means we are starting a rollout - use uniform prior probs
+#                        nodes[p].expand(actions_and_probs)
+#                    # step_actions[p] = self.state_manager.get_rollout_action_from_state(state[p])
+#                    # we will add one cnt to rollout
+#                    if rollout_cnt[p] > 0:
+#                        step_actions[p] = 1#random_actions[p]
+#                        is_rolling_out[p] = 1
+#                        rollout_cnt[p] -= 1
+#                    # finished rollout
+#                    if rollout_cnt[p] == 0:
+#                        nodes[p].update(total_value[p])
+#                        is_rolling_out[p] = 0
+#                else:
+#                    # not rolling out because we are in leaf
+#                    is_rolling_out[p] = 0
+#                    # if not in rollout - then use the node to get the best action
+#                    # update the node and the action
+#                    step_actions[p], nodes[p] = nodes[p].get_best(self.c_uct)
+#            states, pred_reward = self.state_manager.get_next_state(states, step_actions)
+#            print(i,pred_reward.sum())
+#            # if we haven't finished the rollout - add this reward
+#            update_rewards = np.where(is_rolling_out==1)[0]
+#            total_value[update_rewards] = (self.gammas[i]*pred_reward)[update_rewards]
+#            embed()
+#            if np.sum(rollout_cnt) == 0:
+#                print('finished',i)
+#                print(total_value)
+#                return
+#
+
 
     def playout(self, state):
         # transform to latents state that is needed
-        prev_states = []
         node = self.root
+        forward_step = 0
         while True:
             if node.is_leaf():
                 #winner, end = self.state_manager.is_finished(state)
                 # I dont have a way to determine if agent is dead rn
-                end = False
-                if not end:
-                    # uniform prior probs
-                    actions = self.state_manager.get_valid_actions(state)
-                    probs = np.ones((len(actions))) / float(len(actions))
-                    actions_and_probs = list(zip(actions, probs))
-                    node.expand(actions_and_probs)
+                #end = False
+                #if not end:
+                # uniform prior probs
+                actions = self.state_manager.get_valid_actions(state)
+                probs = np.ones((len(actions))) / float(len(actions))
+                actions_and_probs = list(zip(actions, probs))
+                node.expand(actions_and_probs)
                 # randomly walk
-                value = self.state_manager.rollout_from_state(state)
+                rollout_value = self.state_manager.rollout_from_state(state, forward_step)
                 # negative in the original code due to being the opposing player
                 #node.update(-value)
-                node.update(value)
-                return value
+                node.update(rollout_value)
+                return rollout_value
             else:
                 # if we've seen this state before -
                 action, node = node.get_best(self.c_uct)
-                state = self.state_manager.get_next_state(state, action)
-                prev_states.append(state)
+                state, pred_reward = self.state_manager.get_next_state(state, action)
+                forward_step+=1
 
 
     def get_action_probs(self, state, temp=1E-3):
         # low temp -> nearly argmax
-        for n in range(self.n_playout):
-            self.playout(state)
-
+        #for n in range(self.n_playout):
+        self.playout(state)
         act_visits = [(act, node.n_visits_) for act, node in self.root.children_.items()]
         actions, visits = zip(*act_visits)
         action_probs = softmax(1. / temp * np.log(visits))

@@ -62,8 +62,13 @@ def plot_episode(mcts,true_obs, rec_obs, actions, rewards, latent_states_list):
 
 def run(step_number, last_save):
     mcts_random = np.random.RandomState(1110)
-    vqfr_sm = VQRolloutStateManager(info['FORWARD_MODEL_LOADPATH'], model_base_filedir, rollout_limit=info['ROLLOUT_LIMIT'])
-    mcts = MCTS(vqfr_sm, n_playout=info['NUM_PLAYOUTS'], random_state=mcts_random)
+    vqfr_sm = VQRolloutStateManager(info['FORWARD_MODEL_LOADPATH'],
+                                    model_base_filedir,
+                                    n_playout=info['NUM_PLAYOUTS'],
+                                    )
+    mcts = MCTS(vqfr_sm, n_playout=info['NUM_PLAYOUTS'],
+                rollout_limit=info['ROLLOUT_LIMIT'],
+                gamma=info['GAMMA'], random_state=mcts_random)
     terminal = False
     for e in range(info['N_EPISODES']):
         #state = mcts.state_manager.get_init_state()
@@ -87,7 +92,9 @@ def run(step_number, last_save):
         actions = []
         rewards = []
         x_ds = []
+        step_times = []
         while not terminal:
+            st = time.time()
             # mcts will take this state and roll it forward
             action, ap = mcts.sample_action(latent_state, temp=1E-3, add_noise=False)
             latent_state_list.append(latent_state)
@@ -97,28 +104,32 @@ def run(step_number, last_save):
             obs_state_list.append(next_state[-1])
             if reward>0:
                 print("REWARD")
-            print(step_number, action, reward)
-
+            print(step_number, 'A', action, 'R', reward)
             actions.append(action)
             rewards.append(reward)
             mcts.update_tree_root(action)
-            if life_lost:
-                mcts.reset_tree()
-            else:
-                mcts.reconstruct_tree()
             step_number += 1
             episode_reward_sum += reward
             next_latent,x_d = mcts.state_manager.get_state_representation(next_state[None])
             x_ds.append(x_d)
-            print('real step', x_d.max(), x_d.min())
             # latent state needs previous latent and obs latent
             latent_state = torch.stack((latent_state[0,1][None], next_latent), dim=1)
             state = next_state
+            et = time.time()
+            print(et-st)
+            print(actions)
+            step_times.append(et-st)
+            #if life_lost:
+            #    mcts.reset_tree()
+            #else:
+            #    mcts.reconstruct_tree()
+
 
         rec_est, rec_mean = mcts.state_manager.sample_from_latents(torch.cat(x_ds))
         plot_episode(mcts,np.array(obs_state_list), rec_est, actions, rewards, latent_state_list)
         et = time.time()
         ep_time = et-st
+        perf['step_times'].append(step_times)
         perf['episode_num']+=1
         perf['steps'].append(step_number)
         perf['episode_step'].append(step_number-start_steps)
@@ -146,8 +157,8 @@ if __name__ == '__main__':
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
         "NUM_PLAYOUTS":50,
-        "ROLLOUT_LIMIT":50,
-        "NAME":'DEBUG_MCTS', # start files with name
+        "ROLLOUT_LIMIT":10,
+        "NAME":'MCTS', # start files with name
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
         "EVAL_FREQUENCY":500000, # how often to run evaluation episodes
@@ -168,8 +179,8 @@ if __name__ == '__main__':
         "RESHAPE_SIZE":64*7*7,
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
+        #"MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
         "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
-        #"MAX_EPISODE_STEPS":50, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
         "FRAME_SKIP":4, # deterministic frame skips to match deepmind
         "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
@@ -193,6 +204,7 @@ if __name__ == '__main__':
                 'eps_list':[],
                 'episode_loss':[],
                 'episode_num':0,
+                'step_times':[],
                 'episode_reward':[],
                 'episode_times':[],
                 'episode_relative_times':[],

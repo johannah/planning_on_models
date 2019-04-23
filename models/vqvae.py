@@ -9,6 +9,140 @@ from torch.autograd import Variable
 from copy import deepcopy
 from IPython import embed
 
+class VQVAErl(nn.Module):
+    def __init__(self, num_clusters=512, encoder_output_size=32,
+                 in_channels_size=1, num_output_mixtures=30,
+                 n_actions=0):
+        super(VQVAErl, self).__init__()
+        # the encoder_output_size is the size of the vector that is compressed
+        # with vector quantization. if it is too large, vector quantization
+        # becomes more difficult. if it is too small, then the conv net has less
+        # capacity.
+        # 64 - the network seems to train fairly well in only one epoch -
+        # 16 - the network was able to perform nearly perfectly after 100 epochs
+        # the compression factor can be thought of as follows for an input space
+        # of 40x40x1 and z output of 10x10x9 (512 = 2**9 = 9 bits)
+        # (40x40x1x8)/(10x10x9) = 12800/900 = 14.22
+
+        self.n_actions = n_actions
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels=in_channels_size,
+                      out_channels=16,
+                      kernel_size=4,
+                      stride=2, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels=16,
+                      out_channels=32,
+                      kernel_size=4,
+                      stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels=32,
+                      out_channels=64,
+                      kernel_size=4,
+                      stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels=64,
+                      out_channels=encoder_output_size,
+                      kernel_size=1,
+                      stride=1, padding=0),
+            nn.BatchNorm2d(encoder_output_size),
+            )
+        ## vq embedding scheme
+        self.embedding = nn.Embedding(num_clusters, encoder_output_size)
+        # common scaling for embeddings - variance roughly scales with num_clusters
+        self.embedding.weight.data.copy_(1./num_clusters *
+                                torch.randn(num_clusters,encoder_output_size))
+
+        self.decoder = nn.Sequential(
+                nn.Conv2d(in_channels=encoder_output_size,
+                          out_channels=64,
+                          kernel_size=1,
+                          stride=1, padding=0),
+                nn.BatchNorm2d(64),
+                nn.ReLU(True),
+                # applies a 2d transposed convolution operator over input image
+                # composed of several input planes. Can be seen as gradient of Conv2d
+                # with respsct to its input. also known as fractionally-strided conv.
+                nn.ConvTranspose2d(in_channels=64,
+                      out_channels=32,
+                      kernel_size=4,
+                      stride=2, padding=1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(True),
+                nn.ConvTranspose2d(in_channels=32,
+                      out_channels=16,
+                      kernel_size=4,
+                      stride=2, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(True),
+                nn.ConvTranspose2d(in_channels=16,
+                        out_channels=num_output_mixtures,
+                        kernel_size=4,
+                        stride=2, padding=1),
+                #nn.Sigmoid()
+                )
+        # size of the output of the latent space - bs,encoder_output_size,vq_space_dim,vq_space_dim
+        vq_space_dim = 10
+        if self.n_actions > 0:
+            print("predicting actions", self.n_actions)
+            self.action_conv = nn.Sequential(
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                       out_channels=encoder_output_size,
+                                       kernel_size=3, padding=1),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                                        out_channels=encoder_output_size,
+                                                        kernel_size=3, padding=1),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                                        out_channels=self.n_actions,
+                                                        kernel_size=vq_space_dim, padding=0),
+                                 )
+    def decode_clusters(self, latents, N, H, W, C):
+        action = -1
+        #z_q_x, x_tilde = self.decode_clusters(latents, N, H, W, C)
+        z_q_x = self.embedding(latents.view(latents.shape[0], -1))
+        # back to NCHW (orig) - now cluster centers/class
+        z_q_x = z_q_x.view(N, H, W, C).permute(0, 3, 1, 2)
+        # put quantized data through decoder
+        x_tilde = self.decoder(z_q_x)
+        # Move prediction to the z_q_x from z_e_x so that I can decode forward
+        if self.n_actions > 0:
+            action = F.log_softmax(self.action_conv(z_q_x)[:,:,0,0], dim=1)
+        # can predict value or reward
+        return x_tilde, z_q_x, action
+        #return z_q_x, x_tilde
+
+    def forward(self, x):
+        # get continuous output directly from encoder
+        z_e_x = self.encoder(x)
+        # NCHW is the order in the encoder
+        # (num, channels, height, width)
+        N, C, H, W = z_e_x.size()
+        # need NHWC instead of default NCHW for easier computations
+        z_e_x_transposed = z_e_x.permute(0,2,3,1)
+        # needs C,K
+        emb = self.embedding.weight.transpose(0,1)
+        # broadcast to determine distance from encoder output to clusters
+        # NHWC -> NHWCK
+        measure = z_e_x_transposed.unsqueeze(4) - emb[None, None, None]
+        # num_clusters=512, num_z=64
+        # measure is of shape bs,10,10,64,512
+        # square each element, then sum over channels
+        # take sum over each z - find min
+        dists = torch.pow(measure, 2).sum(-2)
+        # pytorch gives real min and arg min - select argmin
+        # this is the closest k for each sample - Equation 1
+        # latents is a array of integers
+        latents = dists.min(-1)[1]
+        # look up cluster centers
+        x_tilde, z_q_x, action = self.decode_clusters(latents, N, H, W, C)
+        return x_tilde, z_e_x, z_q_x, latents, action
+
+
 class VQVAE(nn.Module):
     def __init__(self, num_clusters=512, encoder_output_size=32,
                  in_channels_size=1, num_output_mixtures=30,
