@@ -15,7 +15,7 @@ import torch.optim as optim
 import datetime
 import time
 from state_managers import VQEnv
-from dqn_model import EnsembleNet, NetWithPrior
+from mb_dqn_model import EnsembleNet, NetWithPrior
 from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint, linearly_decaying_epsilon
 from env import Environment
 from replay import ReplayMemory
@@ -74,8 +74,7 @@ def handle_checkpoint(cnt):
     return cnt
 
 def pt_get_action(state, active_head=None):
-    state = torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
-    vals = policy_net(state, active_head)
+    vals = policy_net(state[None], active_head)
     if active_head is not None:
         action = torch.argmax(vals, dim=1).item()
         return action
@@ -85,6 +84,19 @@ def pt_get_action(state, active_head=None):
         data = Counter(acts)
         action = data.most_common(1)[0][0]
         return action
+
+#def pt_get_action(state, active_head=None):
+#    state = torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
+#    vals = policy_net(state, active_head)
+#    if active_head is not None:
+#        action = torch.argmax(vals, dim=1).item()
+#        return action
+#    else:
+#        # vote
+#        acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
+#        data = Counter(acts)
+#        action = data.most_common(1)[0][0]
+#        return action
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
     states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
@@ -195,7 +207,7 @@ def train(step_number, last_save):
         perf['eval_rewards'].append(avg_eval_reward)
         perf['eval_steps'].append(step_number)
         if (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
-            last_save = handle_checkpoint(last_save, step_number)
+            last_save = handle_checkpoint(step_number)
         matplotlib_plot_all(perf)
 
 
@@ -221,12 +233,14 @@ def train_sim(step_number, last_save):
             epoch_num += 1
             ep_eps_list = []
             ptloss_list = []
-
+            print("Gathering data with head=%s"%active_head)
             while not terminal:
                # eps
-                action = pt_get_action(state=latent_state, active_head=active_head)
+                if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
+                    action = random_state.randint(0, env.num_actions)
+                else:
+                    action = pt_get_action(state=latent_state, active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
-
                 # Store transition in the replay memory
                 replay_memory.add_experience(action=action,
                                              frame=next_state[-1],
@@ -237,23 +251,24 @@ def train_sim(step_number, last_save):
                 epoch_frame += 1
                 episode_reward_sum += reward
                 state = next_state
-
                 if step_number == info['MIN_STEPS_TO_LEARN']:
-                    # need to write npz file and train vqvae on it
-                    buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
-                    replay_memory.save_buffer(buff_filename)
-                    embed()
-                    #vqenv.train_vq(buff_filename)
-                #if step_number > info['MIN_STEPS_TO_LEARN']:
-                #    if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                #        _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
-                #        ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags, _masks)
-                #        ptloss_list.append(ptloss)
-                #    if step_number % info['TARGET_UPDATE'] == 0:
-                #        print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                #        print('updating target network at %s'%step_number)
-                #        target_net.load_state_dict(policy_net.state_dict())
+                    if info['VQ_MODEL_LOADPATH'] == '':
+                        # need to write npz file and train vqvae on it
+                        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
+                        replay_memory.save_buffer(buff_filename)
+                        # now the vq is trained -
+                        vqenv.train_vq_model(buff_filename+'.npz')
+                        embed()
 
+                if step_number > info['MIN_STEPS_TO_LEARN']:
+                    if step_number % info['LEARN_EVERY_STEPS'] == 0:
+                        _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
+                        ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags, _masks)
+                        ptloss_list.append(ptloss)
+                    if step_number % info['TARGET_UPDATE'] == 0:
+                        print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                        print('updating target network at %s'%step_number)
+                        target_net.load_state_dict(policy_net.state_dict())
             et = time.time()
             ep_time = et-st
             perf['steps'].append(step_number)
@@ -305,8 +320,10 @@ def evaluate(step_number):
             eps = random_state.rand()
             if eps < info['EPS_EVAL']:
                action = random_state.randint(0, env.num_actions)
+               print("random action")
             else:
                action = pt_get_action(state, active_head=None)
+               print("real action")
             next_state, reward, life_lost, terminal = env.step(action)
             evaluate_step_number += 1
             episode_steps +=1
@@ -346,22 +363,23 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'', # start files with name
+        "NAME":'DMB', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
-        "PRIOR":False, # turn on to use randomized prior
+        "PRIOR":True, # turn on to use randomized prior
         "PRIOR_SCALE":10, # what to scale prior by
-        "N_ENSEMBLE":1, # number of bootstrap heads to use. when 1, this is a normal dqn
+
+        "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
-        "EPS_WARMUP": 50000, # steps to act completely random initially to fill replay buffer
+        #"MIN_STEPS_TO_LEARN":5000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
+        "EPS_INIT":0.1,
+        "EPS_WARMUP":10,
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
-        "NUM_EPS_ANNEALING_STEPS":int(1e6), # this may have been 1e6 in osband
-        #"NUM_EPS_ANNEALING_STEPS":0, # if it annealing is zero, then it will only use the bootstrap after the first MIN_EXAMPLES_TO_LEARN steps which are random
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
@@ -381,7 +399,7 @@ if __name__ == '__main__':
         "SEED":101,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
-        "RESHAPE_SIZE":64*7*7,
+        "RESHAPE_SIZE":10*10*4,
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
         "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
@@ -389,17 +407,22 @@ if __name__ == '__main__':
         "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
          ##################### for vqvae model
+        "VQ_MODEL_LOADPATH":'',
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":10,
         "NUM_Z":64,
         "NUM_K":512,
         "NR_LOGISTIC_MIX":10,
-        "VQ_BATCH_SIZE":84,
+        "VQ_BATCH_SIZE":32,
         "NUMBER_CONDITION":4,
-        "NUM_EXAMPLES_TO_TRAIN":100000000,
         "VQ_LEARNING_RATE":2e-4,
         "NUM_SAMPLES":40,
+        "VQ_NUM_EXAMPLES_TO_TRAIN":100000000,
+        "VQ_SAVE_EVERY":500000,
+        "VQ_MIN_BATCHES_BEFORE_SAVE":1000,
+        "VQ_SAVENAME":"VQ",
+        "VQ_GAMMA":0.9,
     }
 
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
@@ -469,21 +492,24 @@ if __name__ == '__main__':
     heads = list(range(info['N_ENSEMBLE']))
     seed_everything(info["SEED"])
 
-    vqenv = VQEnv(model_base_filedir, info)
+
+    info['model_base_filepath'] = model_base_filepath
+    info['num_actions'] = env.num_actions
+    vqenv = VQEnv(info)
 
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+                                      num_channels=1, dueling=info['DUELING']).to(info['DEVICE'])
     target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+                                      num_channels=1, dueling=info['DUELING']).to(info['DEVICE'])
     if info['PRIOR']:
         prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                 n_actions=env.num_actions,
                                 reshape_size=info['RESHAPE_SIZE'],
-                                num_channels=info['HISTORY_SIZE'], dueling=info['DUELING']).to(info['DEVICE'])
+                                num_channels=1, dueling=info['DUELING']).to(info['DEVICE'])
 
         print("using randomized prior")
         policy_net = NetWithPrior(policy_net, prior_net, info['PRIOR_SCALE'])
@@ -515,5 +541,5 @@ if __name__ == '__main__':
                 print(e)
                 print('not able to load from buffer: %s. exit() to continue with empty buffer' %args.buffer_loadpath)
 
-    train(start_step_number, start_last_save)
+    train_sim(start_step_number, start_last_save)
 

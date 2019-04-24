@@ -18,34 +18,34 @@ from datasets import AtariDataset
 torch.manual_seed(394)
 
 def handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses, do_plot=True):
-    info['train_losses_list'].append(avg_train_losses)
-    info['train_cnts'].append(train_cnt)
-    info['valid_losses_list'].append(avg_valid_losses)
-    info['valid_cnts'].append(train_cnt)
-    print('examples %010d loss' %train_cnt, info['train_losses_list'][-1])
+    info['vq_train_losses_list'].append(avg_train_losses)
+    info['vq_train_cnts'].append(train_cnt)
+    info['vq_valid_losses_list'].append(avg_valid_losses)
+    info['vq_valid_cnts'].append(train_cnt)
+    print('examples %010d loss' %train_cnt, info['vq_train_losses_list'][-1])
     # plot
     if do_plot:
-        info['last_plot'] = train_cnt
+        info['vq_last_plot'] = train_cnt
         rolling = 3
-        if len(info['train_losses_list'])<rolling*3:
+        if len(info['vq_train_losses_list'])<rolling*3:
             rolling = 0
-        train_losses = np.array(info['train_losses_list'])
-        valid_losses = np.array(info['valid_losses_list'])
+        train_losses = np.array(info['vq_train_losses_list'])
+        valid_losses = np.array(info['vq_valid_losses_list'])
         for i in range(valid_losses.shape[1]):
-            plot_name = info['model_base_filepath'] + "_%010d_loss%s.png"%(train_cnt, i)
+            plot_name = info['vq_model_base_filepath'] + "_%010d_loss%s.png"%(train_cnt, i)
             print("plotting", os.path.split(plot_name)[1])
             plot_dict = {
-                         'valid loss %s'%i:{'index':info['valid_cnts'],
+                         'valid loss %s'%i:{'index':info['vq_valid_cnts'],
                                             'val':valid_losses[:,i]},
-                         'train loss %s'%i:{'index':info['train_cnts'],
+                         'train loss %s'%i:{'index':info['vq_train_cnts'],
                                             'val':train_losses[:,i]},
                         }
             plot_dict_losses(plot_dict, name=plot_name, rolling_length=rolling)
-        tot_plot_name = info['model_base_filepath'] + "_%010d_loss.png"%train_cnt
+        tot_plot_name = info['vq_model_base_filepath'] + "_%010d_loss.png"%train_cnt
         tot_plot_dict = {
-                         'valid loss':{'index':info['valid_cnts'],
+                         'valid loss':{'index':info['vq_valid_cnts'],
                                        'val':valid_losses.sum(axis=1)},
-                         'train loss':{'index':info['train_cnts'],
+                         'train loss':{'index':info['vq_train_cnts'],
                                         'val':train_losses.sum(axis=1)},
                     }
         plot_dict_losses(tot_plot_dict, name=tot_plot_name, rolling_length=rolling)
@@ -64,15 +64,14 @@ def train_vqvae(train_cnt, vqvae_model, opt, info, train_data_loader, valid_data
     while train_cnt < info['VQ_NUM_EXAMPLES_TO_TRAIN']:
         vqvae_model.train()
         opt.zero_grad()
-        #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
         states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_framediff_minibatch()
         # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
-        states = (2*reshape_input(torch.FloatTensor(states))-1).to(DEVICE)
-        rec = (2*reshape_input(torch.FloatTensor(pred_states)[:,0][:,None])-1).to(DEVICE)
-        actions = torch.LongTensor(actions).to(DEVICE)
+        states = (2*reshape_input(torch.FloatTensor(states))-1).to(info['DEVICE'])
+        rec = (2*reshape_input(torch.FloatTensor(pred_states)[:,0][:,None])-1).to(info['DEVICE'])
+        actions = torch.LongTensor(actions).to(info['DEVICE'])
         #rewards = torch.LongTensor(rewards).to(DEVICE)
         # dont normalize diff
-        diff = (reshape_input(torch.FloatTensor(pred_states)[:,1][:,None])).to(DEVICE)
+        diff = (reshape_input(torch.FloatTensor(pred_states)[:,1][:,None])).to(info['DEVICE'])
         x_d, z_e_x, z_q_x, latents, pred_actions= vqvae_model(states)
         z_q_x.retain_grad()
         rec_est =  x_d[:, :info['nmix']]
@@ -97,20 +96,20 @@ def train_vqvae(train_cnt, vqvae_model, opt, info, train_data_loader, valid_data
         opt.step()
         bs = float(x_d.shape[0])
         avg_train_losses = [loss_act.item()/bs, loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
-        if batches > 100:
-            if ((train_cnt-info['last_save'])>=info['SAVE_EVERY']):
-                info['last_save'] = train_cnt
-                info['save_times'].append(time.time())
+        if batches > info['VQ_MIN_BATCHES_BEFORE_SAVE']:
+            if ((train_cnt-info['vq_last_save'])>=info['VQ_SAVE_EVERY']):
+                info['vq_last_save'] = train_cnt
+                info['vq_save_times'].append(time.time())
                 avg_valid_losses = valid_vqvae(train_cnt, vqvae_model, info, valid_data_loader)
                 handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses)
-                filename = info['model_base_filepath'] + "_%010dex.pt"%train_cnt
+                filename = info['vq_model_base_filepath'] + "_%010dex.pt"%train_cnt
                 print("SAVING MODEL:%s" %filename)
-                print("Saving model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['last_save']))
+                print("Saving model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['vq_last_save']))
                 state = {
                          'vqvae_state_dict':vqvae_model.state_dict(),
-                         'optimizer':opt.state_dict(),
-                         'embedding':vqvae_model.embedding,
-                         'info':info,
+                         'vq_optimizer':opt.state_dict(),
+                         'vq_embedding':vqvae_model.embedding,
+                         'vq_info':info,
                          }
                 save_checkpoint(state, filename=filename)
 
@@ -153,7 +152,7 @@ def valid_vqvae(train_cnt, vqvae_model, info, valid_data_loader, do_plot=True):
         print("gold img", gold.min().item(), gold.max().item())
         comparison = torch.cat([gold.view(bs,1,h,w)[:n],
                                 yimg.view(bs,1,h,w)[:n]])
-        img_name = info['model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
+        img_name = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
         save_image(comparison, img_name, nrow=n)
     bs = float(states.shape[0])
     loss_list = [loss_act.item()/bs, loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
@@ -162,7 +161,8 @@ def valid_vqvae(train_cnt, vqvae_model, info, valid_data_loader, do_plot=True):
 def init_train():
     train_data_file = args.train_data_file
     data_dir = os.path.split(train_data_file)[0]
-    valid_data_file = train_data_file.replace('training', 'valid')
+    #valid_data_file = train_data_file.replace('training', 'valid')
+    valid_data_file = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/valid_set_small.npz'
     if args.model_loadpath == '':
          train_cnt = 0
          run_num = 0
@@ -174,18 +174,19 @@ def init_train():
          model_base_filepath = os.path.join(model_base_filedir, args.savename)
          print("MODEL BASE FILEPATH", model_base_filepath)
 
-         info = {'train_cnts':[],
-                 'train_losses_list':[],
-                 'valid_cnts':[],
-                 'valid_losses_list':[],
-                 'save_times':[],
-                 'last_save':0,
-                 'last_plot':0,
+         info = {'vq_train_cnts':[],
+                 'vq_train_losses_list':[],
+                 'vq_valid_cnts':[],
+                 'vq_valid_losses_list':[],
+                 'vq_save_times':[],
+                 'vq_last_save':0,
+                 'vq_last_plot':0,
                  'NORM_BY':255.0,
-                 'model_loadpath':args.model_loadpath,
-                 'model_base_filedir':model_base_filedir,
-                 'train_data_file':args.train_data_file,
-                 'SAVENAME':args.savename,
+                 'vq_model_loadpath':args.model_loadpath,
+                 'vq_model_base_filedir':model_base_filedir,
+                 'vq_model_base_filepath':model_base_filepath,
+                 'vq_train_data_file':args.train_data_file,
+                 'VQ_SAVENAME':args.savename,
                  'DEVICE':DEVICE,
                  'VQ_NUM_EXAMPLES_TO_TRAIN':args.num_examples_to_train,
                  'NUM_Z':args.num_z,
@@ -197,6 +198,8 @@ def init_train():
                  'VQ_BATCH_SIZE':args.batch_size,
                  'NUMBER_CONDITION':args.number_condition,
                  'VQ_LEARNING_RATE':args.learning_rate,
+                 'VQ_SAVE_EVERY':args.save_every,
+                 'VQ_MIN_BATCHES_BEFORE_SAVE':args.min_batches,
                   }
 
          ## size of latents flattened - dependent on architecture of vqvae
@@ -206,11 +209,12 @@ def init_train():
     else:
         print('loading model from: %s' %args.model_loadpath)
         model_dict = torch.load(args.model_loadpath)
-        info =  model_dict['info']
+        info =  model_dict['vq_info']
         model_base_filedir = os.path.split(args.model_loadpath)[0]
         model_base_filepath = os.path.join(model_base_filedir, args.savename)
-        train_cnt = info['train_cnts'][-1]
+        train_cnt = info['vq_train_cnts'][-1]
         info['loaded_from'] = args.model_loadpath
+        info['VQ_BATCH_SIZE'] = args.batch_size
         #if 'reward_weights' not in info.keys():
         #    info['reward_weights'] = [1,100]
     train_data_loader = AtariDataset(
@@ -260,8 +264,8 @@ def init_train():
     if args.model_loadpath != '':
         print("loading weights from:%s" %args.model_loadpath)
         vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
-        opt.load_state_dict(model_dict['optimizer'])
-        vqvae_model.embedding = model_dict['embedding']
+        opt.load_state_dict(model_dict['vq_optimizer'])
+        vqvae_model.embedding = model_dict['vq_embedding']
 
     #args.pred_output_size = 1*80*80
     ## 10 is result of structure of network
@@ -271,7 +275,7 @@ def init_train():
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
-    debug = 1
+    debug = 0
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set_small.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
@@ -280,7 +284,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     if not debug:
-        parser.add_argument('-se', '--save_every', default=100000*5, type=int)
+        parser.add_argument('-se', '--save_every', default=50000*5, type=int)
         parser.add_argument('-mb', '--min_batches', default=100, type=int)
     else:
         parser.add_argument('-se', '--save_every', default=10, type=int)
@@ -293,7 +297,7 @@ if __name__ == '__main__':
     # 512 greatly outperformed 256 in freeway
     parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=84, type=int)
+    parser.add_argument('-bs', '--batch_size', default=128, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=1000000000, type=int)
     #parser.add_argument('-lr', '--learning_rate', default=1.5e-5) - worked but took 0131013624 to train

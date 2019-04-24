@@ -9,11 +9,15 @@ sys.path.append('../models')
 from IPython import embed
 import config
 import torch
+import torch.optim as optim
 import time
+from datasets import AtariDataset
 from forward_conv import BasicBlock, ForwardResNet
 from ae_utils import sample_from_discretized_mix_logistic
 from train_atari_action_vqvae import reshape_input
-from vqvae import VQVAE
+from vqvae import VQVAE, VQVAErl
+from create_reward_dataset import find_episodic_rewards, make_dataset
+from train_atari_vqvae_diff_action import train_vqvae
 
 class AtariStateManager(object):
     def __init__(self, env, seed=393):
@@ -111,13 +115,13 @@ class VQRolloutStateManager(object):
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        x_d,_,_,latents,_,r = self.get_vq_state(state/255.0)
+        x_d,_,_,latents,_ = self.get_vq_state(state/self.info['NORM_BY'])
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
         return latents.float(), x_d
 
     def get_vq_state(self, states):
         # normalize and make 80x80
-        s = (2*reshape_input(torch.FloatTensor(states))-1)
+        s = (2*reshape_input(torch.FloatTensor(states).to(self.DEVICE))-1)
         # make sure s has None on 0th
         with torch.no_grad():
             x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = self.vqvae_model(s)
@@ -205,15 +209,15 @@ class VQRolloutStateManager(object):
         return False
 
 class VQEnv(object):
-    def __init__(self, agent_filepath, info, seed=393):
+    def __init__(self, info, seed=393):
         # env will be deepcopied version of true state
-        self.n_playout=info['N_PLAYOUT']
+        self.n_playout = info['N_PLAYOUT']
         self.DEVICE = info['DEVICE']
         self.num_samples = info['NUM_SAMPLES']
+        self.info = info
         self.seed = seed
         self.random_state = np.random.RandomState(self.seed)
-        self.agent_filepath = agent_filepath
-        self.init_models(os.path.join(agent_filepath, 'VQ.pt'))
+        self.init_models()
         self.rollout_number = 0
 
     def load_models(self, forward_model_loadpath):
@@ -243,118 +247,89 @@ class VQEnv(object):
         # base_channel_actions used when we take one action at a time
         self.base_channel_actions = torch.zeros((self.n_playout, self.forward_info['num_actions'], self.forward_info['hsize'], self.forward_info['hsize']))
         self.action_space = range(self.vq_info['num_actions'])
+        #    print('loading model from: %s' %args.model_loadpath)
+        #    model_dict = torch.load(args.model_loadpath)
+        #    info =  model_dict['info']
+        #    model_base_filedir = os.path.split(args.model_loadpath)[0]
+        #    model_base_filepath = os.path.join(model_base_filedir, args.savename)
+        #    train_cnt = info['train_cnts'][-1]
+        #    info['loaded_from'] = args.model_loadpath
+        #    #if 'reward_weights' not in info.keys():
+        #     print("loading weights from:%s" %args.model_loadpath)
+        #    vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
+        #    opt.load_state_dict(model_dict['optimizer'])
+        #    vqvae_model.embedding = model_dict['embedding']
 
-    def init_models(self, forward_model_loadpath, agent_info):
-        self.forward_model_loadpath = forward_model_loadpath
-        train_data_file = args.train_data_file
-        data_dir = os.path.split(train_data_file)[0]
-        valid_data_file = train_data_file.replace('training', 'valid')
-        if args.model_loadpath == '':
-             train_cnt = 0
-             run_num = 0
-             model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-             while os.path.exists(model_base_filedir):
-                 run_num +=1
-                 model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-             os.makedirs(model_base_filedir)
-             model_base_filepath = os.path.join(model_base_filedir, args.savename)
-             print("MODEL BASE FILEPATH", model_base_filepath)
+    #    #    info['reward_weights'] = [1,100]
+        #self.base_channel_actions = torch.zeros((self.n_playout, self.forward_info['num_actions'], self.forward_info['hsize'], self.forward_info['hsize']))
 
-             info = {'train_cnts':[],
-                     'train_losses_list':[],
-                     'valid_cnts':[],
-                     'valid_losses_list':[],
-                     'save_times':[],
-                     'last_save':0,
-                     'last_plot':0,
-                     'NORM_BY':255.0,
-                     'model_loadpath':args.model_loadpath,
-                     'model_base_filedir':model_base_filedir,
-                     'train_data_file':args.train_data_file,
-                     'SAVENAME':args.savename,
-                     'DEVICE':DEVICE,
-                     'VQ_NUM_EXAMPLES_TO_TRAIN':args.num_examples_to_train,
-                     'NUM_Z':args.num_z,
-                     'NUM_K':args.num_k,
-                     'NR_LOGISTIC_MIX':args.nr_logistic_mix,
-                     'BETA':args.beta,
-                     'ALPHA_REC':args.alpha_rec,
-                     'ALPHA_ACT':args.alpha_act,
-                     'VQ_BATCH_SIZE':args.batch_size,
-                     'NUMBER_CONDITION':args.number_condition,
-                     'VQ_LEARNING_RATE':args.learning_rate,
-                      }
-
-             ## size of latents flattened - dependent on architecture of vqvae
-             #info['float_condition_size'] = 100*args.num_z
-             ## 3x logistic needed for loss
-             ## TODO - change loss
-        else:
-            print('loading model from: %s' %args.model_loadpath)
-            model_dict = torch.load(args.model_loadpath)
-            info =  model_dict['info']
-            model_base_filedir = os.path.split(args.model_loadpath)[0]
-            model_base_filepath = os.path.join(model_base_filedir, args.savename)
-            train_cnt = info['train_cnts'][-1]
-            info['loaded_from'] = args.model_loadpath
-            #if 'reward_weights' not in info.keys():
-            #    info['reward_weights'] = [1,100]
+    def train_vq_model(self, train_buffer):
+        all_rewards, all_starts, all_ends = find_episodic_rewards(train_buffer)
+        reward_fnames = [train_buffer for x in range(len(all_rewards))]
+        train_data_file = make_dataset(all_rewards, all_starts, all_ends, reward_fnames, self.info['VQ_GAMMA'], kind='training')
+        self.info['train_data_file'] = train_data_file
+        self.info['valid_data_file'] = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/valid_set_small.npz'
         train_data_loader = AtariDataset(
-                                       train_data_file,
-                                       number_condition=info['NUMBER_CONDITION'],
+                                       self.info['train_data_file'],
+                                       number_condition=self.info['NUMBER_CONDITION'],
                                        steps_ahead=1,
-                                       batch_size=info['VQ_BATCH_SIZE'],
-                                       norm_by=info['NORM_BY'])
+                                       batch_size=self.info['VQ_BATCH_SIZE'],
+                                       norm_by=self.info['NORM_BY'])
+
         valid_data_loader = AtariDataset(
-                                       valid_data_file,
-                                       number_condition=info['NUMBER_CONDITION'],
+                                       self.info['valid_data_file'],
+                                       number_condition=self.info['NUMBER_CONDITION'],
                                        steps_ahead=1,
-                                       batch_size=info['VQ_BATCH_SIZE'],
-                                       norm_by=info['NORM_BY'])
-        info['num_actions'] = train_data_loader.n_actions
-        info['size_training_set'] = train_data_loader.num_examples
-        info['hsize'] = train_data_loader.data_h
-        info['wsize'] = train_data_loader.data_w
-        info['num_rewards'] = len(train_data_loader.unique_rewards)
+                                       batch_size=self.info['VQ_BATCH_SIZE'],
+                                       norm_by=self.info['NORM_BY'])
+        self.info['size_training_set'] = train_data_loader.num_examples
+        self.info['hsize'] = train_data_loader.data_h
+        self.info['wsize'] = train_data_loader.data_w
+        self.info['num_rewards'] = len(train_data_loader.unique_rewards)
+        actions_weight = 1-np.array(train_data_loader.percentages_actions)
+        rewards_weight = 1-np.array(train_data_loader.percentages_rewards)
+        actions_weight = torch.FloatTensor(actions_weight).to(self.DEVICE)
+        rewards_weight = torch.FloatTensor(rewards_weight).to(self.DEVICE)
+        self.info['actions_weight'] = actions_weight
+        self.info['rewards_weight'] = rewards_weight
+        self.info['train_cnt'], self.vqvae_model, self.opt, self.info = train_vqvae(self.info['train_cnt'], self.vqvae_model, self.opt, self.info, train_data_loader, valid_data_loader)
 
-    #reward_loss_weight = torch.ones(info['num_rewards']).to(DEVICE)
-    #for i, w  in enumerate(info['reward_weights']):
-    #    reward_loss_weight[i] *= w
-    actions_weight = 1-np.array(train_data_loader.percentages_actions)
-    rewards_weight = 1-np.array(train_data_loader.percentages_rewards)
-    actions_weight = torch.FloatTensor(actions_weight).to(DEVICE)
-    rewards_weight = torch.FloatTensor(rewards_weight).to(DEVICE)
-    info['actions_weight'] = actions_weight
-    info['rewards_weight'] = rewards_weight
+    def init_models(self):
+        #data_dir = os.path.split(train_data_file)[0]
+        data_dir = self.info['model_base_filepath']
+        run_num = 0
+        model_base_filedir = os.path.join(data_dir, self.info['VQ_SAVENAME'] + '%02d'%run_num)
+        while os.path.exists(model_base_filedir):
+            run_num +=1
+            model_base_filedir = os.path.join(data_dir, self.info['VQ_SAVENAME'] + '%02d'%run_num)
+        os.makedirs(model_base_filedir)
+        model_base_filepath = os.path.join(model_base_filedir, self.info['VQ_SAVENAME'])
+        print("VQ MODEL BASE FILEPATH", model_base_filepath)
+        self.info['train_cnt'] = 0
+        self.info['vq_train_cnts'] = []
+        self.info['vq_train_losses_list'] = []
+        self.info['vq_valid_cnts'] = []
+        self.info['vq_valid_losses_list'] = []
+        self.info['vq_save_times'] = []
+        self.info['vq_last_save'] = 0
+        self.info['vq_last_plot'] = 0
+        self.info['vq_model_base_filedir'] = model_base_filedir
+        self.info['vq_model_base_filepath'] = model_base_filepath
 
-    # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
-    # decorelated channel
-    info['num_channels'] = 2
-    info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['num_channels']
-    nmix = int(info['num_output_mixtures']/2)
-    info['nmix'] = nmix
-    vqvae_model = VQVAErl(num_clusters=info['NUM_K'],
-                        encoder_output_size=info['NUM_Z'],
-                        num_output_mixtures=info['num_output_mixtures'],
-                        in_channels_size=info['NUMBER_CONDITION'],
-                        n_actions=info['num_actions'],
-                        ).to(DEVICE)
+        self.info['num_channels'] = 2
+        self.info['num_output_mixtures']= (2*self.info['NR_LOGISTIC_MIX']+self.info['NR_LOGISTIC_MIX'])*self.info['num_channels']
+        nmix = int(self.info['num_output_mixtures']/2)
+        self.info['nmix'] = nmix
+        self.vqvae_model = VQVAErl(num_clusters=self.info['NUM_K'],
+                            encoder_output_size=self.info['NUM_Z'],
+                            num_output_mixtures=self.info['num_output_mixtures'],
+                            in_channels_size=self.info['NUMBER_CONDITION'],
+                            n_actions=self.info['num_actions'],
+                            ).to(self.DEVICE)
 
-    print('using args', args)
-    parameters = list(vqvae_model.parameters())
-    opt = optim.Adam(parameters, lr=info['VQ_LEARNING_RATE'])
-    if args.model_loadpath != '':
-        print("loading weights from:%s" %args.model_loadpath)
-        vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
-        opt.load_state_dict(model_dict['optimizer'])
-        vqvae_model.embedding = model_dict['embedding']
-
-    #args.pred_output_size = 1*80*80
-    ## 10 is result of structure of network
-    #args.z_input_size = 10*10*args.num_z
-    train_cnt = train_vqvae(train_cnt, vqvae_model, opt, info, train_data_loader, valid_data_loader)
-
-
+        parameters = list(self.vqvae_model.parameters())
+        self.opt = optim.Adam(parameters, lr=self.info['VQ_LEARNING_RATE'])
+        self.action_space = range(self.info['num_actions'])
 
     def decode_vq_from_latents(self, latents):
         latents = latents.long()
@@ -385,17 +360,17 @@ class VQEnv(object):
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        x_d,_,_,latents,_,r = self.get_vq_state(state/255.0)
+        x_d,_,_,latents,_ = self.get_vq_state(state/self.info['NORM_BY'])
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
         return latents.float(), x_d
 
     def get_vq_state(self, states):
         # normalize and make 80x80
-        s = (2*reshape_input(torch.FloatTensor(states))-1)
+        s = (2*reshape_input(torch.FloatTensor(states).to(self.DEVICE))-1)
         # make sure s has None on 0th
         with torch.no_grad():
-            x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals = self.vqvae_model(s)
-        return x_d, z_e_x, z_q_x, latents, pred_actions, pred_signals
+            x_d, z_e_x, z_q_x, latents, pred_actions = self.vqvae_model(s)
+        return x_d, z_e_x, z_q_x, latents, pred_actions
 
     def get_next_latent(self, latent_states, actions):
         # states should be last two states as np array

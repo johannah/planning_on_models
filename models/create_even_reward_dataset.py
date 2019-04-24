@@ -13,7 +13,7 @@ from replay import ReplayMemory
 
 
 def find_episodic_rewards(fname):
-    n = np.load(f)
+    n = np.load(fname)
     episode_reward_cnt = 0
     episodic_starts = []
     episodic_rewards = []
@@ -44,7 +44,7 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
     episodic_reward = []
     reward_options = []
     while num < num_examples:
-        if not  len(reward_options):
+        if not len(reward_options):
            reward_options = list(set(all_rewards))
            random_state.shuffle(reward_options)
         r = reward_options.pop()
@@ -94,7 +94,8 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
     return used
 
 if __name__ == '__main__':
-    fpath = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00'
+    #fpath = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00'
+    fpath = 'usr/local/data/jhansen/planning/model_savedir/DEBUGMB18/'
     npz_files = sorted(glob(os.path.join(fpath, '*train_buffer.npz')))
     gamma = 0.99
     file_names = []

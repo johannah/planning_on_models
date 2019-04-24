@@ -177,7 +177,7 @@ def valid_vqvae(train_cnt, do_plot=False):
         print("gold img", gold.min().item(), gold.max().item())
         comparison = torch.cat([gold.view(bs,1,h,w)[:n],
                                 yimg.view(bs,1,h,w)[:n]])
-        img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
+        img_name = info['model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
         save_image(comparison, img_name, nrow=n)
     bs = float(states.shape[0])
     loss_list = [loss_rewards.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
@@ -262,6 +262,7 @@ if __name__ == '__main__':
         info['loaded_from'] = args.model_loadpath
         #if 'reward_weights' not in info.keys():
         #    info['reward_weights'] = [1,100]
+    info['model_base_filepath'] = model_base_filepath
     train_data_loader = AtariDataset(
                                    train_data_file,
                                    number_condition=args.number_condition,

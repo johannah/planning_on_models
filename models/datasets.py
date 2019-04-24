@@ -6,7 +6,7 @@ from IPython import embed
 from glob import glob
 from torch.utils.data import Dataset
 import os, sys
-from imageio import imread, imwrite, mimwrite, imsave
+from imageio import imread, imwrite, mimwrite, imsave, mimsave
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from skimage import img_as_ubyte
@@ -253,8 +253,8 @@ class ForwardLatentDataset(Dataset):
         self.random_state = np.random.RandomState(seed)
         self.batch_size = batch_size
         # index next observation, will need
-        self.data_file = os.path.abspath(data_file)
-        self.data_file = np.load(self.data_file)
+        self.data_filename = os.path.abspath(data_file)
+        self.data_file = np.load(self.data_filename)
         # output of vqvae embedding
         self.prev_latents = self.data_file['prev_latents']
         self.prev_actions = self.data_file['prev_actions']
@@ -319,13 +319,13 @@ class AtariDataset(Dataset):
         self.random_state = np.random.RandomState(seed)
         self.batch_size = batch_size
         # index next observation, will need
-        self.data_file = os.path.abspath(data_file)
+        self.data_file_name = os.path.abspath(data_file)
         self.num_condition = int(number_condition)
         assert(self.num_condition>0)
         self.steps_ahead = int(steps_ahead)
         assert(self.steps_ahead>=0)
         self.norm_by = float(norm_by)
-        self.data_file = np.load(self.data_file)
+        self.data_file = np.load(self.data_file_name)
         # TODO! Rewards should be normalized
         self.rewards = self.data_file['rewards'].astype(np.int16)
         self.values = self.data_file['values'].astype(np.float32)
@@ -361,6 +361,49 @@ class AtariDataset(Dataset):
         self.starts.insert(0,0)
         self.ends.append(len(self.relative_indexes))
         self.episode_indexes = [x for x in range(len(self.starts))]
+
+    def plot_dataset(self):
+        ddir = self.data_file_name.replace('.npz', '_imgs')
+        if not os.path.exists(ddir):
+            os.makedirs(ddir)
+        for episode_index in range(len(self.starts)):
+            data, episode_index, episode_reward = self.get_episode_by_index(episode_index, diff=True)
+            states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = data
+            gif_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.gif'%(episode_index, episode_reward, states.shape[0]))
+            print('plotting %s'%gif_name)
+            mimsave(gif_name, states[:,-1])
+            for i in range(1,min(states.shape[0]-1, 300)):
+                png_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.png'%(episode_index, episode_reward, i))
+                if not os.path.exists(png_name):
+                    f,ax = plt.subplots(1,2)
+                    ax[0].set_title("%05d A%d" %(i,actions[i]))
+                    ax[0].imshow(states[i-1,-1])
+                    ax[1].imshow(states[i,-1])
+                    plt.savefig(png_name)
+                    plt.close()
+        embed()
+
+    def get_episode_by_index(self, episode_index, limit=0, diff=False):
+        relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)
+        if limit > 0:
+            print("limiting episode to %s steps" %limit)
+            relative_indexes = relative_indexes[:limit]
+        episode_reward = self.episodic_reward[episode_index]
+        if not diff:
+            data = self.get_data(relative_indexes)
+        else:
+            data = self.get_framediff_data(relative_indexes)
+        return (data, episode_index, episode_reward)
+
+    def get_entire_episode(self, diff=False, limit=-10, min_reward=-99):
+        ep_reward = -9999
+        while ep_reward < min_reward:
+            episode_index = self.random_state.choice(self.episode_indexes)
+            print('grabbing episode %s [%s:%s] of reward %s' %(episode_index,
+                                  self.starts[episode_index], self.ends[episode_index],
+                                  self.episodic_reward[episode_index]))
+            ep_reward = self.episodic_reward[episode_index]
+        return self.get_episode_by_index(episode_index, limit=limit, diff=diff)
 
     def reset_batch(self):
         self.unique_index_array = deepcopy(self.relative_indexes)
