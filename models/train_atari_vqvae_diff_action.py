@@ -223,6 +223,7 @@ def init_train():
                                    steps_ahead=1,
                                    batch_size=info['VQ_BATCH_SIZE'],
                                    norm_by=info['NORM_BY'])
+    train_data_loader.plot_dataset()
     valid_data_loader = AtariDataset(
                                    valid_data_file,
                                    number_condition=info['NUMBER_CONDITION'],

@@ -363,21 +363,21 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'DMB', # start files with name
+        "NAME":'MB', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":10, # what to scale prior by
-
+        "PRIOR_SCALE":5, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
+        # 500000 may be too much
+        # could consider each of the heads once
         "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
-        #"MIN_STEPS_TO_LEARN":5000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
-        "EPS_INIT":0.1,
-        "EPS_WARMUP":10,
+        # I think this randomness might need to be higher
+        "EPS_INIT":0.25,
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
@@ -396,7 +396,7 @@ if __name__ == '__main__':
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 50,
         "CLIP_GRAD":5, # Gradient clipping setting
-        "SEED":101,
+        "SEED":121,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
         "RESHAPE_SIZE":10*10*4,
@@ -410,13 +410,14 @@ if __name__ == '__main__':
         "VQ_MODEL_LOADPATH":'',
         "BETA":0.25,
         "ALPHA_REC":1.0,
-        "ALPHA_ACT":10,
+        "ALPHA_ACT":2.0,
         "NUM_Z":64,
         "NUM_K":512,
         "NR_LOGISTIC_MIX":10,
-        "VQ_BATCH_SIZE":32,
+        "VQ_BATCH_SIZE":128,
         "NUMBER_CONDITION":4,
-        "VQ_LEARNING_RATE":2e-4,
+        # learning rate can probably go higher than 2e-4
+        "VQ_LEARNING_RATE":2e-5,
         "NUM_SAMPLES":40,
         "VQ_NUM_EXAMPLES_TO_TRAIN":100000000,
         "VQ_SAVE_EVERY":500000,
