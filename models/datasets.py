@@ -372,16 +372,15 @@ class AtariDataset(Dataset):
             gif_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.gif'%(episode_index, episode_reward, states.shape[0]))
             print('plotting %s'%gif_name)
             mimsave(gif_name, states[:,-1])
-            for i in range(1,min(states.shape[0], 300)):
-                png_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.png'%(episode_index, episode_reward, i))
-                if not os.path.exists(png_name):
-                    f,ax = plt.subplots(1,2)
-                    ax[0].set_title("%05d A%d" %(i,actions[i]))
-                    ax[0].imshow(states[i,-2])
-                    ax[1].imshow(states[i,-1])
-                    plt.savefig(png_name)
-                    plt.close()
-        embed()
+            #for i in range(1,min(states.shape[0], 300)):
+            #    png_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.png'%(episode_index, episode_reward, i))
+            #    if not os.path.exists(png_name):
+            #        f,ax = plt.subplots(1,2)
+            #        ax[0].set_title("%05d A%d" %(i,actions[i]))
+            #        ax[0].imshow(states[i,-2])
+            #        ax[1].imshow(states[i,-1])
+            #        plt.savefig(png_name)
+            #        plt.close()
 
     def get_episode_by_index(self, episode_index, limit=0, diff=False):
         relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)

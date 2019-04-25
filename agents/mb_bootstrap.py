@@ -363,7 +363,7 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'MB', # start files with name
+        "NAME":'MBR', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -377,7 +377,7 @@ if __name__ == '__main__':
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
-        "EPS_INIT":0.25,
+        "EPS_INIT":0.5,
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
@@ -414,7 +414,7 @@ if __name__ == '__main__':
         "NUM_Z":64,
         "NUM_K":512,
         "NR_LOGISTIC_MIX":10,
-        "VQ_BATCH_SIZE":128,
+        "VQ_BATCH_SIZE":84,
         "NUMBER_CONDITION":4,
         # learning rate can probably go higher than 2e-4
         "VQ_LEARNING_RATE":2e-5,

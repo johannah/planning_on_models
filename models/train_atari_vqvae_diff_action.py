@@ -281,7 +281,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set_small.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     #parser.add_argument('--savename', default='vqdiffactintreward')
-    parser.add_argument('--savename', default='DEBUGvqbt')
+    parser.add_argument('--savename', default='MBvqbt')
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     if not debug:
@@ -292,17 +292,15 @@ if __name__ == '__main__':
         parser.add_argument('-mb', '--min_batches', default=2, type=int)
     parser.add_argument('-b', '--beta', default=0.25, type=float, help='scale for loss 3, commitment loss in vqvae')
     parser.add_argument('-arec', '--alpha_rec', default=1, type=float, help='scale for rec loss')
-    parser.add_argument('-aa', '--alpha_act', default=10, type=float, help='scale for rec loss')
-    parser.add_argument('-ar', '--alpha_rew', default=10, type=float, help='scale for rec loss')
+    parser.add_argument('-aa', '--alpha_act', default=2, type=float, help='scale for rec loss')
     parser.add_argument('-z', '--num_z', default=64, type=int)
     # 512 greatly outperformed 256 in freeway
     parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=128, type=int)
+    parser.add_argument('-bs', '--batch_size', default=64, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=1000000000, type=int)
-    #parser.add_argument('-lr', '--learning_rate', default=1.5e-5) - worked but took 0131013624 to train
-    parser.add_argument('-lr', '--learning_rate', default=2e-4)
+    parser.add_argument('-lr', '--learning_rate', default=1.5e-5) #- worked but took 0131013624 to train
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
