@@ -115,7 +115,7 @@ class VQRolloutStateManager(object):
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        x_d,_,_,latents,_ = self.get_vq_state(state/self.info['NORM_BY'])
+        x_d,_,_,latents,_,_ = self.get_vq_state(state/self.info['NORM_BY'])
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
         return latents.float(), x_d
 
@@ -274,18 +274,22 @@ class VQEnv(object):
                                        number_condition=self.info['NUMBER_CONDITION'],
                                        steps_ahead=1,
                                        batch_size=self.info['VQ_BATCH_SIZE'],
-                                       norm_by=self.info['NORM_BY'])
+                                       norm_by=self.info['NORM_BY'],
+                                       unique_actions=self.info['action_space'],
+                                       unique_rewards=self.info['REWARD_SPACE'])
 
         valid_data_loader = AtariDataset(
                                        self.info['valid_data_file'],
                                        number_condition=self.info['NUMBER_CONDITION'],
                                        steps_ahead=1,
                                        batch_size=self.info['VQ_BATCH_SIZE'],
-                                       norm_by=self.info['NORM_BY'])
+                                       norm_by=self.info['NORM_BY'],
+                                       unique_actions=self.info['action_space'],
+                                       unique_rewards=self.info['REWARD_SPACE'])
         self.info['size_training_set'] = train_data_loader.num_examples
         self.info['hsize'] = train_data_loader.data_h
         self.info['wsize'] = train_data_loader.data_w
-        self.info['num_rewards'] = len(train_data_loader.unique_rewards)
+        self.info['num_rewards'] = 3# len(train_data_loader.unique_rewards)
         actions_weight = 1-np.array(train_data_loader.percentages_actions)
         rewards_weight = 1-np.array(train_data_loader.percentages_rewards)
         actions_weight = torch.FloatTensor(actions_weight).to(self.DEVICE)
@@ -320,11 +324,12 @@ class VQEnv(object):
         self.info['num_output_mixtures']= (2*self.info['NR_LOGISTIC_MIX']+self.info['NR_LOGISTIC_MIX'])*self.info['num_channels']
         nmix = int(self.info['num_output_mixtures']/2)
         self.info['nmix'] = nmix
-        self.vqvae_model = VQVAErl(num_clusters=self.info['NUM_K'],
+        self.vqvae_model = VQVAE(num_clusters=self.info['NUM_K'],
                             encoder_output_size=self.info['NUM_Z'],
                             num_output_mixtures=self.info['num_output_mixtures'],
                             in_channels_size=self.info['NUMBER_CONDITION'],
                             n_actions=self.info['num_actions'],
+                            int_rewards=3,
                             ).to(self.DEVICE)
 
         parameters = list(self.vqvae_model.parameters())
@@ -369,8 +374,8 @@ class VQEnv(object):
         s = (2*reshape_input(torch.FloatTensor(states).to(self.DEVICE))-1)
         # make sure s has None on 0th
         with torch.no_grad():
-            x_d, z_e_x, z_q_x, latents, pred_actions = self.vqvae_model(s)
-        return x_d, z_e_x, z_q_x, latents, pred_actions
+            x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = self.vqvae_model(s)
+        return x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards
 
     def get_next_latent(self, latent_states, actions):
         # states should be last two states as np array

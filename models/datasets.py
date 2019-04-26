@@ -239,17 +239,23 @@ class FreewayForwardDataset(Dataset):
         y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
         return x,y
 
-def find_component_proportion(data):
-    unique = list(set(data))
+def find_component_proportion(data, unique):
+    """
+    find percentage of each component in unique in the data
+    """
     component_percentages = []
     num = data.shape[0]
     for u in unique:
         num_u = np.where(data == u)[0].shape[0]
-        component_percentages.append(num_u/float(num))
-    return num, unique, component_percentages
+        print(u,num_u)
+        if num_u:
+            component_percentages.append(num_u/float(num))
+        else:
+            component_percentages.append(0.0)
+    return component_percentages
 
 class ForwardLatentDataset(Dataset):
-    def __init__(self,  data_file, batch_size=128, seed=9):
+    def __init__(self,  data_file, batch_size=128, seed=9, unique_actions=None, unique_rewards=None):
         self.random_state = np.random.RandomState(seed)
         self.batch_size = batch_size
         # index next observation, will need
@@ -265,8 +271,21 @@ class ForwardLatentDataset(Dataset):
         self.rewards = self.data_file['rewards']
         self.values = self.data_file['values']
         self.actions = self.data_file['actions']
-        _, self.unique_rewards, self.percentages_rewards = find_component_proportion(self.rewards)
-        _, self.action_space, self.percentages_actions = find_component_proportion(self.actions)
+        if unique_actions==None:
+            self.action_space = sorted(list(set(self.actions)))
+            print("found unique actions of", unique_actions)
+        else:
+            self.action_space = unique_actions
+
+        if unique_rewards==None:
+            self.unique_rewards = sorted(list(set(self.rewards)))
+            print("found unique rewards of", self.reward_space)
+        else:
+            self.reward_space = unique_rewards
+        self.percentages_actions = find_component_proportion(self.actions, self.action_space)
+        self.percentages_rewards = find_component_proportion(self.rewards, self.reward_space)
+
+
         # should probably add terminals
         self.n_actions = len(self.action_space)
         self.num_examples,self.data_h,self.data_w = self.latents.shape
@@ -314,7 +333,7 @@ class AtariDataset(Dataset):
     def __init__(self,  data_file, number_condition=4, steps_ahead=1,
                         limit=None, batch_size=128,
                         norm_by=255.0,
-                        seed=39):
+                        seed=39, unique_actions=None, unique_rewards=None):
 
         self.random_state = np.random.RandomState(seed)
         self.batch_size = batch_size
@@ -329,14 +348,25 @@ class AtariDataset(Dataset):
         # TODO! Rewards should be normalized
         self.rewards = self.data_file['rewards'].astype(np.int16)
         self.values = self.data_file['values'].astype(np.float32)
-        self.unique_rewards = list(set(self.rewards))
         self.terminals = self.data_file['terminals'].astype(np.int16)
         self.actions = self.data_file['actions'].astype(np.int16)
         self.action_space = sorted(list(set(self.actions)))
         self.n_actions = len(self.action_space)
         self.episodic_reward=self.data_file['episodic_reward']
-        _, self.unique_rewards, self.percentages_rewards = find_component_proportion(self.rewards)
-        _, self.action_space, self.percentages_actions = find_component_proportion(self.actions)
+        if unique_actions==None:
+            self.action_space = sorted(list(set(self.actions)))
+            print("found unique actions of", unique_actions)
+        else:
+            self.action_space = unique_actions
+
+        if unique_rewards==None:
+            self.unique_rewards = sorted(list(set(self.rewards)))
+            print("found unique rewards of", self.reward_space)
+        else:
+            self.reward_space = unique_rewards
+        self.percentages_actions = find_component_proportion(self.actions, self.action_space)
+        self.percentages_rewards = find_component_proportion(self.rewards, self.reward_space)
+
         self.frames = self.data_file['frames']
         #self.num_examples,self.data_h,self.data_w = self.data_file['frames'].shape
         self.num_examples,self.data_h,self.data_w = self.frames.shape
@@ -370,8 +400,9 @@ class AtariDataset(Dataset):
             data, episode_index, episode_reward = self.get_episode_by_index(episode_index, diff=True)
             states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = data
             gif_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.gif'%(episode_index, episode_reward, states.shape[0]))
-            print('plotting %s'%gif_name)
-            mimsave(gif_name, states[:,-1])
+            if not os.path.exists(gif_name):
+                print('plotting %s'%gif_name)
+                mimsave(gif_name, states[:,-1].astype(np.uint8))
             #for i in range(1,min(states.shape[0], 300)):
             #    png_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.png'%(episode_index, episode_reward, i))
             #    if not os.path.exists(png_name):

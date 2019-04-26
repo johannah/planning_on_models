@@ -363,7 +363,7 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'MBR', # start files with name
+        "NAME":'MBR_reward', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -406,6 +406,7 @@ if __name__ == '__main__':
         "FRAME_SKIP":4, # deterministic frame skips to match deepmind
         "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
+        "REWARD_SPACE":[-1,0,1], #[-1,0,1]
          ##################### for vqvae model
         "VQ_MODEL_LOADPATH":'',
         "BETA":0.25,
@@ -496,6 +497,7 @@ if __name__ == '__main__':
 
     info['model_base_filepath'] = model_base_filepath
     info['num_actions'] = env.num_actions
+    info['action_space'] = range(info['num_actions'])
     vqenv = VQEnv(info)
 
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
