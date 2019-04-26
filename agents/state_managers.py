@@ -209,7 +209,7 @@ class VQRolloutStateManager(object):
         return False
 
 class VQEnv(object):
-    def __init__(self, info, seed=393):
+    def __init__(self, info, seed=393, vq_model_loadpath=''):
         # env will be deepcopied version of true state
         self.n_playout = info['N_PLAYOUT']
         self.DEVICE = info['DEVICE']
@@ -217,8 +217,25 @@ class VQEnv(object):
         self.info = info
         self.seed = seed
         self.random_state = np.random.RandomState(self.seed)
-        self.init_models()
-        self.rollout_number = 0
+        if vq_model_loadpath == '':
+            self.init_models()
+        else:
+            self.load_vq_model(vq_model_loadpath)
+
+    def load_vq_model(self, vq_model_loadpath):
+        self.vq_model_loadpath = vq_model_loadpath
+        self.vq_model_dict = torch.load(self.vq_model_loadpath, map_location=lambda storage, loc: storage)
+        self.vq_info = self.vq_model_dict['info']
+        print("WARNING!!! not using rewards -- change me")
+        self.vqvae_model = VQVAE(num_clusters=self.vq_info['NUM_K'],
+                            encoder_output_size=self.vq_info['NUM_Z'],
+                            num_output_mixtures=self.vq_info['num_output_mixtures'],
+                            in_channels_size=self.vq_info['NUMBER_CONDITION'],
+                            n_actions=self.vq_info['num_actions'],
+                            int_rewards=0,
+                            ).to(self.DEVICE)
+        print("END WARNING!!! not using rewards -- change me")
+        self.vqvae_model.load_state_dict(self.vq_model_dict['vqvae_state_dict'])
 
     def load_models(self, forward_model_loadpath):
         self.forward_model_loadpath = forward_model_loadpath

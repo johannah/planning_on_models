@@ -408,7 +408,7 @@ if __name__ == '__main__':
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
         "REWARD_SPACE":[-1,0,1], #[-1,0,1]
          ##################### for vqvae model
-        "VQ_MODEL_LOADPATH":'',
+        "VQ_MODEL_LOADPATH":'/../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,
@@ -498,7 +498,7 @@ if __name__ == '__main__':
     info['model_base_filepath'] = model_base_filepath
     info['num_actions'] = env.num_actions
     info['action_space'] = range(info['num_actions'])
-    vqenv = VQEnv(info)
+    vqenv = VQEnv(info, vqvae_model_filename=info['VQ_MODEL_LOADPATH'])
 
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
