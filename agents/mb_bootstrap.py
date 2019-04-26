@@ -73,8 +73,9 @@ def handle_checkpoint(cnt):
     print("finished checkpoint", time.time()-st)
     return cnt
 
-def pt_get_action(state, active_head=None):
-    vals = policy_net(state[None], active_head)
+def pt_get_latent_action(latent_state, active_head=None):
+    # comes in as vq
+    vals = policy_net(latent_state[None].to(info['DEVICE']), active_head)
     if active_head is not None:
         action = torch.argmax(vals, dim=1).item()
         return action
@@ -97,6 +98,49 @@ def pt_get_action(state, active_head=None):
 #        data = Counter(acts)
 #        action = data.most_common(1)[0][0]
 #        return action
+
+def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
+    latent_states = torch.Tensor(latent_states.astype(np.float)).to(info['DEVICE'])
+    latent_next_states = torch.Tensor(latent_next_states.astype(np.float)).to(info['DEVICE'])
+    rewards = torch.Tensor(rewards).to(info['DEVICE'])
+    actions = torch.LongTensor(actions).to(info['DEVICE'])
+    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
+    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
+    # min history to learn is 200,000 frames in dqn - 50000 steps
+    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
+    opt.zero_grad()
+    q_policy_vals = policy_net(latent_states, None)
+    next_q_target_vals = target_net(latent_next_states, None)
+    next_q_policy_vals = policy_net(latent_next_states, None)
+    cnt_losses = []
+    for k in range(info['N_ENSEMBLE']):
+        #TODO finish masking
+        total_used = torch.sum(masks[:,k])
+        if total_used > 0.0:
+            next_q_vals = next_q_target_vals[k].data
+            if info['DOUBLE_DQN']:
+                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
+                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
+            else:
+                next_qs = next_q_vals.max(1)[0] # max returns a pair
+
+            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
+            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
+            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
+            full_loss = masks[:,k]*l1loss
+            loss = torch.sum(full_loss/total_used)
+            cnt_losses.append(loss)
+            losses[k] = loss.cpu().detach().item()
+
+    loss = sum(cnt_losses)/info['N_ENSEMBLE']
+    loss.backward()
+    for param in policy_net.core_net.parameters():
+        if param.grad is not None:
+            # divide grads in core
+            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+    nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
+    opt.step()
+    return np.mean(losses)
 
 def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
     states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
@@ -140,77 +184,7 @@ def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
     nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
     opt.step()
     return np.mean(losses)
-
-def train(step_number, last_save):
-    """Contains the training and evaluation loops"""
-    epoch_num = len(perf['steps'])
-    while step_number < info['MAX_STEPS']:
-        ########################
-        ####### Training #######
-        ########################
-        epoch_frame = 0
-        while epoch_frame < info['EVAL_FREQUENCY']:
-            terminal = False
-            life_lost = True
-            state = env.reset()
-            start_steps = step_number
-            st = time.time()
-            episode_reward_sum = 0
-            random_state.shuffle(heads)
-            active_head = heads[0]
-            epoch_num += 1
-            ptloss_list = []
-            while not terminal:
-                action = pt_get_action(state=state, active_head=active_head)
-                next_state, reward, life_lost, terminal = env.step(action)
-                # Store transition in the replay memory
-                replay_memory.add_experience(action=action,
-                                             frame=next_state[-1],
-                                             reward=np.sign(reward),
-                                             terminal=life_lost)
-
-                step_number += 1
-                epoch_frame += 1
-                episode_reward_sum += reward
-                state = next_state
-
-                if step_number % info['LEARN_EVERY_STEPS'] == 0 and step_number > info['MIN_STEPS_TO_LEARN']:
-                    _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
-                    ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags, _masks)
-                    ptloss_list.append(ptloss)
-                if step_number % info['TARGET_UPDATE'] == 0 and step_number >  info['MIN_STEPS_TO_LEARN']:
-                    print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                    print('updating target network at %s'%step_number)
-                    target_net.load_state_dict(policy_net.state_dict())
-
-            et = time.time()
-            ep_time = et-st
-            perf['steps'].append(step_number)
-            perf['episode_step'].append(step_number-start_steps)
-            perf['episode_head'].append(active_head)
-            perf['episode_loss'].append(np.mean(ptloss_list))
-            perf['episode_reward'].append(episode_reward_sum)
-            perf['episode_times'].append(ep_time)
-            perf['episode_relative_times'].append(time.time()-info['START_TIME'])
-            perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
-            #last_save = handle_checkpoint(step_number)
-
-            if not epoch_num%info['PLOT_EVERY_EPISODES']:
-                matplotlib_plot_all(perf)
-                # TODO plot title
-                print('avg reward', perf['avg_rewards'][-1])
-                print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
-
-                with open('rewards.txt', 'a') as reward_file:
-                    print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
-        if (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
-            last_save = handle_checkpoint(step_number)
-        matplotlib_plot_all(perf)
-
-
+#
 def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
@@ -236,39 +210,46 @@ def train_sim(step_number, last_save):
             print("Gathering data with head=%s"%active_head)
             while not terminal:
                # eps
-                if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
-                    action = random_state.randint(0, env.num_actions)
-                else:
-                    action = pt_get_action(state=latent_state, active_head=active_head)
+                #if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
+                #    action = random_state.randint(0, env.num_actions)
+                #else:
+                action = pt_get_latent_action(latent_state=latent_state, active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
+                next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
                 # Store transition in the replay memory
+                #TODO - add latents from initial training buffer to replay buffer
                 replay_memory.add_experience(action=action,
                                              frame=next_state[-1],
                                              reward=np.sign(reward),
                                              terminal=life_lost)
+                latent_replay_memory.add_experience(action=action,
+                                             frame=next_latent_state[0].cpu().numpy(),
+                                             reward=np.sign(reward),
+                                             terminal=life_lost)
+                latent_state = next_latent_state
 
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
                 state = next_state
-                if step_number == info['MIN_STEPS_TO_LEARN']:
-                    if info['VQ_MODEL_LOADPATH'] == '':
-                        # need to write npz file and train vqvae on it
-                        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
-                        replay_memory.save_buffer(buff_filename)
-                        # now the vq is trained -
-                        vqenv.train_vq_model(buff_filename+'.npz')
-                        embed()
+                #if step_number == info['MIN_STEPS_TO_LEARN']:
+                #    if info['VQ_MODEL_LOADPATH'] == '':
+                #        # need to write npz file and train vqvae on it
+                #        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
+                #        replay_memory.save_buffer(buff_filename)
+                #        # now the vq is trained -
+                #        vqenv.train_vq_model(buff_filename+'.npz')
 
                 if step_number > info['MIN_STEPS_TO_LEARN']:
                     if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                        _states, _actions, _rewards, _next_states, _terminal_flags, _masks = replay_memory.get_minibatch(info['BATCH_SIZE'])
-                        ptloss = ptlearn(_states, _actions, _rewards, _next_states, _terminal_flags, _masks)
+                        _latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks = latent_replay_memory.get_minibatch(info['BATCH_SIZE'])
+                        ptloss = pt_latent_learn(_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
                         ptloss_list.append(ptloss)
                     if step_number % info['TARGET_UPDATE'] == 0:
                         print("++++++++++++++++++++++++++++++++++++++++++++++++")
                         print('updating target network at %s'%step_number)
                         target_net.load_state_dict(policy_net.state_dict())
+            print('END EPISODE', epoch_num, step_number, episode_reward_sum)
             et = time.time()
             ep_time = et-st
             perf['steps'].append(step_number)
@@ -310,6 +291,8 @@ def evaluate(step_number):
     # only run one
     for i in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
+        latent_state, x_d = vqenv.get_state_representation(state[None])
+
         episode_reward_sum = 0
         terminal = False
         life_lost = True
@@ -320,11 +303,12 @@ def evaluate(step_number):
             eps = random_state.rand()
             if eps < info['EPS_EVAL']:
                action = random_state.randint(0, env.num_actions)
-               print("random action")
+               print("random action eval", action)
             else:
-               action = pt_get_action(state, active_head=None)
-               print("real action")
+               action = pt_get_latent_action(latent_state, active_head=None)
             next_state, reward, life_lost, terminal = env.step(action)
+            next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
+            latent_state = next_latent_state
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
@@ -333,13 +317,13 @@ def evaluate(step_number):
             if not episode_steps%1000:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
-        print("Evaluation score:\n", np.mean(eval_rewards))
+
         # only save best if we've seen this round
         if episode_reward_sum > best_eval:
             best_eval = episode_reward_sum
             generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval)
         eval_rewards.append(episode_reward_sum)
-
+    print("Evaluation score:\n", eval_rewards)
     efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
     with open(efile, 'a') as eval_reward_file:
         print(step_number, np.mean(eval_rewards), file=eval_reward_file)
@@ -363,7 +347,7 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'MBR_reward', # start files with name
+        "NAME":'MBR_RUN', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -383,7 +367,8 @@ if __name__ == '__main__':
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
-        "EVAL_FREQUENCY":500000, # how often to run evaluation episodes
+        #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
@@ -392,7 +377,7 @@ if __name__ == '__main__':
         "RMS_CENTERED":True,
         "HISTORY_SIZE":4, # how many past frames to use for state input
         "N_EPOCHS":90000,  # Number of episodes to run
-        "BATCH_SIZE":32, # Batch size to use for learning
+        "BATCH_SIZE":64, # Batch size to use for learning
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 50,
         "CLIP_GRAD":5, # Gradient clipping setting
@@ -408,7 +393,7 @@ if __name__ == '__main__':
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
         "REWARD_SPACE":[-1,0,1], #[-1,0,1]
          ##################### for vqvae model
-        "VQ_MODEL_LOADPATH":'/../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
+        "VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,
@@ -423,6 +408,7 @@ if __name__ == '__main__':
         "VQ_NUM_EXAMPLES_TO_TRAIN":100000000,
         "VQ_SAVE_EVERY":500000,
         "VQ_MIN_BATCHES_BEFORE_SAVE":1000,
+        "LATENT_SIZE":10,
         "VQ_SAVENAME":"VQ",
         "VQ_GAMMA":0.9,
     }
@@ -445,6 +431,14 @@ if __name__ == '__main__':
                                  batch_size=info['BATCH_SIZE'],
                                  num_heads=info['N_ENSEMBLE'],
                                  bernoulli_probability=info['BERNOULLI_PROBABILITY'])
+    latent_replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
+                                 frame_height=info['LATENT_SIZE'],
+                                 frame_width=info['LATENT_SIZE'],
+                                 agent_history_length=1,
+                                 batch_size=info['BATCH_SIZE'],
+                                 num_heads=info['N_ENSEMBLE'],
+                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'])
+
 
     random_state = np.random.RandomState(info["SEED"])
 
@@ -498,7 +492,7 @@ if __name__ == '__main__':
     info['model_base_filepath'] = model_base_filepath
     info['num_actions'] = env.num_actions
     info['action_space'] = range(info['num_actions'])
-    vqenv = VQEnv(info, vqvae_model_filename=info['VQ_MODEL_LOADPATH'])
+    vqenv = VQEnv(info, vq_model_loadpath=info['VQ_MODEL_LOADPATH'], device='cpu')
 
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,

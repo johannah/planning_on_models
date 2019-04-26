@@ -209,10 +209,10 @@ class VQRolloutStateManager(object):
         return False
 
 class VQEnv(object):
-    def __init__(self, info, seed=393, vq_model_loadpath=''):
+    def __init__(self, info, seed=393, vq_model_loadpath='', device='cpu'):
         # env will be deepcopied version of true state
         self.n_playout = info['N_PLAYOUT']
-        self.DEVICE = info['DEVICE']
+        self.DEVICE = device
         self.num_samples = info['NUM_SAMPLES']
         self.info = info
         self.seed = seed
@@ -225,17 +225,18 @@ class VQEnv(object):
     def load_vq_model(self, vq_model_loadpath):
         self.vq_model_loadpath = vq_model_loadpath
         self.vq_model_dict = torch.load(self.vq_model_loadpath, map_location=lambda storage, loc: storage)
-        self.vq_info = self.vq_model_dict['info']
+        self.vq_info = self.vq_model_dict['vq_info']
         print("WARNING!!! not using rewards -- change me")
         self.vqvae_model = VQVAE(num_clusters=self.vq_info['NUM_K'],
                             encoder_output_size=self.vq_info['NUM_Z'],
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
                             in_channels_size=self.vq_info['NUMBER_CONDITION'],
                             n_actions=self.vq_info['num_actions'],
-                            int_rewards=0,
+                            int_reward=0,
                             ).to(self.DEVICE)
         print("END WARNING!!! not using rewards -- change me")
         self.vqvae_model.load_state_dict(self.vq_model_dict['vqvae_state_dict'])
+        print("loaded state dict for vqvae model")
 
     def load_models(self, forward_model_loadpath):
         self.forward_model_loadpath = forward_model_loadpath
@@ -382,7 +383,7 @@ class VQEnv(object):
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        x_d,_,_,latents,_ = self.get_vq_state(state/self.info['NORM_BY'])
+        x_d,_,_,latents,_,_ = self.get_vq_state(state/self.info['NORM_BY'])
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
         return latents.float(), x_d
 
