@@ -195,7 +195,7 @@ def train_sim(step_number, last_save):
         ####### Training #######
         ########################
         epoch_frame = 0
-        if epoch_frame < info['EVAL_FREQUENCY']:
+        while epoch_frame < info['EVAL_FREQUENCY']:
             terminal = False
             life_lost = True
             # use real state
@@ -276,6 +276,7 @@ def train_sim(step_number, last_save):
 
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
+        print('starting evaluate', epoch_frame, step_number, info['EVAL_FREQUENCY'])
         avg_eval_reward = evaluate(step_number)
         perf['eval_rewards'].append(avg_eval_reward)
         perf['eval_steps'].append(step_number)
@@ -325,8 +326,9 @@ def evaluate(step_number):
         # only save best if we've seen this round
         if episode_reward_sum > best_eval:
             best_eval = episode_reward_sum
-            rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
-            rec = list((255*rec_est[:,0]).astype(np.uint8))
+            #rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
+            rec_mean = vqenv.sample_mean_from_latents(torch.cat(x_ds))
+            rec = list((255*rec_mean[:,0]).astype(np.uint8))
             generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval)
             generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval)
         eval_rewards.append(episode_reward_sum)
@@ -371,12 +373,12 @@ if __name__ == '__main__':
         "EPS_INIT":0.0,
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
-        "NUM_EVAL_EPISODES":5, # num examples to average in eval
+        "NUM_EVAL_EPISODES":1, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         #"CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
         "CHECKPOINT_EVERY_STEPS":100000, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":50000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
        # "EVAL_FREQUENCY":1, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
