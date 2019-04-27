@@ -69,7 +69,9 @@ def handle_checkpoint(cnt):
     save_checkpoint(state, filename)
     # npz will be added
     buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%cnt)
+    latent_buff_filename = os.path.abspath(model_base_filepath + "_%010dq_latent_train_buffer"%cnt)
     replay_memory.save_buffer(buff_filename)
+    latent_replay_memory.save_buffer(latent_buff_filename)
     print("finished checkpoint", time.time()-st)
     return cnt
 
@@ -193,7 +195,7 @@ def train_sim(step_number, last_save):
         ####### Training #######
         ########################
         epoch_frame = 0
-        while epoch_frame < info['EVAL_FREQUENCY']:
+        if epoch_frame < info['EVAL_FREQUENCY']:
             terminal = False
             life_lost = True
             # use real state
@@ -262,11 +264,11 @@ def train_sim(step_number, last_save):
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
 
-            if (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
+            if not step_number or  (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
                 if step_number > info['MIN_STEPS_TO_LEARN']:
                     last_save = handle_checkpoint(step_number)
 
-            if not epoch_num%info['PLOT_EVERY_EPISODES']:
+            if not step_number or not epoch_num%info['PLOT_EVERY_EPISODES']:
                 matplotlib_plot_all(perf)
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
@@ -299,6 +301,7 @@ def evaluate(step_number):
         episode_steps = 0
         frames_for_gif = []
         results_for_eval = []
+        x_ds = []
         while not terminal:
             eps = random_state.rand()
             if eps < info['EPS_EVAL']:
@@ -308,6 +311,7 @@ def evaluate(step_number):
                action = pt_get_latent_action(latent_state, active_head=None)
             next_state, reward, life_lost, terminal = env.step(action)
             next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
+            x_ds.append(x_d)
             latent_state = next_latent_state
             evaluate_step_number += 1
             episode_steps +=1
@@ -321,6 +325,9 @@ def evaluate(step_number):
         # only save best if we've seen this round
         if episode_reward_sum > best_eval:
             best_eval = episode_reward_sum
+            rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
+            rec = list((255*rec_est[:,0]).astype(np.uint8))
+            generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval)
             generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval)
         eval_rewards.append(episode_reward_sum)
     print("Evaluation score:\n", eval_rewards)
@@ -345,9 +352,9 @@ if __name__ == '__main__':
     info = {
         "GAME":'roms/freeway.bin', # gym prefix
         "N_PLAYOUT":50,
-        "MIN_SCORE_GIF":0, # min score to plot gif in eval
+        "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'MBR_RUN', # start files with name
+        "NAME":'MBReward_RUN_trained_less', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -357,19 +364,20 @@ if __name__ == '__main__':
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
-        "MIN_STEPS_TO_LEARN":0, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
-        "EPS_INIT":0.5,
+        "EPS_INIT":0.0,
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         #"CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
-        "CHECKPOINT_EVERY_STEPS":10001, # how often to write pkl of model and npz of data buffer
+        "CHECKPOINT_EVERY_STEPS":100000, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":10000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":50000, # how often to run evaluation episodes
+       # "EVAL_FREQUENCY":1, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
@@ -394,7 +402,9 @@ if __name__ == '__main__':
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
         "REWARD_SPACE":[-1,0,1], #[-1,0,1]
          ##################### for vqvae model
-        "VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
+        #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
+        #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt_reward07/MBvqbt_reward_0041007872ex.pt',
+        "VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt_reward07/MBvqbt_reward_0014502784ex.pt',
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,

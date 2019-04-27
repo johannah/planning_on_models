@@ -115,7 +115,7 @@ class VQRolloutStateManager(object):
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        x_d,_,_,latents,_,_ = self.get_vq_state(state/self.info['NORM_BY'])
+        x_d,_,_,latents,_,_ = self.get_vq_state(state/self.vq_info['NORM_BY'])
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
         return latents.float(), x_d
 
@@ -214,7 +214,7 @@ class VQEnv(object):
         self.n_playout = info['N_PLAYOUT']
         self.DEVICE = device
         self.num_samples = info['NUM_SAMPLES']
-        self.info = info
+        self.vq_info = info
         self.seed = seed
         self.random_state = np.random.RandomState(self.seed)
         if vq_model_loadpath == '':
@@ -232,11 +232,9 @@ class VQEnv(object):
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
                             in_channels_size=self.vq_info['NUMBER_CONDITION'],
                             n_actions=self.vq_info['num_actions'],
-                            int_reward=0,
+                            int_reward=self.vq_info['num_rewards'],
                             ).to(self.DEVICE)
-        print("END WARNING!!! not using rewards -- change me")
         self.vqvae_model.load_state_dict(self.vq_model_dict['vqvae_state_dict'])
-        print("loaded state dict for vqvae model")
 
     def load_models(self, forward_model_loadpath):
         self.forward_model_loadpath = forward_model_loadpath
@@ -284,75 +282,75 @@ class VQEnv(object):
     def train_vq_model(self, train_buffer):
         all_rewards, all_starts, all_ends = find_episodic_rewards(train_buffer)
         reward_fnames = [train_buffer for x in range(len(all_rewards))]
-        train_data_file = make_dataset(all_rewards, all_starts, all_ends, reward_fnames, self.info['VQ_GAMMA'], kind='training')
-        self.info['train_data_file'] = train_data_file
-        self.info['valid_data_file'] = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/valid_set_small.npz'
+        train_data_file = make_dataset(all_rewards, all_starts, all_ends, reward_fnames, self.vq_info['VQ_GAMMA'], kind='training')
+        self.vq_info['train_data_file'] = train_data_file
+        self.vq_info['valid_data_file'] = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/valid_set_small.npz'
         train_data_loader = AtariDataset(
-                                       self.info['train_data_file'],
-                                       number_condition=self.info['NUMBER_CONDITION'],
+                                       self.vq_info['train_data_file'],
+                                       number_condition=self.vq_info['NUMBER_CONDITION'],
                                        steps_ahead=1,
-                                       batch_size=self.info['VQ_BATCH_SIZE'],
-                                       norm_by=self.info['NORM_BY'],
-                                       unique_actions=self.info['action_space'],
-                                       unique_rewards=self.info['REWARD_SPACE'])
+                                       batch_size=self.vq_info['VQ_BATCH_SIZE'],
+                                       norm_by=self.vq_info['NORM_BY'],
+                                       unique_actions=self.vq_info['action_space'],
+                                       unique_rewards=self.vq_info['REWARD_SPACE'])
 
         valid_data_loader = AtariDataset(
-                                       self.info['valid_data_file'],
-                                       number_condition=self.info['NUMBER_CONDITION'],
+                                       self.vq_info['valid_data_file'],
+                                       number_condition=self.vq_info['NUMBER_CONDITION'],
                                        steps_ahead=1,
-                                       batch_size=self.info['VQ_BATCH_SIZE'],
-                                       norm_by=self.info['NORM_BY'],
-                                       unique_actions=self.info['action_space'],
-                                       unique_rewards=self.info['REWARD_SPACE'])
-        self.info['size_training_set'] = train_data_loader.num_examples
-        self.info['hsize'] = train_data_loader.data_h
-        self.info['wsize'] = train_data_loader.data_w
-        self.info['num_rewards'] = 3# len(train_data_loader.unique_rewards)
+                                       batch_size=self.vq_info['VQ_BATCH_SIZE'],
+                                       norm_by=self.vq_info['NORM_BY'],
+                                       unique_actions=self.vq_info['action_space'],
+                                       unique_rewards=self.vq_info['REWARD_SPACE'])
+        self.vq_info['size_training_set'] = train_data_loader.num_examples
+        self.vq_info['hsize'] = train_data_loader.data_h
+        self.vq_info['wsize'] = train_data_loader.data_w
+        self.vq_info['num_rewards'] = 3# len(train_data_loader.unique_rewards)
         actions_weight = 1-np.array(train_data_loader.percentages_actions)
         rewards_weight = 1-np.array(train_data_loader.percentages_rewards)
         actions_weight = torch.FloatTensor(actions_weight).to(self.DEVICE)
         rewards_weight = torch.FloatTensor(rewards_weight).to(self.DEVICE)
-        self.info['actions_weight'] = actions_weight
-        self.info['rewards_weight'] = rewards_weight
-        self.info['train_cnt'], self.vqvae_model, self.opt, self.info = train_vqvae(self.info['train_cnt'], self.vqvae_model, self.opt, self.info, train_data_loader, valid_data_loader)
+        self.vq_info['actions_weight'] = actions_weight
+        self.vq_info['rewards_weight'] = rewards_weight
+        self.vq_info['train_cnt'], self.vqvae_model, self.opt, self.vq_info = train_vqvae(self.vq_info['train_cnt'], self.vqvae_model, self.opt, self.vq_info, train_data_loader, valid_data_loader)
 
     def init_models(self):
         #data_dir = os.path.split(train_data_file)[0]
-        data_dir = self.info['model_base_filepath']
+        data_dir = self.vq_info['model_base_filepath']
         run_num = 0
-        model_base_filedir = os.path.join(data_dir, self.info['VQ_SAVENAME'] + '%02d'%run_num)
+        model_base_filedir = os.path.join(data_dir, self.vq_info['VQ_SAVENAME'] + '%02d'%run_num)
         while os.path.exists(model_base_filedir):
             run_num +=1
-            model_base_filedir = os.path.join(data_dir, self.info['VQ_SAVENAME'] + '%02d'%run_num)
+            model_base_filedir = os.path.join(data_dir, self.vq_info['VQ_SAVENAME'] + '%02d'%run_num)
         os.makedirs(model_base_filedir)
-        model_base_filepath = os.path.join(model_base_filedir, self.info['VQ_SAVENAME'])
+        model_base_filepath = os.path.join(model_base_filedir, self.vq_info['VQ_SAVENAME'])
         print("VQ MODEL BASE FILEPATH", model_base_filepath)
-        self.info['train_cnt'] = 0
-        self.info['vq_train_cnts'] = []
-        self.info['vq_train_losses_list'] = []
-        self.info['vq_valid_cnts'] = []
-        self.info['vq_valid_losses_list'] = []
-        self.info['vq_save_times'] = []
-        self.info['vq_last_save'] = 0
-        self.info['vq_last_plot'] = 0
-        self.info['vq_model_base_filedir'] = model_base_filedir
-        self.info['vq_model_base_filepath'] = model_base_filepath
+        self.vq_info['train_cnt'] = 0
+        self.vq_info['vq_train_cnts'] = []
+        self.vq_info['vq_train_losses_list'] = []
+        self.vq_info['vq_valid_cnts'] = []
+        self.vq_info['vq_valid_losses_list'] = []
+        self.vq_info['vq_save_times'] = []
+        self.vq_info['vq_last_save'] = 0
+        self.vq_info['vq_last_plot'] = 0
+        self.vq_info['vq_model_base_filedir'] = model_base_filedir
+        self.vq_info['vq_model_base_filepath'] = model_base_filepath
 
-        self.info['num_channels'] = 2
-        self.info['num_output_mixtures']= (2*self.info['NR_LOGISTIC_MIX']+self.info['NR_LOGISTIC_MIX'])*self.info['num_channels']
-        nmix = int(self.info['num_output_mixtures']/2)
-        self.info['nmix'] = nmix
-        self.vqvae_model = VQVAE(num_clusters=self.info['NUM_K'],
-                            encoder_output_size=self.info['NUM_Z'],
-                            num_output_mixtures=self.info['num_output_mixtures'],
-                            in_channels_size=self.info['NUMBER_CONDITION'],
-                            n_actions=self.info['num_actions'],
+        self.vq_info['num_channels'] = 2
+        self.vq_info['num_output_mixtures']= (2*self.vq_info['NR_LOGISTIC_MIX']+self.vq_info['NR_LOGISTIC_MIX'])*self.vq_info['num_channels']
+        nmix = int(self.vq_info['num_output_mixtures']/2)
+        self.vq_info['nmix'] = nmix
+        self.vqvae_model = VQVAE(num_clusters=self.vq_info['NUM_K'],
+                            encoder_output_size=self.vq_info['NUM_Z'],
+                            num_output_mixtures=self.vq_info['num_output_mixtures'],
+                            in_channels_size=self.vq_info['NUMBER_CONDITION'],
+                            n_actions=self.vq_info['num_actions'],
                             int_rewards=3,
                             ).to(self.DEVICE)
 
         parameters = list(self.vqvae_model.parameters())
-        self.opt = optim.Adam(parameters, lr=self.info['VQ_LEARNING_RATE'])
-        self.action_space = range(self.info['num_actions'])
+        self.opt = optim.Adam(parameters, lr=self.vq_info['VQ_LEARNING_RATE'])
+        self.action_space = range(self.vq_info['num_actions'])
 
     def decode_vq_from_latents(self, latents):
         latents = latents.long()
@@ -370,20 +368,21 @@ class VQEnv(object):
     def sample_from_latents(self, x_d):
         # TODO
         nmix = 30
+        num_samples = 40
         rec_mest = torch.Tensor(x_d[:,:nmix])
-        if self.num_samples:
-            rec_sams = np.zeros((x_d.shape[0], self.num_samples, 1, 80, 80))
-            for n in range(self.num_samples):
-                sam = sample_from_discretized_mix_logistic(rec_mest, self.vq_largs.nr_logistic_mix, only_mean=False)
+        if num_samples:
+            rec_sams = np.zeros((x_d.shape[0], num_samples, 1, 80, 80))
+            for n in range(num_samples):
+                sam = sample_from_discretized_mix_logistic(rec_mest, self.vq_info['NR_LOGISTIC_MIX'], only_mean=False)
                 rec_sams[:,n] = (((sam+1)/2.0)).cpu().numpy()
             rec_est = np.mean(rec_sams, axis=1)
-        rec_mean = sample_from_discretized_mix_logistic(rec_mest, self.vq_largs.nr_logistic_mix, only_mean=True)
+        rec_mean = sample_from_discretized_mix_logistic(rec_mest, self.vq_info['NR_LOGISTIC_MIX'], only_mean=True)
         rec_mean = (((rec_mean+1)/2.0)).cpu().numpy()
         return rec_est, rec_mean
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        x_d,_,_,latents,_,_ = self.get_vq_state(state/self.info['NORM_BY'])
+        x_d,_,_,latents,_,_ = self.get_vq_state(state/self.vq_info['NORM_BY'])
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
         return latents.float(), x_d
 
