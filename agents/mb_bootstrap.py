@@ -354,7 +354,7 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'MBReward_RUN_trained_less', # start files with name
+        "NAME":'MBReward_RUN_fulldata', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -404,7 +404,8 @@ if __name__ == '__main__':
          ##################### for vqvae model
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt_reward07/MBvqbt_reward_0041007872ex.pt',
-        "VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt_reward07/MBvqbt_reward_0014502784ex.pt',
+        #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt_reward07/MBvqbt_reward_0014502784ex.pt',
+        "VQ_MODEL_LOADPATH":"../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex.pt",
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,
