@@ -264,7 +264,7 @@ def train_sim(step_number, last_save):
 
             if (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
                 if step_number > info['MIN_STEPS_TO_LEARN']:
-                    last_save = handle_checkpoint(last_save, step_number)
+                    last_save = handle_checkpoint(step_number)
 
             if not epoch_num%info['PLOT_EVERY_EPISODES']:
                 matplotlib_plot_all(perf)
@@ -357,7 +357,7 @@ if __name__ == '__main__':
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
-        "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":0, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
@@ -366,9 +366,10 @@ if __name__ == '__main__':
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":5, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
+        #"CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
+        "CHECKPOINT_EVERY_STEPS":10001, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":10000, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
