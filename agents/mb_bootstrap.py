@@ -258,7 +258,11 @@ def train_sim(step_number, last_save):
             perf['episode_step'].append(step_number-start_steps)
             perf['episode_head'].append(active_head)
             perf['eps_list'].append(np.mean(ep_eps_list))
-            perf['episode_loss'].append(np.mean(ptloss_list))
+            if len(ptloss_list):
+                mean_loss = np.mean(ptloss_list)
+            else:
+                mean_loss = 0.0
+            perf['episode_loss'].append(mean_loss)
             perf['episode_reward'].append(episode_reward_sum)
             perf['episode_times'].append(ep_time)
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
@@ -356,13 +360,13 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'MBReward_RUN_fulldata', # start files with name
+        "NAME":'MBReward_RUN_fulldata_b10', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":5, # what to scale prior by
+        "PRIOR_SCALE":10, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
-        "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
+        "BERNOULLI_PROBABILITY": 0.8, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
@@ -388,11 +392,11 @@ if __name__ == '__main__':
         "RMS_CENTERED":True,
         "HISTORY_SIZE":4, # how many past frames to use for state input
         "N_EPOCHS":90000,  # Number of episodes to run
-        "BATCH_SIZE":64, # Batch size to use for learning
+        "BATCH_SIZE":32, # Batch size to use for learning
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 50,
         "CLIP_GRAD":5, # Gradient clipping setting
-        "SEED":121,
+        "SEED":21,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
         "RESHAPE_SIZE":10*10*4,
