@@ -55,6 +55,11 @@ def matplotlib_plot_all(p):
         plot_dict_losses({'episode times':{'index':epochs,'val':p['episode_times']}}, name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
         plot_dict_losses({'steps avg reward':{'index':steps,'val':p['avg_rewards']}}, name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
         plot_dict_losses({'eval rewards':{'index':p['eval_steps'], 'val':p['eval_rewards']}}, name=os.path.join(model_base_filedir, 'eval_rewards_steps.png'), rolling_length=0)
+        for i in range(len(p['head_rewards'])):
+            prange = len(p['head_rewards'][i])
+            pvals = p['head_rewards'][i]
+            pfname = os.path.join(model_base_filedir, 'head_%02d_rewards.png'%i)
+            plot_dict_losses({'head %s rewards'%i:{'index':prange, 'val':pvals}}, name=pfname, rolling_length=0)
     except Exception as e:
         print('fail matplotlib', e)
         embed()
@@ -92,22 +97,9 @@ def pt_get_latent_action(latent_state, active_head=None):
         action = data.most_common(1)[0][0]
         return action
 
-#def pt_get_action(state, active_head=None):
-#    state = torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
-#    vals = policy_net(state, active_head)
-#    if active_head is not None:
-#        action = torch.argmax(vals, dim=1).item()
-#        return action
-#    else:
-#        # vote
-#        acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
-#        data = Counter(acts)
-#        action = data.most_common(1)[0][0]
-#        return action
-
 def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
-    latent_states = torch.Tensor(latent_states.astype(np.float)).to(info['DEVICE'])
-    latent_next_states = torch.Tensor(latent_next_states.astype(np.float)).to(info['DEVICE'])
+    latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)).to(info['DEVICE'])
+    latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
@@ -195,9 +187,9 @@ def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
+        #avg_eval_reward = evaluate(step_number)
+        #perf['eval_rewards'].append(avg_eval_reward)
+        #perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -269,6 +261,7 @@ def train_sim(step_number, last_save):
                 lmean = 0.0
             perf['episode_loss'].append(lmean)
             perf['episode_reward'].append(episode_reward_sum)
+            perf['head_rewards'][active_head].append(episode_reward_sum)
             perf['episode_times'].append(ep_time)
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
@@ -362,7 +355,8 @@ if __name__ == '__main__':
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
-        "NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
+        #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
+        "NAME":'MBReward_RUN_detach4mem', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -372,7 +366,8 @@ if __name__ == '__main__':
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
-        "MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
+        #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":500, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
@@ -455,7 +450,7 @@ if __name__ == '__main__':
     latent_replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
                                  frame_height=info['LATENT_SIZE'],
                                  frame_width=info['LATENT_SIZE'],
-                                 agent_history_length=1,
+                                 agent_history_length=info['HISTORY_SIZE'],
                                  batch_size=info['BATCH_SIZE'],
                                  num_heads=info['N_ENSEMBLE'],
                                  bernoulli_probability=info['BERNOULLI_PROBABILITY'])
@@ -489,7 +484,9 @@ if __name__ == '__main__':
                 'episode_times':[],
                 'episode_relative_times':[],
                 'eval_rewards':[],
-                'eval_steps':[]}
+                'eval_steps':[],
+                'head_rewards':[[] for x in info['N_ENSEMBLE']],
+                }
 
         start_step_number = 0
         start_last_save = 0

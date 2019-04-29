@@ -410,7 +410,7 @@ class VQEnv(object):
         # make sure s has None on 0th
         with torch.no_grad():
             x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = self.vqvae_model(s)
-        return x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards
+        return x_d.detach(), z_e_x.detach(), z_q_x.detach(), latents.detach(), pred_actions.detach(), pred_rewards.detach()
 
     def get_next_latent(self, latent_states, actions):
         # states should be last two states as np array
