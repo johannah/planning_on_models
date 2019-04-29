@@ -237,7 +237,6 @@ class VQEnv(object):
             for a in args.keys():
                 self.vq_info[a.upper()] = args[a]
 
-        print("WARNING!!! not using rewards -- change me")
         self.vqvae_model = VQVAE(num_clusters=self.vq_info['NUM_K'],
                             encoder_output_size=self.vq_info['NUM_Z'],
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
@@ -246,48 +245,49 @@ class VQEnv(object):
                             int_reward=self.vq_info['num_rewards'],
                             ).to(self.DEVICE)
         self.vqvae_model.load_state_dict(self.vq_model_dict['vqvae_state_dict'])
+        print("loaded vqvae model")
 
-    def load_models(self, forward_model_loadpath):
-        self.forward_model_loadpath = forward_model_loadpath
-        self.forward_model_dict = torch.load(self.forward_model_loadpath,
-                                             map_location=lambda storage,
-                                             loc: storage)
-        self.vq_model_loadpath = self.forward_largs.train_data_file.replace('_train_forward.npz', '.pt')
-        self.forward_info = self.forward_model_dict['info']
-        self.forward_largs = self.forward_info['args'][-1]
-        self.vq_model_dict = torch.load(self.vq_model_loadpath, map_location=lambda storage, loc: storage)
-        self.vq_info = self.vq_model_dict['info']
-        self.vq_largs = self.vq_info['args'][-1]
-        self.vqvae_model = VQVAE(num_clusters=self.vq_largs.num_k,
-                                 encoder_output_size=self.vq_largs.num_z,
-                                 num_output_mixtures=self.vq_info['num_output_mixtures'],
-                                 in_channels_size=self.vq_largs.number_condition,
-                                 n_actions=self.vq_info['num_actions'],
-                                 int_reward=self.vq_info['num_rewards'])
-        print("loading vq model:%s"%self.vq_model_loadpath)
-        self.vqvae_model.load_state_dict(self.vq_model_dict['vqvae_state_dict'])
-        self.conv_forward_model = ForwardResNet(BasicBlock, data_width=self.forward_info['hsize'],
-                                           num_channels=self.forward_info['num_channels'],
-                                           num_output_channels=self.vq_largs.num_k,
-                                           dropout_prob=0.0)
-        self.conv_forward_model.load_state_dict(self.forward_model_dict['conv_forward_model'])
-        # base_channel_actions used when we take one action at a time
-        self.base_channel_actions = torch.zeros((self.n_playout, self.forward_info['num_actions'], self.forward_info['hsize'], self.forward_info['hsize']))
-        self.action_space = range(self.vq_info['num_actions'])
-        #    print('loading model from: %s' %args.model_loadpath)
-        #    model_dict = torch.load(args.model_loadpath)
-        #    info =  model_dict['info']
-        #    model_base_filedir = os.path.split(args.model_loadpath)[0]
-        #    model_base_filepath = os.path.join(model_base_filedir, args.savename)
-        #    train_cnt = info['train_cnts'][-1]
-        #    info['loaded_from'] = args.model_loadpath
-        #    #if 'reward_weights' not in info.keys():
-        #     print("loading weights from:%s" %args.model_loadpath)
-        #    vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
-        #    opt.load_state_dict(model_dict['optimizer'])
-        #    vqvae_model.embedding = model_dict['embedding']
+   # def load_models(self, forward_model_loadpath):
+   #     self.forward_model_loadpath = forward_model_loadpath
+   #     self.forward_model_dict = torch.load(self.forward_model_loadpath,
+   #                                          map_location=lambda storage,
+   #                                          loc: storage)
+   #     self.vq_model_loadpath = self.forward_largs.train_data_file.replace('_train_forward.npz', '.pt')
+   #     self.forward_info = self.forward_model_dict['info']
+   #     self.forward_largs = self.forward_info['args'][-1]
+   #     self.vq_model_dict = torch.load(self.vq_model_loadpath, map_location=lambda storage, loc: storage)
+   #     self.vq_info = self.vq_model_dict['info']
+   #     self.vq_largs = self.vq_info['args'][-1]
+   #     self.vqvae_model = VQVAE(num_clusters=self.vq_largs.num_k,
+   #                              encoder_output_size=self.vq_largs.num_z,
+   #                              num_output_mixtures=self.vq_info['num_output_mixtures'],
+   #                              in_channels_size=self.vq_largs.number_condition,
+   #                              n_actions=self.vq_info['num_actions'],
+   #                              int_reward=self.vq_info['num_rewards'])
+   #     print("loading vq model:%s"%self.vq_model_loadpath)
+   #     self.vqvae_model.load_state_dict(self.vq_model_dict['vqvae_state_dict'])
+   #     self.conv_forward_model = ForwardResNet(BasicBlock, data_width=self.forward_info['hsize'],
+   #                                        num_channels=self.forward_info['num_channels'],
+   #                                        num_output_channels=self.vq_largs.num_k,
+   #                                        dropout_prob=0.0)
+   #     self.conv_forward_model.load_state_dict(self.forward_model_dict['conv_forward_model'])
+   #     # base_channel_actions used when we take one action at a time
+   #     self.base_channel_actions = torch.zeros((self.n_playout, self.forward_info['num_actions'], self.forward_info['hsize'], self.forward_info['hsize']))
+   #     self.action_space = range(self.vq_info['num_actions'])
+   #     #print('loading model from: %s' %args.model_loadpath)
+   #     #model_dict = torch.load(args.model_loadpath)
+   #     #    info =  model_dict['info']
+   #     #    model_base_filedir = os.path.split(args.model_loadpath)[0]
+   #     #    model_base_filepath = os.path.join(model_base_filedir, args.savename)
+   #     #    train_cnt = info['train_cnts'][-1]
+   #     #    info['loaded_from'] = args.model_loadpath
+   #     #    #if 'reward_weights' not in info.keys():
+   #     #     print("loading weights from:%s" %args.model_loadpath)
+   #     #    vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
+   #     #    opt.load_state_dict(model_dict['optimizer'])
+   #     #    vqvae_model.embedding = model_dict['embedding']
 
-    #    #    info['reward_weights'] = [1,100]
+   # #    #    info['reward_weights'] = [1,100]
         #self.base_channel_actions = torch.zeros((self.n_playout, self.forward_info['num_actions'], self.forward_info['hsize'], self.forward_info['hsize']))
 
     def train_vq_model(self, train_buffer):
@@ -316,7 +316,6 @@ class VQEnv(object):
         self.vq_info['size_training_set'] = train_data_loader.num_examples
         self.vq_info['hsize'] = train_data_loader.data_h
         self.vq_info['wsize'] = train_data_loader.data_w
-        self.vq_info['num_rewards'] = 3# len(train_data_loader.unique_rewards)
         actions_weight = 1-np.array(train_data_loader.percentages_actions)
         rewards_weight = 1-np.array(train_data_loader.percentages_rewards)
         actions_weight = torch.FloatTensor(actions_weight).to(self.DEVICE)
@@ -356,7 +355,7 @@ class VQEnv(object):
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
                             in_channels_size=self.vq_info['NUMBER_CONDITION'],
                             n_actions=self.vq_info['num_actions'],
-                            int_rewards=3,
+                            int_rewards=self.vq_info['num_rewards'],
                             ).to(self.DEVICE)
 
         parameters = list(self.vqvae_model.parameters())

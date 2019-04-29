@@ -65,7 +65,7 @@ def write_info_file(info, model_base_filepath, cnt):
         info_f.write('%s=%s\n'%(key,val))
     info_f.close()
 
-def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results=[]):
+def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results=[], resize=True):
     """
     from @fg91
         Args:
@@ -74,8 +74,11 @@ def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results
             reward: Integer, Total reward of the episode that es ouputted as a gif
             path: String, path where gif is saved
     """
-    for idx, frame_idx in enumerate(frames_for_gif):
-        frames_for_gif[idx] = cv2.resize(frame_idx, (320, 220)).astype(np.uint8)
+    if resize:
+        for idx, frame_idx in enumerate(frames_for_gif):
+            frames_for_gif[idx] = cv2.resize(frame_idx, (320, 220)).astype(np.uint8)
+    else:
+        frames_for_gif = np.array(frames_for_gif).astype(np.uint8)
 
     if len(frames_for_gif[0].shape) == 2:
         name+='gray'

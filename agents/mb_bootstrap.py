@@ -41,19 +41,23 @@ def plot_dict_losses(plot_dict, name='loss_example.png', rolling_length=4, plot_
     plt.close()
 
 def matplotlib_plot_all(p):
-    epoch_num = len(p['steps'])
-    epochs = np.arange(epoch_num)
-    steps = p['steps']
-    plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_step']}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
-    plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_relative_times']}}, name=os.path.join(model_base_filedir, 'episode_relative_times.png'), rolling_length=10)
-    plot_dict_losses({'episode head':{'index':epochs, 'val':p['episode_head']}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
-    plot_dict_losses({'steps loss':{'index':steps, 'val':p['episode_loss']}}, name=os.path.join(model_base_filedir, 'steps_loss.png'))
-    plot_dict_losses({'steps eps':{'index':steps, 'val':p['eps_list']}}, name=os.path.join(model_base_filedir, 'steps_mean_eps.png'), rolling_length=0)
-    plot_dict_losses({'steps reward':{'index':steps,'val':p['episode_reward']}},  name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
-    plot_dict_losses({'episode reward':{'index':epochs, 'val':p['episode_reward']}}, name=os.path.join(model_base_filedir, 'episode_reward.png'), rolling_length=0)
-    plot_dict_losses({'episode times':{'index':epochs,'val':p['episode_times']}}, name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
-    plot_dict_losses({'steps avg reward':{'index':steps,'val':p['avg_rewards']}}, name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
-    plot_dict_losses({'eval rewards':{'index':p['eval_steps'], 'val':p['eval_rewards']}}, name=os.path.join(model_base_filedir, 'eval_rewards_steps.png'), rolling_length=0)
+    try:
+        epoch_num = len(p['steps'])
+        epochs = np.arange(epoch_num)
+        steps = p['steps']
+        plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_step']}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
+        plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_relative_times']}}, name=os.path.join(model_base_filedir, 'episode_relative_times.png'), rolling_length=10)
+        plot_dict_losses({'episode head':{'index':epochs, 'val':p['episode_head']}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
+        plot_dict_losses({'episode loss':{'index':epochs, 'val':p['episode_loss']}}, name=os.path.join(model_base_filedir, 'episode_loss.png'))
+       #plot_dict_losses({'steps eps':{'index':steps, 'val':p['eps_list']}}, name=os.path.join(model_base_filedir, 'steps_mean_eps.png'), rolling_length=0)
+        plot_dict_losses({'steps reward':{'index':steps,'val':p['episode_reward']}},  name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode reward':{'index':epochs, 'val':p['episode_reward']}}, name=os.path.join(model_base_filedir, 'episode_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode times':{'index':epochs,'val':p['episode_times']}}, name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
+        plot_dict_losses({'steps avg reward':{'index':steps,'val':p['avg_rewards']}}, name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
+        plot_dict_losses({'eval rewards':{'index':p['eval_steps'], 'val':p['eval_rewards']}}, name=os.path.join(model_base_filedir, 'eval_rewards_steps.png'), rolling_length=0)
+    except Exception as e:
+        print('fail matplotlib', e)
+        embed()
 
 def handle_checkpoint(cnt):
     st = time.time()
@@ -191,6 +195,9 @@ def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
+        avg_eval_reward = evaluate(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -206,8 +213,6 @@ def train_sim(step_number, last_save):
             episode_reward_sum = 0
             random_state.shuffle(heads)
             active_head = heads[0]
-            epoch_num += 1
-            ep_eps_list = []
             ptloss_list = []
             print("Gathering data with head=%s"%active_head)
             while not terminal:
@@ -257,34 +262,29 @@ def train_sim(step_number, last_save):
             perf['steps'].append(step_number)
             perf['episode_step'].append(step_number-start_steps)
             perf['episode_head'].append(active_head)
-            perf['eps_list'].append(np.mean(ep_eps_list))
+            #perf['eps_list'].append(np.mean(ep_eps_list))
             if len(ptloss_list):
-                mean_loss = np.mean(ptloss_list)
+                lmean = np.mean(ptloss_list)
             else:
-                mean_loss = 0.0
-            perf['episode_loss'].append(mean_loss)
+                lmean = 0.0
+            perf['episode_loss'].append(lmean)
             perf['episode_reward'].append(episode_reward_sum)
             perf['episode_times'].append(ep_time)
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
 
-            if not step_number or  (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
-                if step_number > info['MIN_STEPS_TO_LEARN']:
+            if not epoch_num or (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
+                if not epoch_num or step_number > info['MIN_STEPS_TO_LEARN']:
                     last_save = handle_checkpoint(step_number)
 
-            if not step_number or not epoch_num%info['PLOT_EVERY_EPISODES']:
+            if not epoch_num or not epoch_num%info['PLOT_EVERY_EPISODES']:
                 matplotlib_plot_all(perf)
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
-
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
-        print('starting evaluate', epoch_frame, step_number, info['EVAL_FREQUENCY'])
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
-        matplotlib_plot_all(perf)
+            epoch_num += 1
 
 def evaluate(step_number):
     print("""
@@ -294,7 +294,6 @@ def evaluate(step_number):
          """)
     eval_rewards = []
     evaluate_step_number = 0
-    best_eval = info['MIN_SCORE_GIF']
     # only run one
     for i in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
@@ -306,6 +305,7 @@ def evaluate(step_number):
         episode_steps = 0
         frames_for_gif = []
         results_for_eval = []
+        latents = []
         x_ds = []
         while not terminal:
             eps = random_state.rand()
@@ -314,6 +314,7 @@ def evaluate(step_number):
                print("random action eval", action)
             else:
                action = pt_get_latent_action(latent_state, active_head=None)
+            latents.append(latent_state.cpu().numpy())
             next_state, reward, life_lost, terminal = env.step(action)
             next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
             x_ds.append(x_d)
@@ -327,14 +328,14 @@ def evaluate(step_number):
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
 
+        latents.append(next_latent_state.cpu().numpy())
         # only save best if we've seen this round
-        if episode_reward_sum > best_eval:
-            best_eval = episode_reward_sum
-            #rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
-            rec_mean = vqenv.sample_mean_from_latents(torch.cat(x_ds))
-            rec = list((255*rec_mean[:,0]).astype(np.uint8))
-            generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval)
-            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval)
+        if not i:
+            rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
+            rec = (255*rec_est[:,0]).astype(np.uint8)
+            generate_gif(model_base_filedir, step_number, np.array(latents)[:,0], episode_reward_sum, name='test_latents', results=results_for_eval, resize=False)
+            generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval, resize=False)
+            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval, resize=False)
         eval_rewards.append(episode_reward_sum)
     print("Evaluation score:\n", eval_rewards)
     efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
@@ -360,17 +361,18 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":'MBReward_RUN_fulldata_b10', # start files with name
+        #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
+        "NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":10, # what to scale prior by
+        "PRIOR_SCALE":5, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
-        "BERNOULLI_PROBABILITY": 0.8, # Probability of experience to go to each head - if 1, every experience goes to every head
+        "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
-        "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
@@ -383,7 +385,7 @@ if __name__ == '__main__':
         "CHECKPOINT_EVERY_STEPS":100000, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
         "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
-       # "EVAL_FREQUENCY":1, # how often to run evaluation episodes
+        #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
@@ -392,11 +394,11 @@ if __name__ == '__main__':
         "RMS_CENTERED":True,
         "HISTORY_SIZE":4, # how many past frames to use for state input
         "N_EPOCHS":90000,  # Number of episodes to run
-        "BATCH_SIZE":32, # Batch size to use for learning
+        "BATCH_SIZE":64, # Batch size to use for learning
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 50,
         "CLIP_GRAD":5, # Gradient clipping setting
-        "SEED":21,
+        "SEED":121,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
         "RESHAPE_SIZE":10*10*4,
@@ -409,9 +411,9 @@ if __name__ == '__main__':
         "REWARD_SPACE":[-1,0,1], #[-1,0,1]
          ##################### for vqvae model
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
-        #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt_reward07/MBvqbt_reward_0041007872ex.pt',
-        #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt_reward07/MBvqbt_reward_0014502784ex.pt',
-        "VQ_MODEL_LOADPATH":"../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0071507436ex.pt",
+        # worked on poorly trained model below
+        #"VQ_MODEL_LOADPATH":'../../model_savedir/MBvqbt_reward_0041007872ex.pt',
+        "VQ_MODEL_LOADPATH":'../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0035503692ex.pt',
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,
@@ -435,6 +437,7 @@ if __name__ == '__main__':
     info['args'] = args
     info['load_time'] = datetime.date.today().ctime()
     info['NORM_BY'] = float(info['NORM_BY'])
+    info['num_rewards'] = len(info['REWARD_SPACE'])
 
     # create environment
     env = Environment(rom_file=info['GAME'], frame_skip=info['FRAME_SKIP'],
