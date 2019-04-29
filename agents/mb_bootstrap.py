@@ -485,7 +485,7 @@ if __name__ == '__main__':
                 'episode_relative_times':[],
                 'eval_rewards':[],
                 'eval_steps':[],
-                'head_rewards':[[] for x in info['N_ENSEMBLE']],
+                'head_rewards':[[] for x in range(info['N_ENSEMBLE'])],
                 }
 
         start_step_number = 0
