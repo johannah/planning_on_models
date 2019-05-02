@@ -28,6 +28,30 @@ def weights_init(m):
     else:
         print('%s is not initialized.' %classtype)
 
+class CoreNetEmbedding(nn.Module):
+    def __init__(self, reshape_size=8*10*10, num_channels=1, num_clusters=512):
+        super(CoreNetEmbedding, self).__init__()
+        self.num_clusters=num_clusters
+        eo = 64
+        self.embedding = nn.Embedding(num_clusters, eo)
+        self.reshape_size = reshape_size
+        # params from ddqn appendix
+        self.conv1 = nn.Conv2d(eo, 32, 1, 1)
+        self.conv2 = nn.Conv2d(32, 16, 1, 1)
+        self.conv3 = nn.Conv2d(16, 8, 1, 1)
+        self.conv1.apply(weights_init)
+        self.conv2.apply(weights_init)
+
+    def forward(self, x):
+        # expects to have no channels
+        xo = self.embedding(x).permute(0,3,1,2)
+        # coming out is bs, 10, 10, 64
+        xo = F.relu(self.conv1(xo))
+        xo = F.relu(self.conv2(xo))
+        xo = F.relu(self.conv3(xo))
+        # size after conv3
+        xo = xo.view(-1, self.reshape_size)
+        return xo
 
 class CoreNet(nn.Module):
     def __init__(self, reshape_size=4*10*10, num_channels=1):
@@ -83,9 +107,12 @@ class HeadNet(nn.Module):
         return x
 
 class EnsembleNet(nn.Module):
-    def __init__(self, n_ensemble, n_actions, reshape_size, num_channels, dueling=False):
+    def __init__(self, n_ensemble, n_actions, reshape_size, num_channels, dueling=False, num_clusters=0):
         super(EnsembleNet, self).__init__()
-        self.core_net = CoreNet(reshape_size=reshape_size, num_channels=num_channels)
+        if num_clusters == 0:
+            self.core_net = CoreNet(reshape_size=reshape_size, num_channels=num_channels)
+        else:
+            self.core_net = CoreNetEmbedding(reshape_size=reshape_size, num_channels=num_channels, num_clusters=num_clusters)
         self.dueling = dueling
         if self.dueling:
             print("using dueling dqn")

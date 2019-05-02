@@ -56,7 +56,7 @@ def matplotlib_plot_all(p):
         plot_dict_losses({'steps avg reward':{'index':steps,'val':p['avg_rewards']}}, name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
         plot_dict_losses({'eval rewards':{'index':p['eval_steps'], 'val':p['eval_rewards']}}, name=os.path.join(model_base_filedir, 'eval_rewards_steps.png'), rolling_length=0)
         for i in range(len(p['head_rewards'])):
-            prange = len(p['head_rewards'][i])
+            prange = range(len(p['head_rewards'][i]))
             pvals = p['head_rewards'][i]
             pfname = os.path.join(model_base_filedir, 'head_%02d_rewards.png'%i)
             plot_dict_losses({'head %s rewards'%i:{'index':prange, 'val':pvals}}, name=pfname, rolling_length=0)
@@ -86,20 +86,26 @@ def handle_checkpoint(cnt):
 
 def pt_get_latent_action(latent_state, active_head=None):
     # comes in as vq
-    vals = policy_net(latent_state[None].to(info['DEVICE']), active_head)
+    #vals = policy_net(latent_state[None].float().to(info['DEVICE'])/float(info['NUM_K']), active_head)
+    # goes in with channels = 0
+    vals = policy_net(latent_state.long().to(info['DEVICE']), active_head)
     if active_head is not None:
         action = torch.argmax(vals, dim=1).item()
         return action
     else:
         # vote
         acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
+        print(acts)
         data = Counter(acts)
         action = data.most_common(1)[0][0]
         return action
 
 def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
-    latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)).to(info['DEVICE'])
-    latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)).to(info['DEVICE'])
+    #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
+    #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
+    # dont normalize because we are using embedding
+    latent_states = torch.LongTensor(latent_states[:,-1]).to(info['DEVICE'])
+    latent_next_states = torch.LongTensor(latent_next_states[:,-1]).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
@@ -187,9 +193,9 @@ def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
-        #avg_eval_reward = evaluate(step_number)
-        #perf['eval_rewards'].append(avg_eval_reward)
-        #perf['eval_steps'].append(step_number)
+        avg_eval_reward = evaluate(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -356,18 +362,18 @@ if __name__ == '__main__':
         "DEVICE":device, #cpu vs gpu set by argument
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
-        "NAME":'MBReward_RUN_detach4mem', # start files with name
+        "NAME":'MBReward_embedding', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":5, # what to scale prior by
+        "PRIOR_SCALE":1, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":500, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
@@ -377,7 +383,7 @@ if __name__ == '__main__':
         "NUM_EVAL_EPISODES":1, # num examples to average in eval
         "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         #"CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
-        "CHECKPOINT_EVERY_STEPS":100000, # how often to write pkl of model and npz of data buffer
+        "CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
         "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
@@ -391,12 +397,12 @@ if __name__ == '__main__':
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":64, # Batch size to use for learning
         "GAMMA":.99, # Gamma weight in Q update
-        "PLOT_EVERY_EPISODES": 50,
+        "PLOT_EVERY_EPISODES": 5,
         "CLIP_GRAD":5, # Gradient clipping setting
-        "SEED":121,
+        "SEED":11,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
-        "RESHAPE_SIZE":10*10*4,
+        "RESHAPE_SIZE":10*10*8,
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
         "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
@@ -515,16 +521,19 @@ if __name__ == '__main__':
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=1, dueling=info['DUELING']).to(info['DEVICE'])
+                                      num_channels=1, dueling=info['DUELING'],
+                                      num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
     target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=1, dueling=info['DUELING']).to(info['DEVICE'])
+                                      num_channels=1, dueling=info['DUELING'],
+                                      num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
     if info['PRIOR']:
         prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                 n_actions=env.num_actions,
                                 reshape_size=info['RESHAPE_SIZE'],
-                                num_channels=1, dueling=info['DUELING']).to(info['DEVICE'])
+                                num_channels=1, dueling=info['DUELING'],
+                                num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
 
         print("using randomized prior")
         policy_net = NetWithPrior(policy_net, prior_net, info['PRIOR_SCALE'])
