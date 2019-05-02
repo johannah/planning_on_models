@@ -33,19 +33,26 @@ class CoreNetEmbedding(nn.Module):
         super(CoreNetEmbedding, self).__init__()
         self.num_clusters=num_clusters
         eo = 64
-        self.embedding = nn.Embedding(num_clusters, eo)
+        self.num_channels = num_channels
+        self.embeddings = nn.ModuleList()
+        for e in range(self.num_channels):
+            self.embeddings.append(nn.Embedding(num_clusters, eo))
         self.reshape_size = reshape_size
         # params from ddqn appendix
-        self.conv1 = nn.Conv2d(eo, 32, 1, 1)
-        self.conv2 = nn.Conv2d(32, 16, 1, 1)
-        self.conv3 = nn.Conv2d(16, 8, 1, 1)
+        self.conv1 = nn.Conv2d(eo*self.num_channels, eo*2, 1, 1)
+        self.conv2 = nn.Conv2d(eo*2, eo*1, 1, 1)
+        self.conv3 = nn.Conv2d(eo, 16, 1, 1)
         self.conv1.apply(weights_init)
         self.conv2.apply(weights_init)
 
     def forward(self, x):
         # expects to have no channels
-        xo = self.embedding(x).permute(0,3,1,2)
-        # coming out is bs, 10, 10, 64
+        for e in range(self.num_channels):
+            if not e:
+                xo = self.embeddings[e](x[:,e]).permute(0,3,1,2)
+            else:
+                xo = torch.cat((xo,self.embeddings[e](x[:,e]).permute(0,3,1,2)), dim=1)
+        # bs, 16, 10, 10
         xo = F.relu(self.conv1(xo))
         xo = F.relu(self.conv2(xo))
         xo = F.relu(self.conv3(xo))

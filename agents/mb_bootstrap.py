@@ -104,8 +104,8 @@ def pt_latent_learn(latent_states, actions, rewards, latent_next_states, termina
     #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
     #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
     # dont normalize because we are using embedding
-    latent_states = torch.LongTensor(latent_states[:,-1]).to(info['DEVICE'])
-    latent_next_states = torch.LongTensor(latent_next_states[:,-1]).to(info['DEVICE'])
+    latent_states = torch.LongTensor(latent_states).to(info['DEVICE'])
+    latent_next_states = torch.LongTensor(latent_next_states).to(info['DEVICE'])
     rewards = torch.Tensor(rewards).to(info['DEVICE'])
     actions = torch.LongTensor(actions).to(info['DEVICE'])
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
@@ -193,9 +193,9 @@ def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
+        #avg_eval_reward = evaluate(step_number)
+        #perf['eval_rewards'].append(avg_eval_reward)
+        #perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -206,6 +206,7 @@ def train_sim(step_number, last_save):
             # use real state
             state = env.reset()
             latent_state, x_d = vqenv.get_state_representation(state[None])
+            latent_hist_state = torch.stack((latent_state, latent_state, latent_state, latent_state), dim=1)
             start_steps = step_number
             st = time.time()
             episode_reward_sum = 0
@@ -218,7 +219,7 @@ def train_sim(step_number, last_save):
                 #if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
                 #    action = random_state.randint(0, env.num_actions)
                 #else:
-                action = pt_get_latent_action(latent_state=latent_state, active_head=active_head)
+                action = pt_get_latent_action(latent_state=latent_hist_state, active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
                 next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
                 # Store transition in the replay memory
@@ -231,7 +232,8 @@ def train_sim(step_number, last_save):
                                              frame=next_latent_state[0].cpu().numpy(),
                                              reward=np.sign(reward),
                                              terminal=life_lost)
-                latent_state = next_latent_state
+                # dump oldest state
+                latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
 
                 step_number += 1
                 epoch_frame += 1
@@ -297,6 +299,7 @@ def evaluate(step_number):
     for i in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
         latent_state, x_d = vqenv.get_state_representation(state[None])
+        latent_hist_state = torch.stack((latent_state, latent_state, latent_state, latent_state), dim=1)
 
         episode_reward_sum = 0
         terminal = False
@@ -306,18 +309,19 @@ def evaluate(step_number):
         results_for_eval = []
         latents = []
         x_ds = []
+        latents.append(latent_state.cpu().numpy())
         while not terminal:
             eps = random_state.rand()
             if eps < info['EPS_EVAL']:
                action = random_state.randint(0, env.num_actions)
                print("random action eval", action)
             else:
-               action = pt_get_latent_action(latent_state, active_head=None)
-            latents.append(latent_state.cpu().numpy())
+               action = pt_get_latent_action(latent_hist_state, active_head=None)
             next_state, reward, life_lost, terminal = env.step(action)
             next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
+            latents.append(next_latent_state.cpu().numpy())
             x_ds.append(x_d)
-            latent_state = next_latent_state
+            latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
@@ -327,7 +331,6 @@ def evaluate(step_number):
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
 
-        latents.append(next_latent_state.cpu().numpy())
         # only save best if we've seen this round
         if not i:
             rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
@@ -362,7 +365,7 @@ if __name__ == '__main__':
         "DEVICE":device, #cpu vs gpu set by argument
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
-        "NAME":'MBReward_embedding', # start files with name
+        "NAME":'MBReward_embedding_hist', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -402,7 +405,7 @@ if __name__ == '__main__':
         "SEED":11,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
-        "RESHAPE_SIZE":10*10*8,
+        "RESHAPE_SIZE":10*10*16,
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
         "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
@@ -521,18 +524,18 @@ if __name__ == '__main__':
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=1, dueling=info['DUELING'],
+                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                       num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
     target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
-                                      num_channels=1, dueling=info['DUELING'],
+                                      num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                       num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
     if info['PRIOR']:
         prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                 n_actions=env.num_actions,
                                 reshape_size=info['RESHAPE_SIZE'],
-                                num_channels=1, dueling=info['DUELING'],
+                                num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                 num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
 
         print("using randomized prior")
