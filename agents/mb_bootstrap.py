@@ -193,9 +193,9 @@ def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
-        #avg_eval_reward = evaluate(step_number)
-        #perf['eval_rewards'].append(avg_eval_reward)
-        #perf['eval_steps'].append(step_number)
+        avg_eval_reward = evaluate(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -365,7 +365,7 @@ if __name__ == '__main__':
         "DEVICE":device, #cpu vs gpu set by argument
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
-        "NAME":'MBReward_embedding_hist', # start files with name
+        "NAME":'MBReward_embedding_hist_SEED14', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -402,7 +402,7 @@ if __name__ == '__main__':
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 5,
         "CLIP_GRAD":5, # Gradient clipping setting
-        "SEED":11,
+        "SEED":14,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
         "RESHAPE_SIZE":10*10*16,
