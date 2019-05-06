@@ -365,11 +365,11 @@ if __name__ == '__main__':
         "DEVICE":device, #cpu vs gpu set by argument
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
-        "NAME":'MBReward_embedding_hist_SEED14', # start files with name
+        "NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior2HLR', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":1, # what to scale prior by
+        "PRIOR_SCALE":2, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
@@ -388,9 +388,10 @@ if __name__ == '__main__':
         #"CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
         "CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":200000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
-        "ADAM_LEARNING_RATE":6.25e-5,
+        #"ADAM_LEARNING_RATE":6.25e-5,
+        "ADAM_LEARNING_RATE":1e-3,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
