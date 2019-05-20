@@ -219,7 +219,12 @@ def train_sim(step_number, last_save):
                 #if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
                 #    action = random_state.randint(0, env.num_actions)
                 #else:
-                action = pt_get_latent_action(latent_state=latent_hist_state, active_head=active_head)
+                eps = random_state.rand()
+                if eps < info['EPS_INIT']:
+                    action = random_state.randint(0, env.num_actions)
+                    print("random action eval", action)
+                else:
+                    action = pt_get_latent_action(latent_state=latent_hist_state, active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
                 next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
                 # Store transition in the replay memory
@@ -365,11 +370,11 @@ if __name__ == '__main__':
         "DEVICE":device, #cpu vs gpu set by argument
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
-        "NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior2HLR', # start files with name
+        "NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior1MLReps', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":2, # what to scale prior by
+        "PRIOR_SCALE":1, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
@@ -380,7 +385,7 @@ if __name__ == '__main__':
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
-        "EPS_INIT":0.0,
+        "EPS_INIT":0.01,
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":1, # num examples to average in eval
@@ -391,7 +396,7 @@ if __name__ == '__main__':
         "EVAL_FREQUENCY":200000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
         #"ADAM_LEARNING_RATE":6.25e-5,
-        "ADAM_LEARNING_RATE":1e-3,
+        "ADAM_LEARNING_RATE":1e-4,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
