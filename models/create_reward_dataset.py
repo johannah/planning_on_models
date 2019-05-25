@@ -45,6 +45,8 @@ def make_dataset(all_rewards, all_starts, all_ends, file_names, gamma, kind='tra
     values = []
     episodic_reward = []
 
+    print(len(all_rewards))
+    print(all_rewards)
     for idx in range(len(all_rewards)):
         ffrom = file_names[idx]
         n = np.load(ffrom)
@@ -87,10 +89,13 @@ def make_dataset(all_rewards, all_starts, all_ends, file_names, gamma, kind='tra
 
 if __name__ == '__main__':
     #fpath = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00'
-    fpath = '/usr/local/data/jhansen/planning/model_savedir/DEBUGMB23/'
-    npz_files = sorted(glob(os.path.join(fpath, '*train_buffer.npz')))
+    #fpath = '/usr/local/data/jhansen/planning/model_savedir/DEBUGMB23/'
+    #search = 'train'
+    search = 'test'
+    fpath = '/usr/local/data/jhansen/planning/model_savedir/MBBreakout_init_dataset/'
+    npz_files = sorted(glob(os.path.join(fpath, '*%s_buffer.npz'%search)))
     assert(len(npz_files)>0)
-    gamma = 0.99
+    gamma = 0.95
     file_names = []
     all_rewards = []
     all_starts = []
@@ -110,8 +115,7 @@ if __name__ == '__main__':
         all_ends.extend(eends)
         file_names.extend([f for x in range(len(erewards))])
 
-    used = make_dataset(all_rewards, all_starts, all_ends, file_names, kind='training')
-
+    used = make_dataset(all_rewards, all_starts, all_ends, file_names, gamma, kind=search)
 
 
 

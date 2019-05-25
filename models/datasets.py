@@ -273,15 +273,15 @@ class ForwardLatentDataset(Dataset):
         self.actions = self.data_file['actions']
         if unique_actions==None:
             self.action_space = sorted(list(set(self.actions)))
-            print("found unique actions of", unique_actions)
         else:
             self.action_space = unique_actions
+        print("found unique actions of", self.action_space)
 
         if unique_rewards==None:
-            self.unique_rewards = sorted(list(set(self.rewards)))
-            print("found unique rewards of", self.reward_space)
+            self.reward_space = sorted(list(set(self.rewards)))
         else:
             self.reward_space = unique_rewards
+        print("found unique rewards of", self.reward_space)
         self.percentages_actions = find_component_proportion(self.actions, self.action_space)
         self.percentages_rewards = find_component_proportion(self.rewards, self.reward_space)
 
@@ -333,7 +333,8 @@ class AtariDataset(Dataset):
     def __init__(self,  data_file, number_condition=4, steps_ahead=1,
                         limit=None, batch_size=128,
                         norm_by=255.0,
-                        seed=39, unique_actions=None, unique_rewards=None):
+                        seed=39, unique_actions=None,
+                        unique_rewards=None):
 
         self.random_state = np.random.RandomState(seed)
         self.batch_size = batch_size
@@ -360,7 +361,7 @@ class AtariDataset(Dataset):
             self.action_space = unique_actions
 
         if unique_rewards==None:
-            self.unique_rewards = sorted(list(set(self.rewards)))
+            self.reward_space = sorted(list(set(self.rewards)))
             print("found unique rewards of", self.reward_space)
         else:
             self.reward_space = unique_rewards
@@ -400,18 +401,20 @@ class AtariDataset(Dataset):
             data, episode_index, episode_reward = self.get_episode_by_index(episode_index, diff=True)
             states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = data
             gif_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.gif'%(episode_index, episode_reward, states.shape[0]))
-            if not os.path.exists(gif_name):
-                print('plotting %s'%gif_name)
-                mimsave(gif_name, states[:,-1].astype(np.uint8))
-            #for i in range(1,min(states.shape[0], 300)):
-            #    png_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.png'%(episode_index, episode_reward, i))
-            #    if not os.path.exists(png_name):
-            #        f,ax = plt.subplots(1,2)
-            #        ax[0].set_title("%05d A%d" %(i,actions[i]))
-            #        ax[0].imshow(states[i,-2])
-            #        ax[1].imshow(states[i,-1])
-            #        plt.savefig(png_name)
-            #        plt.close()
+            #if not os.path.exists(gif_name):
+            #    print('plotting %s'%gif_name)
+            #    mimsave(gif_name, states[:,-1].astype(np.uint8))
+            for i in range(1,min(states.shape[0], 300)):
+                png_name = os.path.join(ddir, 'EI%05d_R%02d_N%05d.png'%(episode_index, episode_reward, i))
+                if not os.path.exists(png_name):
+                    f,ax = plt.subplots(1,2)
+                    ax[0].set_title("%05d A%d" %(i,actions[i]))
+                    ax[0].imshow(states[i,-2])
+                    ax[1].imshow(states[i,-1])
+                    plt.savefig(png_name)
+                    plt.close()
+
+
 
     def get_episode_by_index(self, episode_index, limit=0, diff=False):
         relative_indexes = np.arange(self.starts[episode_index], self.ends[episode_index], dtype=np.int)

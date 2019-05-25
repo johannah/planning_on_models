@@ -193,9 +193,10 @@ def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
+        avg_eval_reward = 0
         #avg_eval_reward = evaluate(step_number)
-        #perf['eval_rewards'].append(avg_eval_reward)
-        #perf['eval_steps'].append(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -215,10 +216,6 @@ def train_sim(step_number, last_save):
             ptloss_list = []
             print("Gathering data with head=%s"%active_head)
             while not terminal:
-               # eps
-                #if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
-                #    action = random_state.randint(0, env.num_actions)
-                #else:
                 eps = random_state.rand()
                 if eps < info['EPS_INIT']:
                     action = random_state.randint(0, env.num_actions)
@@ -244,23 +241,16 @@ def train_sim(step_number, last_save):
                 epoch_frame += 1
                 episode_reward_sum += reward
                 state = next_state
-                #if step_number == info['MIN_STEPS_TO_LEARN']:
-                #    if info['VQ_MODEL_LOADPATH'] == '':
-                #        # need to write npz file and train vqvae on it
-                #        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
-                #        replay_memory.save_buffer(buff_filename)
-                #        # now the vq is trained -
-                #        vqenv.train_vq_model(buff_filename+'.npz')
-
-                if step_number > info['MIN_STEPS_TO_LEARN']:
-                    if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                        _latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks = latent_replay_memory.get_minibatch(info['BATCH_SIZE'])
-                        ptloss = pt_latent_learn(_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
-                        ptloss_list.append(ptloss)
-                    if step_number % info['TARGET_UPDATE'] == 0:
-                        print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                        print('updating target network at %s'%step_number)
-                        target_net.load_state_dict(policy_net.state_dict())
+ #               if step_number > info['MIN_STEPS_TO_LEARN']:
+#
+ #                   if step_number % info['LEARN_EVERY_STEPS'] == 0:
+ #                       _latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks = latent_replay_memory.get_minibatch(info['BATCH_SIZE'])
+ #                       ptloss = pt_latent_learn(_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
+ #                       ptloss_list.append(ptloss)
+ #                   if step_number % info['TARGET_UPDATE'] == 0:
+ #                       print("++++++++++++++++++++++++++++++++++++++++++++++++")
+ #                       print('updating target network at %s'%step_number)
+ #                       target_net.load_state_dict(policy_net.state_dict())
             print('END EPISODE', epoch_num, step_number, episode_reward_sum)
             et = time.time()
             ep_time = et-st
@@ -275,22 +265,27 @@ def train_sim(step_number, last_save):
             perf['episode_loss'].append(lmean)
             perf['episode_reward'].append(episode_reward_sum)
             perf['head_rewards'][active_head].append(episode_reward_sum)
+            for h, ll in enumerate(perf['head_rewards']):
+                print('head', h, np.mean(ll))
             perf['episode_times'].append(ep_time)
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
 
-            if not epoch_num or (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
-                if not epoch_num or step_number > info['MIN_STEPS_TO_LEARN']:
-                    last_save = handle_checkpoint(step_number)
+            if step_number > info['MIN_STEPS_TO_LEARN']:
+                last_save = handle_checkpoint(step_number)
+                embed()
+           # if not epoch_num or (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
+           #     if not epoch_num or step_number > info['MIN_STEPS_TO_LEARN']:
+           #         last_save = handle_checkpoint(step_number)
 
-            if not epoch_num or not epoch_num%info['PLOT_EVERY_EPISODES']:
-                matplotlib_plot_all(perf)
-                # TODO plot title
-                print('avg reward', perf['avg_rewards'][-1])
-                print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
-                with open('rewards.txt', 'a') as reward_file:
-                    print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
-            epoch_num += 1
+           # if not epoch_num or not epoch_num%info['PLOT_EVERY_EPISODES']:
+           #     matplotlib_plot_all(perf)
+           #     # TODO plot title
+           #     print('avg reward', perf['avg_rewards'][-1])
+           #     print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
+           #     with open('rewards.txt', 'a') as reward_file:
+           #         print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
+           # epoch_num += 1
 
 def evaluate(step_number):
     print("""
@@ -337,17 +332,17 @@ def evaluate(step_number):
             state = next_state
 
         # only save best if we've seen this round
-        #if not i:
-            #rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
-            #rec = (255*rec_est[:,0]).astype(np.uint8)
-            #generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval, resize=False)
-            #generate_gif(model_base_filedir, step_number, np.array(latents)[:,0], episode_reward_sum, name='test_latents', results=results_for_eval, resize=True)
-        #    generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval, resize=False)
-        #eval_rewards.append(episode_reward_sum)
-    #print("Evaluation score:\n", eval_rewards)
-    #efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
-    #with open(efile, 'a') as eval_reward_file:
-    #    print(step_number, np.mean(eval_rewards), file=eval_reward_file)
+        if not i:
+            rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
+            rec = (255*rec_est[:,0]).astype(np.uint8)
+            generate_gif(model_base_filedir, step_number, np.array(latents)[:,0], episode_reward_sum, name='test_latents', results=results_for_eval, resize=False)
+            generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval, resize=False)
+            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval, resize=False)
+        eval_rewards.append(episode_reward_sum)
+    print("Evaluation score:\n", eval_rewards)
+    efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
+    with open(efile, 'a') as eval_reward_file:
+        print(step_number, np.mean(eval_rewards), file=eval_reward_file)
     return np.mean(eval_rewards)
 
 if __name__ == '__main__':
@@ -368,37 +363,35 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
-        #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
-        #"NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior1MLReps', # start files with name
-        "NAME":"MBBreakout",
+        "NAME":'MBBreakout', # start files with name
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":1, # what to scale prior by
+        "PRIOR_SCALE":2, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":1000, # min steps needed to start training neural nets
+        #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":10000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
-        "EPS_INIT":0.01,
+        #"EPS_INIT":0.01,
+        "EPS_INIT":0.4,
         "EPS_FINAL":0.01, # 0.01 in osband
         "EPS_EVAL":0.0, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":1, # num examples to average in eval
-        #"BUFFER_SIZE":int(1e6), # Buffer size for experience replay
-        "BUFFER_SIZE":int(500000), # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
-        #"CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
+        "BUFFER_SIZE":int(1e6), # Buffer size for experience replay
+        #"CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
+        "CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
         "EVAL_FREQUENCY":200000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
-        "ADAM_LEARNING_RATE":6.25e-5,
-        #"ADAM_LEARNING_RATE":1e-4,
+        #"ADAM_LEARNING_RATE":6.25e-5,
+        "ADAM_LEARNING_RATE":1e-4,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
@@ -410,7 +403,7 @@ if __name__ == '__main__':
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 5,
         "CLIP_GRAD":5, # Gradient clipping setting
-        "SEED":14,
+        "SEED":129,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
         "RESHAPE_SIZE":10*10*16,
@@ -420,13 +413,12 @@ if __name__ == '__main__':
         "FRAME_SKIP":4, # deterministic frame skips to match deepmind
         "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
-        "REWARD_SPACE":[0,1], #[-1,0,1]
+        "REWARD_SPACE":[-1,0,1], #[-1,0,1]
          ##################### for vqvae model
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBR01/MBvqbt01/MBvqbt_0033756480ex.pt',
         # worked on poorly trained model below
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBvqbt_reward_0041007872ex.pt',
-        #"VQ_MODEL_LOADPATH":'../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0035503692ex.pt',
-        "VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout00/BreakoutVQ02/BreakoutVQ_0049509504ex.pt",
+        "VQ_MODEL_LOADPATH":'../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0035503692ex.pt',
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,

@@ -12,7 +12,7 @@ from IPython import embed
 class VQVAErl(nn.Module):
     def __init__(self, num_clusters=512, encoder_output_size=32,
                  in_channels_size=1, num_output_mixtures=30,
-                 n_actions=0):
+                 n_actions=0, int_reward=0):
         super(VQVAErl, self).__init__()
         # the encoder_output_size is the size of the vector that is compressed
         # with vector quantization. if it is too large, vector quantization
@@ -101,6 +101,27 @@ class VQVAErl(nn.Module):
                                                         out_channels=self.n_actions,
                                                         kernel_size=vq_space_dim, padding=0),
                                  )
+
+        self.int_reward = int_reward
+        if self.int_reward > 0:
+            # reward should be between 0 and int_reward
+            print("predicting an int reward", self.int_reward)
+            self.int_reward_conv = nn.Sequential(
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                       out_channels=encoder_output_size,
+                                       kernel_size=3, padding=1),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                                        out_channels=encoder_output_size,
+                                                        kernel_size=3, padding=1),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(in_channels=encoder_output_size,
+                                                        out_channels=self.int_reward,
+                                                        kernel_size=vq_space_dim, padding=0),
+                                 )
+
+
+
     def decode_clusters(self, latents, N, H, W, C):
         action = -1
         #z_q_x, x_tilde = self.decode_clusters(latents, N, H, W, C)
@@ -112,8 +133,10 @@ class VQVAErl(nn.Module):
         # Move prediction to the z_q_x from z_e_x so that I can decode forward
         if self.n_actions > 0:
             action = F.log_softmax(self.action_conv(z_q_x)[:,:,0,0], dim=1)
+        if self.int_reward > 0:
+            reward = F.log_softmax(self.int_reward_conv(z_q_x)[:,:,0,0], dim=1)
         # can predict value or reward
-        return x_tilde, z_q_x, action
+        return x_tilde, z_q_x, action, reward
         #return z_q_x, x_tilde
 
     def forward(self, x):
@@ -139,8 +162,8 @@ class VQVAErl(nn.Module):
         # latents is a array of integers
         latents = dists.min(-1)[1]
         # look up cluster centers
-        x_tilde, z_q_x, action = self.decode_clusters(latents, N, H, W, C)
-        return x_tilde, z_e_x, z_q_x, latents, action
+        x_tilde, z_q_x, action, reward = self.decode_clusters(latents, N, H, W, C)
+        return x_tilde, z_e_x, z_q_x, latents, action, reward
 
 
 class VQVAE(nn.Module):

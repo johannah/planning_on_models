@@ -66,17 +66,9 @@ def write_info_file(info, model_base_filepath, cnt):
     info_f.close()
 
 def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results=[], resize=True):
-    """
-    from @fg91
-        Args:
-            step_number: Integer, determining the number of the current frame
-            frames_for_gif: A sequence of (210, 160, 3) frames of an Atari game in RGB
-            reward: Integer, Total reward of the episode that es ouputted as a gif
-            path: String, path where gif is saved
-    """
     if resize:
         for idx, frame_idx in enumerate(frames_for_gif):
-            frames_for_gif[idx] = cv2.resize(frame_idx, (320, 220)).astype(np.uint8)
+            frames_for_gif[idx] = cv2.resize(frame_idx, (160, 110)).astype(np.uint8)
     else:
         frames_for_gif = np.array(frames_for_gif).astype(np.uint8)
 
