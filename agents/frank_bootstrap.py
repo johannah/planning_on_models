@@ -267,7 +267,7 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/freeway.bin', # gym prefix
+        "GAME":'roms/freeway.bin', # prefix
         "MIN_SCORE_GIF":0, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
         "NAME":'', # start files with name

@@ -43,44 +43,51 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
     values = []
     episodic_reward = []
     reward_options = []
+
     while num < num_examples:
         if not len(reward_options):
            reward_options = list(set(all_rewards))
            random_state.shuffle(reward_options)
+        print(reward_options)
         r = reward_options.pop()
         reward_indexes = np.where(np.array(all_rewards) == r)[0]
-        idx = random_state.choice(reward_indexes)
-        if idx not in used:
-            used.append(idx)
-            ffrom = file_names[idx]
-            n = np.load(ffrom)
-            print(r, 'getting', all_ends[idx]-all_starts[idx])
-            fr = n['frames'][all_starts[idx]:all_ends[idx]+1]
-            if not num:
-                frames = fr
-            else:
-                frames = np.vstack((frames, fr))
-            terminals.extend(n['terminal_flags'][all_starts[idx]:all_ends[idx]+1])
-            actions.extend(n['actions'][all_starts[idx]:all_ends[idx]+1])
-            rs = n['rewards'][all_starts[idx]:all_ends[idx]+1]
-            del n
+        random_state.shuffle(reward_indexes)
 
-            #mimsave('I%05d_r%s.gif'%(idx,r), fr)
-            rewards.extend(rs)
-            vals = []
-            # discounted future rewards
-            for n in range(len(rs)):
-                rs_n = rs[n:]
-                power = np.arange(len(rs_n))
-                gammas = np.ones(len(rs_n), dtype=np.float)*gamma
-                gammas = gammas ** power
-                cum_rs_n = np.sum(rs_n * gammas)
-                vals.append(cum_rs_n)
-            values.extend(vals)
-            episodic_reward.append(np.sum(rs))
-            print("adding sum", np.sum(rs), len(episodic_reward))
-            num+=len(rs)
-            #print(r,num,episodic_reward[-1])
+        print('total dataset', len(rewards))
+        for idx in reward_indexes:
+            if idx not in used:
+                print('using idx', idx, r)
+                used.append(idx)
+                ffrom = file_names[idx]
+                n = np.load(ffrom)
+                print(r, 'getting', all_ends[idx]-all_starts[idx])
+                fr = n['frames'][all_starts[idx]:all_ends[idx]+1]
+                if not num:
+                    frames = fr
+                else:
+                    frames = np.vstack((frames, fr))
+                terminals.extend(n['terminal_flags'][all_starts[idx]:all_ends[idx]+1])
+                actions.extend(n['actions'][all_starts[idx]:all_ends[idx]+1])
+                rs = n['rewards'][all_starts[idx]:all_ends[idx]+1]
+                del n
+
+                #mimsave('I%05d_r%s.gif'%(idx,r), fr)
+                rewards.extend(rs)
+                vals = []
+                # discounted future rewards
+                for n in range(len(rs)):
+                    rs_n = rs[n:]
+                    power = np.arange(len(rs_n))
+                    gammas = np.ones(len(rs_n), dtype=np.float)*gamma
+                    gammas = gammas ** power
+                    cum_rs_n = np.sum(rs_n * gammas)
+                    vals.append(cum_rs_n)
+                values.extend(vals)
+                episodic_reward.append(np.sum(rs))
+                print("adding sum", np.sum(rs), len(episodic_reward))
+                num+=len(rs)
+                break
+                #print(r,num,episodic_reward[-1])
 
     print(len(values), len(rewards))
     fname = os.path.join(os.path.split(ffrom)[0], '%s_set.npz'%kind)
@@ -95,8 +102,10 @@ def make_rewards_set(all_rewards, all_starts, all_ends, file_names, num_examples
 
 if __name__ == '__main__':
     #fpath = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00'
-    fpath = 'usr/local/data/jhansen/planning/model_savedir/DEBUGMB18/'
-    npz_files = sorted(glob(os.path.join(fpath, '*train_buffer.npz')))
+    fpath = '/usr/local/data/jhansen/planning/model_savedir/MBBreakout_init_dataset/'
+    #npz_files = sorted(glob(os.path.join(fpath, '*train_buffer.npz')))
+    npz_files = sorted(glob(os.path.join(fpath, 'MBBreakout_0001001779q_train_buffer.npz')))
+    assert len(npz_files)
     gamma = 0.99
     file_names = []
     all_rewards = []
@@ -117,7 +126,7 @@ if __name__ == '__main__':
         all_ends.extend(eends)
         file_names.extend([f for x in range(len(erewards))])
 
-    n_training = 1000000
+    n_training = 100000
     n_val = n_training*.1
     n_test = n_training*.05
     seed = 1903

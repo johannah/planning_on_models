@@ -90,10 +90,13 @@ def make_dataset(all_rewards, all_starts, all_ends, file_names, gamma, kind='tra
 if __name__ == '__main__':
     #fpath = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00'
     #fpath = '/usr/local/data/jhansen/planning/model_savedir/DEBUGMB23/'
-    #search = 'train'
-    search = 'test'
+    search = 'train'
+    #search = 'test'
     fpath = '/usr/local/data/jhansen/planning/model_savedir/MBBreakout_init_dataset/'
-    npz_files = sorted(glob(os.path.join(fpath, '*%s_buffer.npz'%search)))
+    #npz_files = sorted(glob(os.path.join(fpath, '*%s_buffer.npz'%search)))
+    fsearch = os.path.join(fpath, 'MBBreakout_0001001779q_train_buffer.npz')
+    npz_files = sorted(glob(fsearch))
+    embed()
     assert(len(npz_files)>0)
     gamma = 0.95
     file_names = []

@@ -3,6 +3,7 @@ import torch
 import os
 import sys
 from imageio import mimsave
+import matplotlib.pyplot as plt
 #from skimage.transform import resize
 import cv2
 
@@ -86,5 +87,49 @@ def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results
         for ex in results:
             ff.write(ex+'\n')
         ff.close()
+
+def rolling_average(a, n=5) :
+    if n == 0:
+        return a
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+
+def plot_dict_losses(plot_dict, name='loss_example.png', rolling_length=4, plot_title=''):
+    f,ax=plt.subplots(1,1,figsize=(6,6))
+    for n in plot_dict.keys():
+        print('plotting', n)
+        ax.plot(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), lw=1)
+        ax.scatter(rolling_average(plot_dict[n]['index']), rolling_average(plot_dict[n]['val']), label=n, s=3)
+    ax.legend()
+    if plot_title != '':
+        plt.title(plot_title)
+    plt.savefig(name)
+    plt.close()
+
+def matplotlib_plot_all(p, model_base_filedir):
+    try:
+        epoch_num = len(p['steps'])
+        epochs = np.arange(epoch_num)
+        steps = p['steps']
+        plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_step']}}, name=os.path.join(model_base_filedir, 'episode_step.png'), rolling_length=0)
+        plot_dict_losses({'episode steps':{'index':epochs,'val':p['episode_relative_times']}}, name=os.path.join(model_base_filedir, 'episode_relative_times.png'), rolling_length=10)
+        plot_dict_losses({'episode head':{'index':epochs, 'val':p['episode_head']}}, name=os.path.join(model_base_filedir, 'episode_head.png'), rolling_length=0)
+        plot_dict_losses({'episode loss':{'index':epochs, 'val':p['episode_loss']}}, name=os.path.join(model_base_filedir, 'episode_loss.png'))
+       #plot_dict_losses({'steps eps':{'index':steps, 'val':p['eps_list']}}, name=os.path.join(model_base_filedir, 'steps_mean_eps.png'), rolling_length=0)
+        plot_dict_losses({'steps reward':{'index':steps,'val':p['episode_reward']}},  name=os.path.join(model_base_filedir, 'steps_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode reward':{'index':epochs, 'val':p['episode_reward']}}, name=os.path.join(model_base_filedir, 'episode_reward.png'), rolling_length=0)
+        plot_dict_losses({'episode times':{'index':epochs,'val':p['episode_times']}}, name=os.path.join(model_base_filedir, 'episode_times.png'), rolling_length=5)
+        plot_dict_losses({'steps avg reward':{'index':steps,'val':p['avg_rewards']}}, name=os.path.join(model_base_filedir, 'steps_avg_reward.png'), rolling_length=0)
+        plot_dict_losses({'eval rewards':{'index':p['eval_steps'], 'val':p['eval_rewards']}}, name=os.path.join(model_base_filedir, 'eval_rewards_steps.png'), rolling_length=0)
+        for i in range(len(p['head_rewards'])):
+            prange = range(len(p['head_rewards'][i]))
+            pvals = p['head_rewards'][i]
+            pfname = os.path.join(model_base_filedir, 'head_%02d_rewards.png'%i)
+            plot_dict_losses({'head %s rewards'%i:{'index':prange, 'val':pvals}}, name=pfname, rolling_length=0)
+    except Exception as e:
+        print('fail matplotlib', e)
+        from IPython import embed; embed()
+
 
 

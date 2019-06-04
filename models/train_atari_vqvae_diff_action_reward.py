@@ -233,7 +233,7 @@ def init_train():
                                    steps_ahead=1,
                                    batch_size=info['VQ_BATCH_SIZE'],
                                    norm_by=info['NORM_BY'])
-    valid_data_loader.plot_dataset()
+    #valid_data_loader.plot_dataset()
     info['num_actions'] = train_data_loader.n_actions
     info['size_training_set'] = train_data_loader.num_examples
     info['hsize'] = train_data_loader.data_h

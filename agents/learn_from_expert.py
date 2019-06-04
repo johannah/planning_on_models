@@ -103,48 +103,48 @@ def pt_latent_learn(latent_states, actions, rewards, latent_next_states, termina
     opt.step()
     return np.mean(losses)
 
-def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
-    states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
-    next_states = torch.Tensor(next_states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
-    rewards = torch.Tensor(rewards).to(info['DEVICE'])
-    actions = torch.LongTensor(actions).to(info['DEVICE'])
-    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
-    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
-    # min history to learn is 200,000 frames in dqn - 50000 steps
-    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
-    opt.zero_grad()
-    q_policy_vals = policy_net(states, None)
-    next_q_target_vals = target_net(next_states, None)
-    next_q_policy_vals = policy_net(next_states, None)
-    cnt_losses = []
-    for k in range(info['N_ENSEMBLE']):
-        #TODO finish masking
-        total_used = torch.sum(masks[:,k])
-        if total_used > 0.0:
-            next_q_vals = next_q_target_vals[k].data
-            if info['DOUBLE_DQN']:
-                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
-                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
-            else:
-                next_qs = next_q_vals.max(1)[0] # max returns a pair
-
-            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
-            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
-            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
-            full_loss = masks[:,k]*l1loss
-            loss = torch.sum(full_loss/total_used)
-            cnt_losses.append(loss)
-            losses[k] = loss.cpu().detach().item()
-
-    loss = sum(cnt_losses)/info['N_ENSEMBLE']
-    loss.backward()
-    for param in policy_net.core_net.parameters():
-        if param.grad is not None:
-            # divide grads in core
-            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
-    nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
-    opt.step()
-    return np.mean(losses)
+#def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
+#    states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
+#    next_states = torch.Tensor(next_states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
+#    rewards = torch.Tensor(rewards).to(info['DEVICE'])
+#    actions = torch.LongTensor(actions).to(info['DEVICE'])
+#    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
+#    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
+#    # min history to learn is 200,000 frames in dqn - 50000 steps
+#    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
+#    opt.zero_grad()
+#    q_policy_vals = policy_net(states, None)
+#    next_q_target_vals = target_net(next_states, None)
+#    next_q_policy_vals = policy_net(next_states, None)
+#    cnt_losses = []
+#    for k in range(info['N_ENSEMBLE']):
+#        #TODO finish masking
+#        total_used = torch.sum(masks[:,k])
+#        if total_used > 0.0:
+#            next_q_vals = next_q_target_vals[k].data
+#            if info['DOUBLE_DQN']:
+#                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
+#                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
+#            else:
+#                next_qs = next_q_vals.max(1)[0] # max returns a pair
+#
+#            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
+#            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
+#            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
+#            full_loss = masks[:,k]*l1loss
+#            loss = torch.sum(full_loss/total_used)
+#            cnt_losses.append(loss)
+#            losses[k] = loss.cpu().detach().item()
+#
+#    loss = sum(cnt_losses)/info['N_ENSEMBLE']
+#    loss.backward()
+#    for param in policy_net.core_net.parameters():
+#        if param.grad is not None:
+#            # divide grads in core
+#            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+#    nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
+#    opt.step()
+#    return np.mean(losses)
 #
 def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
@@ -241,7 +241,7 @@ def train_sim(step_number, last_save):
                     last_save = handle_checkpoint(step_number)
 
             if not epoch_num or not epoch_num%info['PLOT_EVERY_EPISODES']:
-                matplotlib_plot_all(perf, model_base_filedir)
+                matplotlib_plot_all(perf)
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
@@ -294,11 +294,11 @@ def evaluate(step_number):
             state = next_state
 
         # only save best if we've seen this round
-        if not i:
-            generate_gif(model_base_filedir, step_number, np.array(latents)[:,0], episode_reward_sum, name='test_latents', results=results_for_eval, resize=True)
+        #if not i:
             #rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
             #rec = (255*rec_est[:,0]).astype(np.uint8)
             #generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval, resize=False)
+            #generate_gif(model_base_filedir, step_number, np.array(latents)[:,0], episode_reward_sum, name='test_latents', results=results_for_eval, resize=True)
         #    generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval, resize=False)
         #eval_rewards.append(episode_reward_sum)
     #print("Evaluation score:\n", eval_rewards)
@@ -328,18 +328,18 @@ if __name__ == '__main__':
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
         #"NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior1MLReps', # start files with name
-        "NAME":"MBBreakout_bettervq",
+        "NAME":"MBBreakout",
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":10, # what to scale prior by
+        "PRIOR_SCALE":1, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":50000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":1000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
@@ -384,7 +384,7 @@ if __name__ == '__main__':
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBvqbt_reward_0041007872ex.pt',
         #"VQ_MODEL_LOADPATH":'../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0035503692ex.pt',
         #"VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout00/BreakoutVQ02/BreakoutVQ_0049509504ex.pt",
-        "VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ02/BreakoutVQ_0103019776ex.pt",
+        "VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ01//BreakoutVQ_0041257920ex.pt",
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,
