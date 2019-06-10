@@ -5,10 +5,12 @@ import time
 # https://github.com/fg91/Deep-Q-Learning/blob/master/DQN.ipynb
 class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
-    def __init__(self, size=1000000, frame_height=84, frame_width=84,
-                 agent_history_length=4, batch_size=32, num_heads=1, bernoulli_probability=1.0):
+    def __init__(self, action_space, size=1000000, frame_height=84, frame_width=84,
+                 agent_history_length=4, batch_size=32, num_heads=1,
+                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0):
         """
         Args:
+            action_space: number of actions allowed
             size: Integer, Number of stored transitions
             frame_height: Integer, Height of a frame of an Atari game
             frame_width: Integer, Width of a frame of an Atari game
@@ -16,6 +18,7 @@ class ReplayMemory:
             batch_size: Integer, Number if transitions returned in a minibatch
             num_heads: integer number of heads needed in mask
             bernoulli_probability: bernoulli probability that an experience will go to a particular head
+            latent_frame_height/width: size of latent representations, if 0, then no latents are stored
         """
         self.bernoulli_probability = bernoulli_probability
         assert(self.bernoulli_probability > 0)
@@ -29,7 +32,11 @@ class ReplayMemory:
         # Pre-allocate memory
         self.actions = np.empty(self.size, dtype=np.int32)
         self.rewards = np.empty(self.size, dtype=np.float32)
+        self.values = np.empty((self.size, self.num_heads, action_space), dtype=np.float32)
         self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
+        self.latent_frame_height = latent_frame_height
+        self.latent_frame_width = latent_frame_width
+        self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.uint8)
         self.terminal_flags = np.empty(self.size, dtype=np.bool)
         self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
 
@@ -38,6 +45,11 @@ class ReplayMemory:
                                 self.frame_height, self.frame_width), dtype=np.uint8)
         self.new_states = np.empty((batch_size, self.agent_history_length,
                                     self.frame_height, self.frame_width), dtype=np.uint8)
+        self.latent_states = np.empty((batch_size, self.agent_history_length,
+                                self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+        self.latent_new_states = np.empty((batch_size, self.agent_history_length,
+                                    self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+
         self.indices = np.empty(batch_size, dtype=np.int32)
         self.random_state = np.random.RandomState(393)
         if self.num_heads == 1:
@@ -50,9 +62,11 @@ class ReplayMemory:
                  frames=self.frames, actions=self.actions, rewards=self.rewards,
                  terminal_flags=self.terminal_flags, masks=self.masks,
                  count=self.count, current=self.current,
+                 values=self.values,
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
+                 latent_frames=self.latent_frames
                  )
         print("finished saving buffer", time.time()-st)
 
@@ -65,6 +79,10 @@ class ReplayMemory:
         self.rewards = npfile['rewards']
         self.terminal_flags = npfile['terminal_flags']
         self.masks = npfile['masks']
+        try:
+            self.values=npfile['values']
+        except:
+            print("NO VALUES AVAILABLE IN THIS NPZFILE")
         self.count = npfile['count']
         self.current = npfile['current']
         self.agent_history_length = npfile['agent_history_length']
@@ -72,12 +90,13 @@ class ReplayMemory:
         self.frame_width = npfile['frame_width']
         self.num_heads = npfile['num_heads']
         self.bernoulli_probability = npfile['bernoulli_probability']
+        self.latent_frames = npfile['latent_frames']
         if self.num_heads == 1:
             assert(self.bernoulli_probability == 1.0)
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 
-    def add_experience(self, action, frame, reward, terminal):
+    def add_experience(self, action, frame, reward, value, terminal, latent_frame=''):
         """
         Args:
             action: An integer between 0 and env.action_space.n - 1
@@ -90,7 +109,10 @@ class ReplayMemory:
             raise ValueError('Dimension of frame is wrong!')
         self.actions[self.current] = action
         self.frames[self.current, ...] = frame
+        if type(latent_frame) is not str:
+            self.latent_frames[self.current, ...] = latent_frame
         self.rewards[self.current] = reward
+        self.values[self.current] = value
         self.terminal_flags[self.current] = terminal
         mask = self.random_state.binomial(1, self.bernoulli_probability, self.num_heads)
         self.masks[self.current] = mask
@@ -103,6 +125,13 @@ class ReplayMemory:
         if index < self.agent_history_length - 1:
             raise ValueError("Index must be min 3")
         return self.frames[index-self.agent_history_length+1:index+1, ...]
+
+    def _get_latent_state(self, index):
+        if self.count is 0:
+            raise ValueError("The replay memory is empty!")
+        if index < self.agent_history_length - 1:
+            raise ValueError("Index must be min 3")
+        return self.latent_frames[index-self.agent_history_length+1:index+1, ...]
 
     def _get_valid_indices(self, batch_size):
         if batch_size != self.indices.shape[0]:
@@ -132,6 +161,12 @@ class ReplayMemory:
             self.new_states = np.empty((batch_size, self.agent_history_length,
                                         self.frame_height, self.frame_width), dtype=np.uint8)
 
+            self.latent_states = np.empty((batch_size, self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.int16)
+            self.latent_new_states = np.empty((batch_size, self.agent_history_length,
+                                        self.frame_height, self.frame_width), dtype=np.int16)
+
+
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
 
@@ -140,6 +175,8 @@ class ReplayMemory:
         for i, idx in enumerate(self.indices):
             self.states[i] = self._get_state(idx - 1)
             self.new_states[i] = self._get_state(idx)
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
+            self.latent_states[i] = self._get_latent_state(idx - 1)
+            self.latent_new_states[i] = self._get_latent_state(idx)
+        return self.states, self.actions[self.indices], self.rewards[self.indices], self.values[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.latent_states, self.latent_new_states
 
 

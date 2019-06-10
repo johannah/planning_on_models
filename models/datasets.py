@@ -346,9 +346,7 @@ class ReplayDataset(Dataset):
         assert(self.steps_ahead>=0)
         self.norm_by = float(norm_by)
         self.data_file = np.load(self.data_file_name)
-        # TODO! Rewards should be normalized
         self.rewards = self.data_file['rewards'].astype(np.int16)
-        self.values = self.data_file['values'].astype(np.float32)
         self.terminals = self.data_file['terminals'].astype(np.int16)
         self.actions = self.data_file['actions'].astype(np.int16)
         self.action_space = sorted(list(set(self.actions)))
@@ -367,9 +365,8 @@ class ReplayDataset(Dataset):
         print("found unique rewards of", self.reward_space)
         self.percentages_actions = find_component_proportion(self.actions, self.action_space)
         self.percentages_rewards = find_component_proportion(self.rewards, self.reward_space)
-
         self.frames = self.data_file['frames']
-        #self.num_examples,self.data_h,self.data_w = self.data_file['frames'].shape
+        self.num_examples,self.data_h,self.data_w = self.data_file['frames'].shape
         self.num_examples,self.data_h,self.data_w = self.frames.shape
 
         self.index_array = list(np.arange(self.num_condition, self.num_examples, dtype=np.int))

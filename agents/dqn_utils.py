@@ -69,7 +69,7 @@ def write_info_file(info, model_base_filepath, cnt):
 def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results=[], resize=True):
     if resize:
         for idx, frame_idx in enumerate(frames_for_gif):
-            frames_for_gif[idx] = cv2.resize(frame_idx, (160, 110)).astype(np.uint8)
+            frames_for_gif[idx] = cv2.resize(frame_idx, (110, 160)).astype(np.uint8)
     else:
         frames_for_gif = np.array(frames_for_gif).astype(np.uint8)
 

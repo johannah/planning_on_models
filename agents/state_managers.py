@@ -15,7 +15,7 @@ from datasets import AtariDataset
 from forward_conv import BasicBlock, ForwardResNet
 from ae_utils import sample_from_discretized_mix_logistic
 from train_atari_action_vqvae import reshape_input
-from vqvae import VQVAE, VQVAErl
+from vqvae import VQVAErl
 from create_reward_dataset import find_episodic_rewards, make_dataset
 from train_atari_vqvae_diff_action import train_vqvae
 
@@ -237,7 +237,7 @@ class VQEnv(object):
             for a in args.keys():
                 self.vq_info[a.upper()] = args[a]
 
-        self.vqvae_model = VQVAE(num_clusters=self.vq_info['NUM_K'],
+        self.vqvae_model = VQVAErl(num_clusters=self.vq_info['NUM_K'],
                             encoder_output_size=self.vq_info['NUM_Z'],
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
                             in_channels_size=self.vq_info['NUMBER_CONDITION'],
@@ -365,7 +365,7 @@ class VQEnv(object):
     def decode_vq_from_latents(self, latents):
         latents = latents.long()
         N,H,W = latents.shape
-        C = self.vq_largs.num_z
+        C = self.vq_info['NUM_Z']
         with torch.no_grad():
             x_d, z_q_x, actions, rewards = self.vqvae_model.decode_clusters(latents,N,H,W,C)
         # vqvae_model predicts the action that took this particular latent from t-1
@@ -423,7 +423,8 @@ class VQEnv(object):
         with torch.no_grad():
             pred_next_latent = self.conv_forward_model(tf_state_input)
         pred_next_latent = torch.argmax(pred_next_latent, dim=1)
-        x_d, pred_vq_actions, pred_vq_rewards = self.decode_vq_from_latents(pred_next_latent)
+        #x_d, pred_vq_actions, pred_vq_rewards = self.decode_vq_from_latents(pred_next_latent)
+        x_d, z_q_x, pred_vq_actions, pred_vq_rewards = self.decode_vq_from_latents(pred_next_latent)
         # latent state consists of [latent_t-1, latent_t]
         next_latent_states = torch.cat((latent_states[:,1][:,None], pred_next_latent[:,None].float()), dim=1)
         return next_latent_states, x_d, pred_vq_actions, pred_vq_rewards

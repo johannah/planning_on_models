@@ -15,8 +15,10 @@ import torch.optim as optim
 import datetime
 import time
 from state_managers import VQEnv
-from mb_dqn_model import EnsembleNet, NetWithPrior
-from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint, linearly_decaying_epsilon, plot_dict_losses, matplotlib_plot_all
+from mb_dqn_model import EnsembleNet as mbEnsembleNet
+from mb_dqn_model import NetWithPrior as mbNetWithPrior
+from dqn_model import EnsembleNet, NetWithPrior
+from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint, linearly_decaying_epsilon, matplotlib_plot_all
 from env import Environment
 from replay import ReplayMemory
 import config
@@ -27,35 +29,63 @@ def handle_checkpoint(cnt):
     state = {'info':info,
              'optimizer':opt.state_dict(),
              'cnt':cnt,
-             'policy_net_state_dict':policy_net.state_dict(),
-             'target_net_state_dict':target_net.state_dict(),
+             'policy_net_state_dict':mb_policy_net.state_dict(),
+             'target_net_state_dict':mb_target_net.state_dict(),
              'perf':perf,
             }
     filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
     save_checkpoint(state, filename)
     # npz will be added
     buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%cnt)
-    latent_buff_filename = os.path.abspath(model_base_filepath + "_%010dq_latent_train_buffer"%cnt)
     replay_memory.save_buffer(buff_filename)
-    latent_replay_memory.save_buffer(latent_buff_filename)
     print("finished checkpoint", time.time()-st)
     return cnt
 
-def pt_get_latent_action(latent_state, active_head=None):
-    # comes in as vq
-    #vals = policy_net(latent_state[None].float().to(info['DEVICE'])/float(info['NUM_K']), active_head)
-    # goes in with channels = 0
-    vals = policy_net(latent_state.long().to(info['DEVICE']), active_head)
+
+def full_state_norm_function(state):
+    return  torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
+
+def mb_state_norm_function(latent_state):
+    return latent_state.long().to(info['DEVICE'])
+
+def get_action(policy_net, state, active_head=None):
+    # run on all heads to get values
+    policy_net.eval()
+    with torch.no_grad():
+        vals = policy_net(state, None)
     if active_head is not None:
-        action = torch.argmax(vals, dim=1).item()
-        return action
+        action = torch.argmax(vals[active_head]).item()
     else:
         # vote
         acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
-        print(acts)
         data = Counter(acts)
         action = data.most_common(1)[0][0]
-        return action
+    return action, torch.stack(vals)[:,0].detach().cpu().numpy()
+
+def kl_latent_learn():
+    _states, _actions, _rewards, _values, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
+    states = full_state_norm_function(_states)
+    latent_states = mb_state_norm_function(torch.Tensor(_latent_states))
+
+    expert_values = torch.FloatTensor(_values).to(info['DEVICE'])
+    mb_q_policy_vals = mb_policy_net(latent_states, None)
+    # referenced -
+    # https://github.com/NervanaSystems/distiller/blob/master/distiller/knowledge_distillation.py#L148
+    distillation_losses = []
+    for head in range(info['N_ENSEMBLE']):
+        dloss = F.kl_div(mb_q_policy_vals[head], expert_values[:,head], reduction='mean')
+        distillation_losses.append(dloss)
+
+
+    loss = sum(distillation_losses)/info['N_ENSEMBLE']
+    loss.backward()
+    for param in mb_policy_net.core_net.parameters():
+        if param.grad is not None:
+            # divide grads in core
+            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+    nn.utils.clip_grad_norm_(mb_policy_net.parameters(), info['CLIP_GRAD'])
+    opt.step()
+    return float(loss)
 
 def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
     #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
@@ -70,9 +100,9 @@ def pt_latent_learn(latent_states, actions, rewards, latent_next_states, termina
     # min history to learn is 200,000 frames in dqn - 50000 steps
     losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
     opt.zero_grad()
-    q_policy_vals = policy_net(latent_states, None)
-    next_q_target_vals = target_net(latent_next_states, None)
-    next_q_policy_vals = policy_net(latent_next_states, None)
+    q_policy_vals = mb_policy_net(latent_states, None)
+    next_q_target_vals = mb_target_net(latent_next_states, None)
+    next_q_policy_vals = mb_policy_net(latent_next_states, None)
     cnt_losses = []
     for k in range(info['N_ENSEMBLE']):
         #TODO finish masking
@@ -95,64 +125,21 @@ def pt_latent_learn(latent_states, actions, rewards, latent_next_states, termina
 
     loss = sum(cnt_losses)/info['N_ENSEMBLE']
     loss.backward()
-    for param in policy_net.core_net.parameters():
+    for param in mb_policy_net.core_net.parameters():
         if param.grad is not None:
             # divide grads in core
             param.grad.data *=1.0/float(info['N_ENSEMBLE'])
-    nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
+    nn.utils.clip_grad_norm_(mb_policy_net.parameters(), info['CLIP_GRAD'])
     opt.step()
     return np.mean(losses)
 
-#def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
-#    states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
-#    next_states = torch.Tensor(next_states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
-#    rewards = torch.Tensor(rewards).to(info['DEVICE'])
-#    actions = torch.LongTensor(actions).to(info['DEVICE'])
-#    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
-#    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
-#    # min history to learn is 200,000 frames in dqn - 50000 steps
-#    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
-#    opt.zero_grad()
-#    q_policy_vals = policy_net(states, None)
-#    next_q_target_vals = target_net(next_states, None)
-#    next_q_policy_vals = policy_net(next_states, None)
-#    cnt_losses = []
-#    for k in range(info['N_ENSEMBLE']):
-#        #TODO finish masking
-#        total_used = torch.sum(masks[:,k])
-#        if total_used > 0.0:
-#            next_q_vals = next_q_target_vals[k].data
-#            if info['DOUBLE_DQN']:
-#                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
-#                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
-#            else:
-#                next_qs = next_q_vals.max(1)[0] # max returns a pair
-#
-#            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
-#            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
-#            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
-#            full_loss = masks[:,k]*l1loss
-#            loss = torch.sum(full_loss/total_used)
-#            cnt_losses.append(loss)
-#            losses[k] = loss.cpu().detach().item()
-#
-#    loss = sum(cnt_losses)/info['N_ENSEMBLE']
-#    loss.backward()
-#    for param in policy_net.core_net.parameters():
-#        if param.grad is not None:
-#            # divide grads in core
-#            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
-#    nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
-#    opt.step()
-#    return np.mean(losses)
-#
-def train_sim(step_number, last_save):
+def train_student(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
-        #avg_eval_reward = evaluate(step_number)
-        #perf['eval_rewards'].append(avg_eval_reward)
-        #perf['eval_steps'].append(step_number)
+        avg_eval_reward = evaluate(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -173,15 +160,13 @@ def train_sim(step_number, last_save):
             print("Gathering data with head=%s"%active_head)
             while not terminal:
                # eps
-                #if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
-                #    action = random_state.randint(0, env.num_actions)
-                #else:
                 eps = random_state.rand()
                 if eps < info['EPS_INIT']:
                     action = random_state.randint(0, env.num_actions)
                     print("random action eval", action)
                 else:
-                    action = pt_get_latent_action(latent_state=latent_hist_state, active_head=active_head)
+                    action, state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=active_head)
+                    mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
                 next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
                 # Store transition in the replay memory
@@ -189,35 +174,23 @@ def train_sim(step_number, last_save):
                 replay_memory.add_experience(action=action,
                                              frame=next_state[-1],
                                              reward=np.sign(reward),
-                                             terminal=life_lost)
-                latent_replay_memory.add_experience(action=action,
-                                             frame=next_latent_state[0].cpu().numpy(),
-                                             reward=np.sign(reward),
-                                             terminal=life_lost)
-                # dump oldest state
+                                             value=state_value,
+                                             terminal=life_lost,
+                                             latent_frame=next_latent_state[0].cpu().numpy())
                 latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
 
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
                 state = next_state
-                #if step_number == info['MIN_STEPS_TO_LEARN']:
-                #    if info['VQ_MODEL_LOADPATH'] == '':
-                #        # need to write npz file and train vqvae on it
-                #        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
-                #        replay_memory.save_buffer(buff_filename)
-                #        # now the vq is trained -
-                #        vqenv.train_vq_model(buff_filename+'.npz')
-
                 if step_number > info['MIN_STEPS_TO_LEARN']:
                     if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                        _latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks = latent_replay_memory.get_minibatch(info['BATCH_SIZE'])
-                        ptloss = pt_latent_learn(_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
+                        ptloss = kl_latent_learn()
                         ptloss_list.append(ptloss)
                     if step_number % info['TARGET_UPDATE'] == 0:
                         print("++++++++++++++++++++++++++++++++++++++++++++++++")
                         print('updating target network at %s'%step_number)
-                        target_net.load_state_dict(policy_net.state_dict())
+                        mb_target_net.load_state_dict(mb_policy_net.state_dict())
             print('END EPISODE', epoch_num, step_number, episode_reward_sum)
             et = time.time()
             ep_time = et-st
@@ -241,13 +214,19 @@ def train_sim(step_number, last_save):
                     last_save = handle_checkpoint(step_number)
 
             if not epoch_num or not epoch_num%info['PLOT_EVERY_EPISODES']:
-                matplotlib_plot_all(perf)
+                matplotlib_plot_all(perf, model_base_filedir)
                 # TODO plot title
                 print('avg reward', perf['avg_rewards'][-1])
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
             epoch_num += 1
+
+def reconstruct_latents(latent_list):
+    pt_latents = torch.stack(latent_list)
+    x_d, pred_actions, pred_rewards = vqenv.decode_vq_from_latents(pt_latents)
+    rec_mean = list((vqenv.sample_mean_from_latents(x_d)[:,0]*255).astype(np.uint8))
+    return rec_mean
 
 def evaluate(step_number):
     print("""
@@ -269,42 +248,47 @@ def evaluate(step_number):
         episode_steps = 0
         frames_for_gif = []
         results_for_eval = []
-        latents = []
         x_ds = []
-        latents.append(latent_state.cpu().numpy())
+        batch = []
+        rec_frames_for_gif = []
         while not terminal:
             eps = random_state.rand()
             if eps < info['EPS_EVAL']:
                action = random_state.randint(0, env.num_actions)
                print("random action eval", action)
             else:
-               action = pt_get_latent_action(latent_hist_state, active_head=None)
-            next_state, reward, life_lost, terminal = env.step(action)
+               expert_action, state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=None)
+               mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=None)
+            next_state, reward, life_lost, terminal = env.step(mb_action)
             next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
-            latents.append(next_latent_state.cpu().numpy())
             x_ds.append(x_d)
             latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
             evaluate_step_number += 1
             episode_steps +=1
             episode_reward_sum += reward
-            frames_for_gif.append(env.ale.getScreenRGB())
-            results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
+            batch.append(next_latent_state[0])
+            if not i:
+                if len(batch) > 12:
+                    rec_mean = reconstruct_latents(batch)
+                    rec_frames_for_gif.extend(rec_mean)
+                    batch = []
+                frames_for_gif.append(env.ale.getScreenRGB())
+
+            results_for_eval.append("%s, %s, %s, %s, %s" %(mb_action, expert_action, reward, life_lost, terminal))
             if not episode_steps%1000:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
+        if len(batch):
+           rec_mean = reconstruct_latents(batch)
+           rec_frames_for_gif.extend(rec_mean)
+        if not i:
+            generate_gif(model_base_filedir, step_number, rec_frames_for_gif, episode_reward_sum, name='test_reconstruct', results=results_for_eval, resize=False)
+            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval, resize=True)
 
-        # only save best if we've seen this round
-        #if not i:
-            #rec_est, rec_mean = vqenv.sample_from_latents(torch.cat(x_ds))
-            #rec = (255*rec_est[:,0]).astype(np.uint8)
-            #generate_gif(model_base_filedir, step_number, rec, episode_reward_sum, name='test_reconstruct', results=results_for_eval, resize=False)
-            #generate_gif(model_base_filedir, step_number, np.array(latents)[:,0], episode_reward_sum, name='test_latents', results=results_for_eval, resize=True)
-        #    generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval, resize=False)
-        #eval_rewards.append(episode_reward_sum)
-    #print("Evaluation score:\n", eval_rewards)
-    #efile = os.path.join(model_base_filedir, 'eval_rewards.txt')
-    #with open(efile, 'a') as eval_reward_file:
-    #    print(step_number, np.mean(eval_rewards), file=eval_reward_file)
+        print("Evaluation score:\n", eval_rewards)
+        efile = os.path.join(model_base_filedir, 'eval_rewards_%010d_%s.txt'%(step_number, i))
+        with open(efile, 'a') as eval_reward_file:
+            print(step_number, np.mean(eval_rewards), file=eval_reward_file)
     return np.mean(eval_rewards)
 
 if __name__ == '__main__':
@@ -328,7 +312,9 @@ if __name__ == '__main__':
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
         #"NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior1MLReps', # start files with name
-        "NAME":"MBBreakout",
+        "NAME":"MBBreakout_learn_from_expert",
+        "EXPERT":"../../model_savedir/BreakoutNewActionAnnealingPRIOR00/BreakoutNewActionNoAnnealingPRIOR_0002501995q.pkl",
+        #"REPLAY_BUFFER_LOADPATH":"../../model_savedir/BreakoutNewActionAnnealingPRIOR00/BreakoutNewActionNoAnnealingPRIOR_0001501367q_train_buffer.npz",
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -339,8 +325,8 @@ if __name__ == '__main__':
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":1000, # min steps needed to start training neural nets
-        "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
+        "MIN_STEPS_TO_LEARN":5000, # min steps needed to start training neural nets
+        "LEARN_EVERY_STEPS":1, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
         "EPS_INIT":0.01,
@@ -352,7 +338,7 @@ if __name__ == '__main__':
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
         #"CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":200000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":50000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         #"ADAM_LEARNING_RATE":1e-4,
@@ -384,7 +370,7 @@ if __name__ == '__main__':
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBvqbt_reward_0041007872ex.pt',
         #"VQ_MODEL_LOADPATH":'../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0035503692ex.pt',
         #"VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout00/BreakoutVQ02/BreakoutVQ_0049509504ex.pt",
-        "VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ01//BreakoutVQ_0041257920ex.pt",
+        "VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ02/BreakoutVQ_0103269824ex.pt",
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,
@@ -416,20 +402,24 @@ if __name__ == '__main__':
                       dead_as_end=info['DEAD_AS_END'], max_episode_steps=info['MAX_EPISODE_STEPS'])
 
     # create replay buffer
-    replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
+    replay_memory = ReplayMemory(action_space=env.action_space,
+                                 size=info['BUFFER_SIZE'],
                                  frame_height=info['OBS_SIZE'][0],
                                  frame_width=info['OBS_SIZE'][1],
                                  agent_history_length=info['HISTORY_SIZE'],
                                  batch_size=info['BATCH_SIZE'],
                                  num_heads=info['N_ENSEMBLE'],
-                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'])
-    latent_replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
-                                 frame_height=info['LATENT_SIZE'],
-                                 frame_width=info['LATENT_SIZE'],
-                                 agent_history_length=info['HISTORY_SIZE'],
-                                 batch_size=info['BATCH_SIZE'],
-                                 num_heads=info['N_ENSEMBLE'],
-                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'])
+                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'],
+                                 latent_frame_height=info['LATENT_SIZE'],
+                                 latent_frame_width=info['LATENT_SIZE'])
+   # latent_replay_memory = ReplayMemory(action_space=env.action_space,
+   #                              size=info['BUFFER_SIZE'],
+   #                              frame_height=info['LATENT_SIZE'],
+   #                              frame_width=info['LATENT_SIZE'],
+   #                              agent_history_length=info['HISTORY_SIZE'],
+   #                              batch_size=info['BATCH_SIZE'],
+   #                              num_heads=info['N_ENSEMBLE'],
+   #                              bernoulli_probability=info['BERNOULLI_PROBABILITY'])
 
 
     random_state = np.random.RandomState(info["SEED"])
@@ -486,30 +476,31 @@ if __name__ == '__main__':
     info['model_base_filepath'] = model_base_filepath
     info['num_actions'] = env.num_actions
     info['action_space'] = range(info['num_actions'])
+
     vqenv = VQEnv(info, vq_model_loadpath=info['VQ_MODEL_LOADPATH'], device='cpu')
 
-    policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
+    mb_policy_net = mbEnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                       num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
-    target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
+    mb_target_net = mbEnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                       num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
     if info['PRIOR']:
-        prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
+        mb_prior_net = mbEnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                 n_actions=env.num_actions,
                                 reshape_size=info['RESHAPE_SIZE'],
                                 num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                 num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
 
         print("using randomized prior")
-        policy_net = NetWithPrior(policy_net, prior_net, info['PRIOR_SCALE'])
-        target_net = NetWithPrior(target_net, prior_net, info['PRIOR_SCALE'])
+        mb_policy_net = mbNetWithPrior(mb_policy_net, mb_prior_net, info['PRIOR_SCALE'])
+        mb_target_net = mbNetWithPrior(mb_target_net, mb_prior_net, info['PRIOR_SCALE'])
 
-    target_net.load_state_dict(policy_net.state_dict())
+    mb_target_net.load_state_dict(mb_policy_net.state_dict())
     # create optimizer
     #opt = optim.RMSprop(policy_net.parameters(),
     #                    lr=info["RMS_LEARNING_RATE"],
@@ -517,23 +508,41 @@ if __name__ == '__main__':
     #                    eps=info["RMS_EPSILON"],
     #                    centered=info["RMS_CENTERED"],
     #                    alpha=info["RMS_DECAY"])
-    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    opt = optim.Adam(mb_policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
 
-    if args.model_loadpath is not '':
-        # what about random states - they will be wrong now???
-        # TODO - what about target net update cnt
-        target_net.load_state_dict(model_dict['target_net_state_dict'])
-        policy_net.load_state_dict(model_dict['policy_net_state_dict'])
-        opt.load_state_dict(model_dict['optimizer'])
-        print("loaded model state_dicts")
-        if args.buffer_loadpath == '':
-            args.buffer_loadpath = args.model_loadpath.replace('.pkl', '_train_buffer.npz')
-            print("auto loading buffer from:%s" %args.buffer_loadpath)
-            try:
-                replay_memory.load_buffer(args.buffer_loadpath)
-            except Exception as e:
-                print(e)
-                print('not able to load from buffer: %s. exit() to continue with empty buffer' %args.buffer_loadpath)
 
-    train_sim(start_step_number, start_last_save)
+
+    ########################################expert#############################
+    expert_model_dict = torch.load(info['EXPERT'])
+    expert_info = expert_model_dict['info']
+    if 'RESHAPE_SIZE' not in expert_info.keys():
+        expert_info['RESHAPE_SIZE'] = 64*7*7
+    expert_policy_net = EnsembleNet(n_ensemble=expert_info['N_ENSEMBLE'],
+                                      n_actions=env.num_actions,
+                                      reshape_size=expert_info['RESHAPE_SIZE'],
+                                      num_channels=expert_info['HISTORY_SIZE'],
+                                      dueling=expert_info['DUELING'],
+                                      ).to(info['DEVICE'])
+    expert_target_net = EnsembleNet(n_ensemble=expert_info['N_ENSEMBLE'],
+                                      n_actions=env.num_actions,
+                                      reshape_size=expert_info['RESHAPE_SIZE'],
+                                      num_channels=expert_info['HISTORY_SIZE'],
+                                      dueling=expert_info['DUELING'],
+                                      ).to(info['DEVICE'])
+    if info['PRIOR']:
+        expert_prior_net = EnsembleNet(n_ensemble=expert_info['N_ENSEMBLE'],
+                                n_actions=env.num_actions,
+                                reshape_size=expert_info['RESHAPE_SIZE'],
+                                num_channels=expert_info['HISTORY_SIZE'], dueling=expert_info['DUELING'],
+                                ).to(info['DEVICE'])
+
+        print("using randomized prior")
+        expert_policy_net = NetWithPrior(expert_policy_net, expert_prior_net, expert_info['PRIOR_SCALE'])
+        expert_target_net = NetWithPrior(expert_target_net, expert_prior_net, expert_info['PRIOR_SCALE'])
+
+    expert_target_net.load_state_dict(expert_policy_net.state_dict())
+    expert_target_net.load_state_dict(expert_model_dict['target_net_state_dict'])
+    expert_policy_net.load_state_dict(expert_model_dict['policy_net_state_dict'])
+
+    train_student(start_step_number, start_last_save)
 

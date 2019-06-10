@@ -34,6 +34,7 @@ class Environment(object):
         self.ale = self._init_ale(rand_seed, rom_file)
         # normally (160, 210)
         self.actions = self.ale.getMinimalActionSet()
+        self.action_space = len(self.actions)
 
         self.frame_skip = frame_skip
         self.num_frames = num_frames

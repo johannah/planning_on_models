@@ -261,7 +261,7 @@ def init_train():
                         num_output_mixtures=info['num_output_mixtures'],
                         in_channels_size=info['NUMBER_CONDITION'],
                         n_actions=info['num_actions'],
-                        int_reward=2,
+                        int_reward=info['num_rewards'],
                         ).to(DEVICE)
 
     print('using args', args)
