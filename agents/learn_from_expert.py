@@ -3,6 +3,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
+import cv2
 import sys
 import numpy as np
 from IPython import embed
@@ -18,7 +19,7 @@ from state_managers import VQEnv
 from mb_dqn_model import EnsembleNet as mbEnsembleNet
 from mb_dqn_model import NetWithPrior as mbNetWithPrior
 from dqn_model import EnsembleNet, NetWithPrior
-from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint, linearly_decaying_epsilon, matplotlib_plot_all
+from dqn_utils import seed_everything, write_info_file, generate_gif, generate_video, save_checkpoint, linearly_decaying_epsilon, matplotlib_plot_all
 from env import Environment
 from replay import ReplayMemory
 import config
@@ -163,7 +164,7 @@ def train_student(step_number, last_save):
                 eps = random_state.rand()
                 if eps < info['EPS_INIT']:
                     action = random_state.randint(0, env.num_actions)
-                    print("random action eval", action)
+                    print("random action train", action)
                 else:
                     action, state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=active_head)
                     mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=active_head)
@@ -272,7 +273,7 @@ def evaluate(step_number):
                     rec_mean = reconstruct_latents(batch)
                     rec_frames_for_gif.extend(rec_mean)
                     batch = []
-                frames_for_gif.append(env.ale.getScreenRGB())
+                frames_for_gif.append(cv2.resize(env.ale.getScreenRGB(), (100, 150)).astype(np.uint8) )
 
             results_for_eval.append("%s, %s, %s, %s, %s" %(mb_action, expert_action, reward, life_lost, terminal))
             if not episode_steps%1000:
@@ -281,11 +282,12 @@ def evaluate(step_number):
         if len(batch):
            rec_mean = reconstruct_latents(batch)
            rec_frames_for_gif.extend(rec_mean)
+        print("Evaluation score:\n", episode_reward_sum)
         if not i:
-            generate_gif(model_base_filedir, step_number, rec_frames_for_gif, episode_reward_sum, name='test_reconstruct', results=results_for_eval, resize=False)
-            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval, resize=True)
+            print('len of frames', len(rec_frames_for_gif))
+            generate_gif(model_base_filedir, step_number, rec_frames_for_gif, episode_reward_sum, name='test_reconstruct', results=results_for_eval)
+            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval)
 
-        print("Evaluation score:\n", eval_rewards)
         efile = os.path.join(model_base_filedir, 'eval_rewards_%010d_%s.txt'%(step_number, i))
         with open(efile, 'a') as eval_reward_file:
             print(step_number, np.mean(eval_rewards), file=eval_reward_file)
@@ -338,7 +340,7 @@ if __name__ == '__main__':
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
         #"CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":50000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         #"ADAM_LEARNING_RATE":1e-4,

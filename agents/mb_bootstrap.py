@@ -35,9 +35,7 @@ def handle_checkpoint(cnt):
     save_checkpoint(state, filename)
     # npz will be added
     buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%cnt)
-    latent_buff_filename = os.path.abspath(model_base_filepath + "_%010dq_latent_train_buffer"%cnt)
     replay_memory.save_buffer(buff_filename)
-    latent_replay_memory.save_buffer(latent_buff_filename)
     print("finished checkpoint", time.time()-st)
     return cnt
 
@@ -57,16 +55,17 @@ def pt_get_latent_action(latent_state, active_head=None):
         action = data.most_common(1)[0][0]
         return action
 
-def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
+def pt_latent_learn():# latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
     #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
     #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
     # dont normalize because we are using embedding
-    latent_states = torch.LongTensor(latent_states).to(info['DEVICE'])
-    latent_next_states = torch.LongTensor(latent_next_states).to(info['DEVICE'])
-    rewards = torch.Tensor(rewards).to(info['DEVICE'])
-    actions = torch.LongTensor(actions).to(info['DEVICE'])
-    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
-    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
+    _states, _actions, _rewards, _values, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
+    latent_states = torch.LongTensor(_latent_states).to(info['DEVICE'])
+    latent_next_states = torch.LongTensor(_latent_next_states).to(info['DEVICE'])
+    rewards = torch.Tensor(_rewards).to(info['DEVICE'])
+    actions = torch.LongTensor(_actions).to(info['DEVICE'])
+    terminal_flags = torch.Tensor(_terminal_flags.astype(np.int)).to(info['DEVICE'])
+    masks = torch.FloatTensor(_masks.astype(np.int)).to(info['DEVICE'])
     # min history to learn is 200,000 frames in dqn - 50000 steps
     losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
     opt.zero_grad()
@@ -189,11 +188,9 @@ def train_sim(step_number, last_save):
                 replay_memory.add_experience(action=action,
                                              frame=next_state[-1],
                                              reward=np.sign(reward),
-                                             terminal=life_lost)
-                latent_replay_memory.add_experience(action=action,
-                                             frame=next_latent_state[0].cpu().numpy(),
-                                             reward=np.sign(reward),
-                                             terminal=life_lost)
+                                             terminal=life_lost,
+                                             latent_frame=next_latent_state[0].cpu().numpy()
+                                             )
                 # dump oldest state
                 latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
 
@@ -211,8 +208,8 @@ def train_sim(step_number, last_save):
 
                 if step_number > info['MIN_STEPS_TO_LEARN']:
                     if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                        _latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks = latent_replay_memory.get_minibatch(info['BATCH_SIZE'])
-                        ptloss = pt_latent_learn(_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
+                        #_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks,_latent_states, _latent_next_states  = replay_memory.get_minibatch(info['BATCH_SIZE'])
+                        ptloss = pt_latent_learn()#_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
                         ptloss_list.append(ptloss)
                     if step_number % info['TARGET_UPDATE'] == 0:
                         print("++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -422,15 +419,9 @@ if __name__ == '__main__':
                                  agent_history_length=info['HISTORY_SIZE'],
                                  batch_size=info['BATCH_SIZE'],
                                  num_heads=info['N_ENSEMBLE'],
-                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'])
-    latent_replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
-                                 frame_height=info['LATENT_SIZE'],
-                                 frame_width=info['LATENT_SIZE'],
-                                 agent_history_length=info['HISTORY_SIZE'],
-                                 batch_size=info['BATCH_SIZE'],
-                                 num_heads=info['N_ENSEMBLE'],
-                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'])
-
+                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'],
+                                 latent_frame_height=info['LATENT_SIZE'],
+                                 latent_frame_width=info['LATENT_SIZE'])
 
     random_state = np.random.RandomState(info["SEED"])
 

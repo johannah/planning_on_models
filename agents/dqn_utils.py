@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from skvideo.io import vwrite
 import os
 import sys
 from imageio import mimsave
@@ -66,27 +67,35 @@ def write_info_file(info, model_base_filepath, cnt):
         info_f.write('%s=%s\n'%(key,val))
     info_f.close()
 
-def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results=[], resize=True):
-    if resize:
-        for idx, frame_idx in enumerate(frames_for_gif):
-            frames_for_gif[idx] = cv2.resize(frame_idx, (110, 160)).astype(np.uint8)
+def generate_video(base_dir, step_number, frames, reward, name='', results=[]):#, resize=True):
+    frames_for_video = np.array(frames).astype(np.uint8)
+
+    if len(frames_for_video[0].shape) == 2:
+        name+='gray'
     else:
-        frames_for_gif = np.array(frames_for_gif).astype(np.uint8)
+        name+='color'
+    mp4_fname = os.path.join(base_dir, "ATARI_step%010d_r%04d_%s.mp4"%(step_number, int(reward), name))
+    vwrite(mp4_fname, frames_for_video)
+
+def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results=[]):#, resize=True):
+    frames_for_gif = np.array(frames_for_gif).astype(np.uint8)
 
     if len(frames_for_gif[0].shape) == 2:
         name+='gray'
     else:
         name+='color'
     gif_fname = os.path.join(base_dir, "ATARI_step%010d_r%04d_%s.gif"%(step_number, int(reward), name))
-
-    print("WRITING GIF", gif_fname)
-    mimsave(gif_fname, frames_for_gif, duration=1/30)
     if len(results):
         txt_fname = gif_fname.replace('.gif', '.txt')
         ff = open(txt_fname, 'w')
         for ex in results:
             ff.write(ex+'\n')
         ff.close()
+
+    print("WRITING GIF", gif_fname, len(frames_for_gif))
+    for i in range(0, len(frames_for_gif), 1000):
+        end = min(i+1000, len(frames_for_gif))
+        mimsave(gif_fname.replace('.gif', '%05d.gif' %i), frames_for_gif[i:end], duration=1/30)
 
 def rolling_average(a, n=5) :
     if n == 0:
