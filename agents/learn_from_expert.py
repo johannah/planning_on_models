@@ -25,6 +25,53 @@ from env import Environment
 from replay import ReplayMemory
 import config
 
+#def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
+#    #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
+#    #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
+#    # dont normalize because we are using embedding
+#    latent_states = torch.LongTensor(latent_states).to(info['DEVICE'])
+#    latent_next_states = torch.LongTensor(latent_next_states).to(info['DEVICE'])
+#    rewards = torch.Tensor(rewards).to(info['DEVICE'])
+#    actions = torch.LongTensor(actions).to(info['DEVICE'])
+#    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
+#    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
+#    # min history to learn is 200,000 frames in dqn - 50000 steps
+#    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
+#    opt.zero_grad()
+#    q_policy_vals = mb_policy_net(latent_states, None)
+#    next_q_target_vals = mb_target_net(latent_next_states, None)
+#    next_q_policy_vals = mb_policy_net(latent_next_states, None)
+#    cnt_losses = []
+#    for k in range(info['N_ENSEMBLE']):
+#        #TODO finish masking
+#        total_used = torch.sum(masks[:,k])
+#        if total_used > 0.0:
+#            next_q_vals = next_q_target_vals[k].data
+#            if info['DOUBLE_DQN']:
+#                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
+#                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
+#            else:
+#                next_qs = next_q_vals.max(1)[0] # max returns a pair
+#
+#            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
+#            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
+#            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
+#            full_loss = masks[:,k]*l1loss
+#            loss = torch.sum(full_loss/total_used)
+#            cnt_losses.append(loss)
+#            losses[k] = loss.cpu().detach().item()
+#
+#    loss = sum(cnt_losses)/info['N_ENSEMBLE']
+#    loss.backward()
+#    for param in mb_policy_net.core_net.parameters():
+#        if param.grad is not None:
+#            # divide grads in core
+#            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+#    nn.utils.clip_grad_norm_(mb_policy_net.parameters(), info['CLIP_GRAD'])
+#    opt.step()
+#    return np.mean(losses)
+
+
 def handle_checkpoint(cnt):
     st = time.time()
     print("beginning checkpoint", st)
@@ -64,22 +111,20 @@ def get_action(policy_net, state, active_head=None):
         action = data.most_common(1)[0][0]
     return action, torch.stack(vals)[:,0].detach().cpu().numpy()
 
-def kl_latent_learn():
+def kl_latent_learn(step_number):
     _states, _actions, _rewards, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
     states = full_state_norm_function(_states)[0]
     latent_states = mb_state_norm_function(torch.Tensor(_latent_states))
     expert_policy_net.eval()
     with torch.no_grad():
         expert_values = expert_policy_net(states, None)
-
     mb_q_policy_vals = mb_policy_net(latent_states, None)
     # referenced -
     # https://github.com/NervanaSystems/distiller/blob/master/distiller/knowledge_distillation.py#L148
     distillation_losses = []
     for head in range(info['N_ENSEMBLE']):
-        dloss = F.kl_div(mb_q_policy_vals[head], expert_values[head].detach(), reduction='mean')
+        dloss = F.kl_div(mb_q_policy_vals[head], expert_values[head].detach(), reduction='batchmean')
         distillation_losses.append(dloss)
-
 
     loss = sum(distillation_losses)/info['N_ENSEMBLE']
     loss.backward()
@@ -89,53 +134,22 @@ def kl_latent_learn():
             param.grad.data *=1.0/float(info['N_ENSEMBLE'])
     nn.utils.clip_grad_norm_(mb_policy_net.parameters(), info['CLIP_GRAD'])
     opt.step()
+    ind = np.random.randint(0,_latent_states.shape[0])
+    hx_d,pa,pr=vqenv.decode_vq_from_latents(latent_states[ind].cpu())
+    hmean = (vqenv.sample_mean_from_latents(hx_d)[:,0]*255).astype(np.uint8)
+    f,ax = plt.subplots(2,4, figsize=(4.5,1.5))
+    for i in range(hmean.shape[0]):
+        expert_action, expert_state_value = get_action(policy_net=expert_policy_net, state=states[ind][None], active_head=None)
+        mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=latent_states[ind][None], active_head=None)
+        ax[0,i].imshow(hmean[i])
+        ax[0,i].axis('off')
+        ax[1,i].imshow(_states[ind][i])
+        ax[1,i].axis('off')
+    ax[0,i].set_title('e%sm%s' %(expert_action, mb_action))
+    fname = os.path.join(model_base_filedir, "train_step%010d.png"%step_number)
+    plt.savefig(fname)
+    plt.close()
     return float(loss)
-
-def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
-    #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
-    #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
-    # dont normalize because we are using embedding
-    latent_states = torch.LongTensor(latent_states).to(info['DEVICE'])
-    latent_next_states = torch.LongTensor(latent_next_states).to(info['DEVICE'])
-    rewards = torch.Tensor(rewards).to(info['DEVICE'])
-    actions = torch.LongTensor(actions).to(info['DEVICE'])
-    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
-    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
-    # min history to learn is 200,000 frames in dqn - 50000 steps
-    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
-    opt.zero_grad()
-    q_policy_vals = mb_policy_net(latent_states, None)
-    next_q_target_vals = mb_target_net(latent_next_states, None)
-    next_q_policy_vals = mb_policy_net(latent_next_states, None)
-    cnt_losses = []
-    for k in range(info['N_ENSEMBLE']):
-        #TODO finish masking
-        total_used = torch.sum(masks[:,k])
-        if total_used > 0.0:
-            next_q_vals = next_q_target_vals[k].data
-            if info['DOUBLE_DQN']:
-                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
-                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
-            else:
-                next_qs = next_q_vals.max(1)[0] # max returns a pair
-
-            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
-            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
-            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
-            full_loss = masks[:,k]*l1loss
-            loss = torch.sum(full_loss/total_used)
-            cnt_losses.append(loss)
-            losses[k] = loss.cpu().detach().item()
-
-    loss = sum(cnt_losses)/info['N_ENSEMBLE']
-    loss.backward()
-    for param in mb_policy_net.core_net.parameters():
-        if param.grad is not None:
-            # divide grads in core
-            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
-    nn.utils.clip_grad_norm_(mb_policy_net.parameters(), info['CLIP_GRAD'])
-    opt.step()
-    return np.mean(losses)
 
 def train_student(step_number, last_save):
     """Contains the training and evaluation loops"""
@@ -145,9 +159,7 @@ def train_student(step_number, last_save):
         ####### Training #######
         ########################
         epoch_frame = 0
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
+        same = [0 for pp in range(1000)]
         while epoch_frame < info['EVAL_FREQUENCY']:
             terminal = False
             life_lost = True
@@ -167,15 +179,20 @@ def train_student(step_number, last_save):
                 eps = random_state.rand()
                 if eps < info['EPS_INIT']:
                     action = random_state.randint(0, env.num_actions)
-                    print("random action train", action)
+                    print(step_number, "random action train", action)
                 else:
-                    action, state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=active_head)
+                    expert_action, expert_state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=active_head)
                     mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=active_head)
-                next_state, reward, life_lost, terminal = env.step(action)
+                    if mb_action==expert_action:
+                        same.append(1)
+                    else:
+                        same.append(0)
+                    same = same[1:]
+                next_state, reward, life_lost, terminal = env.step(expert_action)
                 next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
                 # Store transition in the replay memory
                 #TODO - add latents from initial training buffer to replay buffer
-                replay_memory.add_experience(action=action,
+                replay_memory.add_experience(action=expert_action,
                                              frame=next_state[-1],
                                              reward=np.sign(reward),
                                              terminal=life_lost,
@@ -188,13 +205,14 @@ def train_student(step_number, last_save):
                 state = next_state
                 if step_number > info['MIN_STEPS_TO_LEARN']:
                     if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                        ptloss = kl_latent_learn()
+                        ptloss = kl_latent_learn(step_number)
                         ptloss_list.append(ptloss)
                     if step_number % info['TARGET_UPDATE'] == 0:
                         print("++++++++++++++++++++++++++++++++++++++++++++++++")
                         print('updating target network at %s'%step_number)
                         mb_target_net.load_state_dict(mb_policy_net.state_dict())
             print('END EPISODE', epoch_num, step_number, episode_reward_sum)
+            print("SAME/1000", np.sum(same))
             et = time.time()
             ep_time = et-st
             perf['steps'].append(step_number)
@@ -224,6 +242,10 @@ def train_student(step_number, last_save):
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
             epoch_num += 1
+        avg_eval_reward = evaluate(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
+        matplotlib_plot_all(perf, model_base_filedir)
 
 def reconstruct_from_latents(x_ds):
     pt_latents = torch.stack(x_ds)[:,0]
@@ -268,8 +290,10 @@ def evaluate(step_number):
                mb_action, expert_action = -1, -1
 
             else:
-               expert_action, state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=None)
+               expert_action, expert_state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=None)
                mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=None)
+               print(expert_state_value)
+               print(mb_state_value)
                action = mb_action
                #action = expert_action
             actions.append((expert_action, mb_action))
@@ -361,6 +385,7 @@ if __name__ == '__main__':
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
         #"NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior1MLReps', # start files with name
         "NAME":"MBBreakout_learn_from_expert",
+        #"NAME":"DEBUG",
         "EXPERT":"../../model_savedir/BreakoutNewActionAnnealingPRIOR00/BreakoutNewActionNoAnnealingPRIOR_0002501995q.pkl",
         #"REPLAY_BUFFER_LOADPATH":"../../model_savedir/BreakoutNewActionAnnealingPRIOR00/BreakoutNewActionNoAnnealingPRIOR_0001501367q_train_buffer.npz",
         "DUELING":True, # use dueling dqn
@@ -373,7 +398,7 @@ if __name__ == '__main__':
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":5000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":500, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":1, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher

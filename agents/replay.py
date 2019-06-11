@@ -35,7 +35,7 @@ class ReplayMemory:
         self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
         self.latent_frame_height = latent_frame_height
         self.latent_frame_width = latent_frame_width
-        self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.uint8)
+        self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
         self.terminal_flags = np.empty(self.size, dtype=np.bool)
         self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
 
