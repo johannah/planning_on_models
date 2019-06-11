@@ -68,14 +68,19 @@ def write_info_file(info, model_base_filepath, cnt):
     info_f.close()
 
 def generate_video(base_dir, step_number, frames, reward, name='', results=[]):#, resize=True):
+    print('converting to np array uint8')
     frames_for_video = np.array(frames).astype(np.uint8)
-
     if len(frames_for_video[0].shape) == 2:
         name+='gray'
     else:
         name+='color'
     mp4_fname = os.path.join(base_dir, "ATARI_step%010d_r%04d_%s.mp4"%(step_number, int(reward), name))
-    vwrite(mp4_fname, frames_for_video)
+
+    for i in range(0, len(frames_for_video), 500):
+        end = min(i+500, len(frames_for_video))
+        gname = mp4_fname.replace('.mp4', '%05d.mp4' %i)
+        print("WRITING video", gname, len(frames_for_video))
+        vwrite(mp4_fname, frames_for_video[i:end])
 
 def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results=[]):#, resize=True):
     frames_for_gif = np.array(frames_for_gif).astype(np.uint8)
@@ -92,10 +97,11 @@ def generate_gif(base_dir, step_number, frames_for_gif, reward, name='', results
             ff.write(ex+'\n')
         ff.close()
 
-    print("WRITING GIF", gif_fname, len(frames_for_gif))
-    for i in range(0, len(frames_for_gif), 1000):
-        end = min(i+1000, len(frames_for_gif))
-        mimsave(gif_fname.replace('.gif', '%05d.gif' %i), frames_for_gif[i:end], duration=1/30)
+    for i in range(0, len(frames_for_gif), 500):
+        end = min(i+500, len(frames_for_gif))
+        gname = gif_fname.replace('.gif', '%05d.gif' %i)
+        print("WRITING GIF", gname, len(frames_for_gif))
+        mimsave(gname, frames_for_gif[i:end], duration=1/30)
 
 def rolling_average(a, n=5) :
     if n == 0:

@@ -3,6 +3,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
+from skvideo.io import vwrite
 import cv2
 import sys
 import numpy as np
@@ -64,17 +65,19 @@ def get_action(policy_net, state, active_head=None):
     return action, torch.stack(vals)[:,0].detach().cpu().numpy()
 
 def kl_latent_learn():
-    _states, _actions, _rewards, _values, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
-    states = full_state_norm_function(_states)
+    _states, _actions, _rewards, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
+    states = full_state_norm_function(_states)[0]
     latent_states = mb_state_norm_function(torch.Tensor(_latent_states))
+    expert_policy_net.eval()
+    with torch.no_grad():
+        expert_values = expert_policy_net(states, None)
 
-    expert_values = torch.FloatTensor(_values).to(info['DEVICE'])
     mb_q_policy_vals = mb_policy_net(latent_states, None)
     # referenced -
     # https://github.com/NervanaSystems/distiller/blob/master/distiller/knowledge_distillation.py#L148
     distillation_losses = []
     for head in range(info['N_ENSEMBLE']):
-        dloss = F.kl_div(mb_q_policy_vals[head], expert_values[:,head], reduction='mean')
+        dloss = F.kl_div(mb_q_policy_vals[head], expert_values[head].detach(), reduction='mean')
         distillation_losses.append(dloss)
 
 
@@ -138,13 +141,13 @@ def train_student(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
         epoch_frame = 0
+        avg_eval_reward = evaluate(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
         while epoch_frame < info['EVAL_FREQUENCY']:
             terminal = False
             life_lost = True
@@ -175,7 +178,6 @@ def train_student(step_number, last_save):
                 replay_memory.add_experience(action=action,
                                              frame=next_state[-1],
                                              reward=np.sign(reward),
-                                             value=state_value,
                                              terminal=life_lost,
                                              latent_frame=next_latent_state[0].cpu().numpy())
                 latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
@@ -223,11 +225,14 @@ def train_student(step_number, last_save):
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
             epoch_num += 1
 
-def reconstruct_latents(latent_list):
-    pt_latents = torch.stack(latent_list)
-    x_d, pred_actions, pred_rewards = vqenv.decode_vq_from_latents(pt_latents)
-    rec_mean = list((vqenv.sample_mean_from_latents(x_d)[:,0]*255).astype(np.uint8))
-    return rec_mean
+def reconstruct_from_latents(x_ds):
+    pt_latents = torch.stack(x_ds)[:,0]
+    return list((vqenv.sample_mean_from_latents(pt_latents)[:,0]*255).astype(np.uint8))
+
+def create_video(frames, name, train_step_number, last_index, episode_reward_sum):
+    if len(frames):
+        tmp4_fname = os.path.join(model_base_filedir, "ATARI_step%010d_%s_%06d_%03d.mp4"%(train_step_number, name, last_index, episode_reward_sum))
+        vwrite(tmp4_fname, np.array(frames, dtype=np.uint8))
 
 def evaluate(step_number):
     print("""
@@ -235,10 +240,10 @@ def evaluate(step_number):
          ####### Evaluation ######
          #########################
          """)
+    # with 9000 steps - expert gets about 250 pts
     eval_rewards = []
-    evaluate_step_number = 0
     # only run one
-    for i in range(info['NUM_EVAL_EPISODES']):
+    for eval_run in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
         latent_state, x_d = vqenv.get_state_representation(state[None])
         latent_hist_state = torch.stack((latent_state, latent_state, latent_state, latent_state), dim=1)
@@ -250,48 +255,89 @@ def evaluate(step_number):
         frames_for_gif = []
         results_for_eval = []
         x_ds = []
-        batch = []
         rec_frames_for_gif = []
+        evaluate_step_number = 0
+        actions = [[-1,-1] for x in range(4)]
+        exp_dir = os.path.join(model_base_filedir, "eval_step%010d" %step_number)
+        os.makedirs(exp_dir)
         while not terminal:
             eps = random_state.rand()
             if eps < info['EPS_EVAL']:
                action = random_state.randint(0, env.num_actions)
                print("random action eval", action)
+               mb_action, expert_action = -1, -1
+
             else:
                expert_action, state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=None)
                mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=None)
-            next_state, reward, life_lost, terminal = env.step(mb_action)
+               action = mb_action
+               #action = expert_action
+            actions.append((expert_action, mb_action))
+            next_state, reward, life_lost, terminal = env.step(action)
+            if not evaluate_step_number%100:
+                print('eval,step,mb_action,expert_action,reward')
+                print(evaluate_step_number,mb_action,expert_action,reward)
             next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
-            x_ds.append(x_d)
             latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
-            evaluate_step_number += 1
+            #latent_hist_state is of size [1,4,10,10]
+            if not eval_run:
+                if evaluate_step_number < 300:
+                    hx_d,pa,pr=vqenv.decode_vq_from_latents(latent_hist_state[0])
+                    hmean = (vqenv.sample_mean_from_latents(hx_d)[:,0]*255).astype(np.uint8)
+                    f,ax = plt.subplots(2,4, figsize=(4.5,1.5))
+                    for i in range(hmean.shape[0]):
+                        ax[0,i].imshow(hmean[i])
+                        ax[0,i].set_title('e%sm%s' %(actions[i-4][0], actions[i-4][1]))
+                        ax[0,i].axis('off')
+                        ax[1,i].imshow(next_state[i])
+                        ax[1,i].axis('off')
+                    fname = os.path.join(exp_dir, "%06d.png"%evaluate_step_number)
+                    plt.savefig(fname)
+                    plt.close()
+
             episode_steps +=1
             episode_reward_sum += reward
-            batch.append(next_latent_state[0])
-            if not i:
-                if len(batch) > 12:
-                    rec_mean = reconstruct_latents(batch)
-                    rec_frames_for_gif.extend(rec_mean)
-                    batch = []
-                frames_for_gif.append(cv2.resize(env.ale.getScreenRGB(), (100, 150)).astype(np.uint8) )
+            if not eval_run:
+                # add current observation
+                frames_for_gif.append(cv2.resize(env.ale.getScreenRGB(), (80, 100)).astype(np.uint8) )
+                x_ds.append(x_d)
+                if len(x_ds) >= 48:
+                    # todo - stop converting back and forth from np and
+                    # precalculate array sizes
+                    rec_frames_for_gif.extend(reconstruct_from_latents(x_ds))
+                    x_ds = []
+
+                if len(frames_for_gif) >= 500:
+                    # create videos from previous 500 frames
+                    create_video(frames_for_gif, 'obs', step_number, evaluate_step_number, episode_reward_sum)
+                    create_video(rec_frames_for_gif, 'rec', step_number, evaluate_step_number, episode_reward_sum)
+                    # reset lists
+                    frames_for_gif = []
+                    rec_frames_for_gif = []
 
             results_for_eval.append("%s, %s, %s, %s, %s" %(mb_action, expert_action, reward, life_lost, terminal))
-            if not episode_steps%1000:
+            if not episode_steps%100:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
-        if len(batch):
-           rec_mean = reconstruct_latents(batch)
-           rec_frames_for_gif.extend(rec_mean)
-        print("Evaluation score:\n", episode_reward_sum)
-        if not i:
-            print('len of frames', len(rec_frames_for_gif))
-            generate_gif(model_base_filedir, step_number, rec_frames_for_gif, episode_reward_sum, name='test_reconstruct', results=results_for_eval)
-            generate_gif(model_base_filedir, step_number, frames_for_gif, episode_reward_sum, name='test', results=results_for_eval)
+            evaluate_step_number += 1
 
+        if not eval_run:
+            if len(x_ds):
+                rec_frames_for_gif.extend(reconstruct_from_latents(x_ds))
+            create_video(frames_for_gif, 'obs', step_number, evaluate_step_number, episode_reward_sum)
+            create_video(rec_frames_for_gif, 'rec', step_number, evaluate_step_number, episode_reward_sum)
+            frames_for_gif = []
+            rec_frames_for_gif = []
+        print("Evaluation score:\n", episode_reward_sum)
         efile = os.path.join(model_base_filedir, 'eval_rewards_%010d_%s.txt'%(step_number, i))
         with open(efile, 'a') as eval_reward_file:
             print(step_number, np.mean(eval_rewards), file=eval_reward_file)
-    return np.mean(eval_rewards)
+        eval_rewards.append(episode_reward_sum)
+    avg_reward = np.sum(eval_rewards)
+    print("sum of eval rewards", avg_reward)
+    if avg_reward != 0:
+        avg_reward /= float(len(eval_rewards))
+    return avg_reward
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -333,17 +379,17 @@ if __name__ == '__main__':
         # I think this randomness might need to be higher
         "EPS_INIT":0.01,
         "EPS_FINAL":0.01, # 0.01 in osband
-        "EPS_EVAL":0.0, # 0 in osband, .05 in others....
+        "EPS_EVAL":0.1, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":1, # num examples to average in eval
         #"BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "BUFFER_SIZE":int(500000), # Buffer size for experience replay
         "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
         #"CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":50000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
-        "ADAM_LEARNING_RATE":6.25e-5,
-        #"ADAM_LEARNING_RATE":1e-4,
+        #"ADAM_LEARNING_RATE":6.25e-5,
+        "ADAM_LEARNING_RATE":1e-4,
         "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
         "RMS_DECAY":0.95,
         "RMS_MOMENTUM":0.0,
@@ -361,7 +407,8 @@ if __name__ == '__main__':
         "RESHAPE_SIZE":10*10*16,
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
-        "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
+        #"MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
+        "MAX_EPISODE_STEPS":9000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
         "FRAME_SKIP":4, # deterministic frame skips to match deepmind
         "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life

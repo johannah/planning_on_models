@@ -29,7 +29,7 @@ def weights_init(m):
         print('%s is not initialized.' %classtype)
 
 class CoreNetEmbedding(nn.Module):
-    def __init__(self, reshape_size=8*10*10, num_channels=1, num_clusters=512):
+    def __init__(self, reshape_size=16*10*10, num_channels=1, num_clusters=512):
         super(CoreNetEmbedding, self).__init__()
         self.num_clusters=num_clusters
         eo = 64
@@ -38,10 +38,13 @@ class CoreNetEmbedding(nn.Module):
         for e in range(self.num_channels):
             self.embeddings.append(nn.Embedding(num_clusters, eo))
         self.reshape_size = reshape_size
-        # params from ddqn appendix
-        self.conv1 = nn.Conv2d(eo*self.num_channels, eo*2, 1, 1)
-        self.conv2 = nn.Conv2d(eo*2, eo*1, 1, 1)
-        self.conv3 = nn.Conv2d(eo, 16, 1, 1)
+        # filter_size is too small at 1 - kk
+        #self.conv1 = nn.Conv2d(eo*self.num_channels, eo*2, 1, 1)
+        #self.conv2 = nn.Conv2d(eo*2, eo*1, 1, 1)
+        #self.conv3 = nn.Conv2d(eo, 16, 1, 1)
+        self.conv1 = nn.Conv2d(eo*self.num_channels, eo*2, 3, 1, padding=(1,1))
+        self.conv2 = nn.Conv2d(eo*2, eo*1, 3, 1, padding=(1,1))
+        self.conv3 = nn.Conv2d(eo, 16, 3, 1, padding=(1,1))
         self.conv1.apply(weights_init)
         self.conv2.apply(weights_init)
 
@@ -61,14 +64,15 @@ class CoreNetEmbedding(nn.Module):
         return xo
 
 class CoreNet(nn.Module):
-    def __init__(self, reshape_size=4*10*10, num_channels=1):
+    def __init__(self, reshape_size=16*10*10, num_channels=1):
         super(CoreNet, self).__init__()
         self.reshape_size = reshape_size
         self.num_channels = num_channels
         # params from ddqn appendix
-        self.conv1 = nn.Conv2d(self.num_channels, 2, 1, 1)
-        self.conv2 = nn.Conv2d(2, 4, 1, 1)
-        self.conv3 = nn.Conv2d(4, 4, 1, 1)
+        eo = 64
+        self.conv1 = nn.Conv2d(self.num_channels, eo*2, 3, 1, padding=(1,1))
+        self.conv2 = nn.Conv2d(eo*2, eo*4, 3, 1, padding=(1,1))
+        self.conv3 = nn.Conv2d(eo*4, eo*4, 3, 1, padding=(1,1))
         self.conv1.apply(weights_init)
         self.conv2.apply(weights_init)
 
@@ -83,7 +87,7 @@ class CoreNet(nn.Module):
 class DuelingHeadNet(nn.Module):
     def __init__(self, n_actions=4, reshape_size=10*10*4):
         super(DuelingHeadNet, self).__init__()
-        self.split_size = 512
+        self.split_size = 1024
         self.fc1 = nn.Linear(reshape_size, self.split_size*2)
         self.value = nn.Linear(self.split_size, 1)
         self.advantage = nn.Linear(self.split_size, n_actions)
@@ -103,8 +107,9 @@ class DuelingHeadNet(nn.Module):
 class HeadNet(nn.Module):
     def __init__(self, n_actions=4, reshape_size=10*10*4):
         super(HeadNet, self).__init__()
-        self.fc1 = nn.Linear(reshape_size, 512)
-        self.fc2 = nn.Linear(512, n_actions)
+        self.split_size = 1024*2
+        self.fc1 = nn.Linear(reshape_size, self.split_size)
+        self.fc2 = nn.Linear(self.split_size, n_actions)
         self.fc1.apply(weights_init)
         self.fc2.apply(weights_init)
 

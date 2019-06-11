@@ -39,27 +39,49 @@ def handle_checkpoint(cnt):
     print("finished checkpoint", time.time()-st)
     return cnt
 
-def pt_get_latent_action(latent_state, active_head=None):
-    # comes in as vq
-    #vals = policy_net(latent_state[None].float().to(info['DEVICE'])/float(info['NUM_K']), active_head)
-    # goes in with channels = 0
-    vals = policy_net(latent_state.long().to(info['DEVICE']), active_head)
+
+def full_state_norm_function(state):
+    return  torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
+
+def mb_state_norm_function(latent_state):
+    return latent_state.long().to(info['DEVICE'])
+
+def get_action(policy_net, state, active_head=None):
+    # run on all heads to get values
+    policy_net.eval()
+    with torch.no_grad():
+        vals = policy_net(state, None)
     if active_head is not None:
-        action = torch.argmax(vals, dim=1).item()
-        return action
+        action = torch.argmax(vals[active_head]).item()
     else:
         # vote
         acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
-        print(acts)
         data = Counter(acts)
         action = data.most_common(1)[0][0]
-        return action
+    return action, torch.stack(vals)[:,0].detach().cpu().numpy()
+
+
+#def pt_get_latent_action(latent_state, active_head=None):
+#    # comes in as vq
+#    #vals = policy_net(latent_state[None].float().to(info['DEVICE'])/float(info['NUM_K']), active_head)
+#    # goes in with channels = 0
+#    vals = policy_net(latent_state.long().to(info['DEVICE']), active_head)
+#    if active_head is not None:
+#        action = torch.argmax(vals, dim=1).item()
+#        return action
+#    else:
+#        # vote
+#        acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
+#        print(acts)
+#        data = Counter(acts)
+#        action = data.most_common(1)[0][0]
+#        return action
 
 def pt_latent_learn():# latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
     #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
     #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
     # dont normalize because we are using embedding
-    _states, _actions, _rewards, _values, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
+    _states, _actions, _rewards, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
     latent_states = torch.LongTensor(_latent_states).to(info['DEVICE'])
     latent_next_states = torch.LongTensor(_latent_next_states).to(info['DEVICE'])
     rewards = torch.Tensor(_rewards).to(info['DEVICE'])
@@ -180,7 +202,8 @@ def train_sim(step_number, last_save):
                     action = random_state.randint(0, env.num_actions)
                     print("random action eval", action)
                 else:
-                    action = pt_get_latent_action(latent_state=latent_hist_state, active_head=active_head)
+                    #action, value = pt_get_latent_action(latent_state=latent_hist_state, active_head=active_head)
+                    action, state_value = get_action(policy_net=policy_net, state=mb_state_norm_function(latent_hist_state), active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
                 next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
                 # Store transition in the replay memory
@@ -325,7 +348,7 @@ if __name__ == '__main__':
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
         #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
         #"NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior1MLReps', # start files with name
-        "NAME":"MBBreakout_bettervq",
+        "NAME":"MBBreakout_replay",
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -413,7 +436,8 @@ if __name__ == '__main__':
                       dead_as_end=info['DEAD_AS_END'], max_episode_steps=info['MAX_EPISODE_STEPS'])
 
     # create replay buffer
-    replay_memory = ReplayMemory(size=info['BUFFER_SIZE'],
+    replay_memory = ReplayMemory(action_space=env.action_space,
+                                 size=info['BUFFER_SIZE'],
                                  frame_height=info['OBS_SIZE'][0],
                                  frame_width=info['OBS_SIZE'][1],
                                  agent_history_length=info['HISTORY_SIZE'],

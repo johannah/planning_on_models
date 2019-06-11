@@ -32,7 +32,6 @@ class ReplayMemory:
         # Pre-allocate memory
         self.actions = np.empty(self.size, dtype=np.int32)
         self.rewards = np.empty(self.size, dtype=np.float32)
-        self.values = np.empty((self.size, self.num_heads, action_space), dtype=np.float32)
         self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
         self.latent_frame_height = latent_frame_height
         self.latent_frame_width = latent_frame_width
@@ -62,7 +61,6 @@ class ReplayMemory:
                  frames=self.frames, actions=self.actions, rewards=self.rewards,
                  terminal_flags=self.terminal_flags, masks=self.masks,
                  count=self.count, current=self.current,
-                 values=self.values,
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
@@ -79,10 +77,6 @@ class ReplayMemory:
         self.rewards = npfile['rewards']
         self.terminal_flags = npfile['terminal_flags']
         self.masks = npfile['masks']
-        try:
-            self.values=npfile['values']
-        except:
-            print("NO VALUES AVAILABLE IN THIS NPZFILE")
         self.count = npfile['count']
         self.current = npfile['current']
         self.agent_history_length = npfile['agent_history_length']
@@ -96,7 +90,7 @@ class ReplayMemory:
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 
-    def add_experience(self, action, frame, reward, value, terminal, latent_frame=''):
+    def add_experience(self, action, frame, reward, terminal, latent_frame=''):
         """
         Args:
             action: An integer between 0 and env.action_space.n - 1
@@ -112,7 +106,6 @@ class ReplayMemory:
         if type(latent_frame) is not str:
             self.latent_frames[self.current, ...] = latent_frame
         self.rewards[self.current] = reward
-        self.values[self.current] = value
         self.terminal_flags[self.current] = terminal
         mask = self.random_state.binomial(1, self.bernoulli_probability, self.num_heads)
         self.masks[self.current] = mask
@@ -177,6 +170,6 @@ class ReplayMemory:
             self.new_states[i] = self._get_state(idx)
             self.latent_states[i] = self._get_latent_state(idx - 1)
             self.latent_new_states[i] = self._get_latent_state(idx)
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.values[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.latent_states, self.latent_new_states
+        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.latent_states, self.latent_new_states
 
 
