@@ -17,60 +17,11 @@ import torch.optim as optim
 import datetime
 import time
 from state_managers import VQEnv
-from mb_dqn_model import EnsembleNet as mbEnsembleNet
-from mb_dqn_model import NetWithPrior as mbNetWithPrior
-from dqn_model import EnsembleNet, NetWithPrior
-from dqn_utils import seed_everything, write_info_file, generate_gif, generate_video, save_checkpoint, linearly_decaying_epsilon, matplotlib_plot_all
+from mb_dqn_model import EnsembleNet, NetWithPrior
+from dqn_utils import seed_everything, write_info_file, generate_gif, save_checkpoint, linearly_decaying_epsilon, plot_dict_losses, matplotlib_plot_all
 from env import Environment
 from replay import ReplayMemory
 import config
-
-#def pt_latent_learn(latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
-#    #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
-#    #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
-#    # dont normalize because we are using embedding
-#    latent_states = torch.LongTensor(latent_states).to(info['DEVICE'])
-#    latent_next_states = torch.LongTensor(latent_next_states).to(info['DEVICE'])
-#    rewards = torch.Tensor(rewards).to(info['DEVICE'])
-#    actions = torch.LongTensor(actions).to(info['DEVICE'])
-#    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
-#    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
-#    # min history to learn is 200,000 frames in dqn - 50000 steps
-#    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
-#    opt.zero_grad()
-#    q_policy_vals = mb_policy_net(latent_states, None)
-#    next_q_target_vals = mb_target_net(latent_next_states, None)
-#    next_q_policy_vals = mb_policy_net(latent_next_states, None)
-#    cnt_losses = []
-#    for k in range(info['N_ENSEMBLE']):
-#        #TODO finish masking
-#        total_used = torch.sum(masks[:,k])
-#        if total_used > 0.0:
-#            next_q_vals = next_q_target_vals[k].data
-#            if info['DOUBLE_DQN']:
-#                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
-#                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
-#            else:
-#                next_qs = next_q_vals.max(1)[0] # max returns a pair
-#
-#            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
-#            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
-#            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
-#            full_loss = masks[:,k]*l1loss
-#            loss = torch.sum(full_loss/total_used)
-#            cnt_losses.append(loss)
-#            losses[k] = loss.cpu().detach().item()
-#
-#    loss = sum(cnt_losses)/info['N_ENSEMBLE']
-#    loss.backward()
-#    for param in mb_policy_net.core_net.parameters():
-#        if param.grad is not None:
-#            # divide grads in core
-#            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
-#    nn.utils.clip_grad_norm_(mb_policy_net.parameters(), info['CLIP_GRAD'])
-#    opt.step()
-#    return np.mean(losses)
-
 
 def handle_checkpoint(cnt):
     st = time.time()
@@ -78,8 +29,8 @@ def handle_checkpoint(cnt):
     state = {'info':info,
              'optimizer':opt.state_dict(),
              'cnt':cnt,
-             'policy_net_state_dict':mb_policy_net.state_dict(),
-             'target_net_state_dict':mb_target_net.state_dict(),
+             'policy_net_state_dict':policy_net.state_dict(),
+             'target_net_state_dict':target_net.state_dict(),
              'perf':perf,
             }
     filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
@@ -111,64 +62,124 @@ def get_action(policy_net, state, active_head=None):
         action = data.most_common(1)[0][0]
     return action, torch.stack(vals)[:,0].detach().cpu().numpy()
 
-def kl_latent_learn(step_number):
-    _states, _actions, _rewards, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
-    states = full_state_norm_function(_states)[0]
-    latent_states = mb_state_norm_function(torch.Tensor(_latent_states))
-    expert_policy_net.eval()
-    with torch.no_grad():
-        expert_values = expert_policy_net(states, None)
-    mb_q_policy_vals = mb_policy_net(latent_states, None)
-    # referenced -
-    # https://github.com/NervanaSystems/distiller/blob/master/distiller/knowledge_distillation.py#L148
-    distillation_losses = []
-    for head in range(info['N_ENSEMBLE']):
-        teacher_probs = F.softmax(expert_values[head], dim=1)
-        student_log_probs = F.log_softmax(mb_q_policy_vals[head], dim=1)
-        dloss = F.kl_div(student_log_probs, teacher_probs, reduction='sum')/teacher_probs.shape[0]
-        distillation_losses.append(dloss)
 
-    loss = sum(distillation_losses)/info['N_ENSEMBLE']
+#def pt_get_latent_action(latent_state, active_head=None):
+#    # comes in as vq
+#    #vals = policy_net(latent_state[None].float().to(info['DEVICE'])/float(info['NUM_K']), active_head)
+#    # goes in with channels = 0
+#    vals = policy_net(latent_state.long().to(info['DEVICE']), active_head)
+#    if active_head is not None:
+#        action = torch.argmax(vals, dim=1).item()
+#        return action
+#    else:
+#        # vote
+#        acts = [torch.argmax(vals[h],dim=1).item() for h in range(info['N_ENSEMBLE'])]
+#        print(acts)
+#        data = Counter(acts)
+#        action = data.most_common(1)[0][0]
+#        return action
+
+def pt_latent_learn():# latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
+    #latent_states = torch.Tensor(latent_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
+    #latent_next_states = torch.Tensor(latent_next_states[:,-1:].astype(np.float)/float(info['NUM_K'])).to(info['DEVICE'])
+    # dont normalize because we are using embedding
+    _states, _actions, _rewards, _next_states, _terminal_flags, _masks, _latent_states, _latent_next_states = replay_memory.get_minibatch(info['BATCH_SIZE'])
+    latent_states = torch.LongTensor(_latent_states).to(info['DEVICE'])
+    latent_next_states = torch.LongTensor(_latent_next_states).to(info['DEVICE'])
+    rewards = torch.Tensor(_rewards).to(info['DEVICE'])
+    actions = torch.LongTensor(_actions).to(info['DEVICE'])
+    terminal_flags = torch.Tensor(_terminal_flags.astype(np.int)).to(info['DEVICE'])
+    masks = torch.FloatTensor(_masks.astype(np.int)).to(info['DEVICE'])
+    # min history to learn is 200,000 frames in dqn - 50000 steps
+    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
+    opt.zero_grad()
+    q_policy_vals = policy_net(latent_states, None)
+    next_q_target_vals = target_net(latent_next_states, None)
+    next_q_policy_vals = policy_net(latent_next_states, None)
+    cnt_losses = []
+    for k in range(info['N_ENSEMBLE']):
+        #TODO finish masking
+        total_used = torch.sum(masks[:,k])
+        if total_used > 0.0:
+            next_q_vals = next_q_target_vals[k].data
+            if info['DOUBLE_DQN']:
+                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
+                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
+            else:
+                next_qs = next_q_vals.max(1)[0] # max returns a pair
+
+            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
+            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
+            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
+            full_loss = masks[:,k]*l1loss
+            loss = torch.sum(full_loss/total_used)
+            cnt_losses.append(loss)
+            losses[k] = loss.cpu().detach().item()
+
+    loss = sum(cnt_losses)/info['N_ENSEMBLE']
     loss.backward()
-    for param in mb_policy_net.core_net.parameters():
+    for param in policy_net.core_net.parameters():
         if param.grad is not None:
             # divide grads in core
             param.grad.data *=1.0/float(info['N_ENSEMBLE'])
-    nn.utils.clip_grad_norm_(mb_policy_net.parameters(), info['CLIP_GRAD'])
+    nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
     opt.step()
+    return np.mean(losses)
 
-    if not step_number%100:
-        print("VALUES")
-        print(mb_q_policy_vals[0][0])
-        print(expert_values[0][0])
-        print(float(loss))
-    if not step_number%1000:
-        ind = np.random.randint(0,_latent_states.shape[0])
-        hx_d,pa,pr=vqenv.decode_vq_from_latents(latent_states[ind].cpu())
-        hmean = (vqenv.sample_mean_from_latents(hx_d)[:,0]*255).astype(np.uint8)
-        f,ax = plt.subplots(2,4, figsize=(4.5,1.5))
-        for i in range(hmean.shape[0]):
-            expert_action, expert_state_value = get_action(policy_net=expert_policy_net, state=states[ind][None], active_head=None)
-            mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=latent_states[ind][None], active_head=None)
-            ax[0,i].imshow(hmean[i])
-            ax[0,i].axis('off')
-            ax[1,i].imshow(_states[ind][i])
-            ax[1,i].axis('off')
-        ax[0,i].set_title('e%sm%s' %(expert_action, mb_action))
-        fname = os.path.join(model_base_filedir, "train_step%010d.png"%step_number)
-        plt.savefig(fname)
-        plt.close()
-    return float(loss)
+def ptlearn(states, actions, rewards, next_states, terminal_flags, masks):
+    states = torch.Tensor(states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
+    next_states = torch.Tensor(next_states.astype(np.float)/info['NORM_BY']).to(info['DEVICE'])
+    rewards = torch.Tensor(rewards).to(info['DEVICE'])
+    actions = torch.LongTensor(actions).to(info['DEVICE'])
+    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(info['DEVICE'])
+    masks = torch.FloatTensor(masks.astype(np.int)).to(info['DEVICE'])
+    # min history to learn is 200,000 frames in dqn - 50000 steps
+    losses = [0.0 for _ in range(info['N_ENSEMBLE'])]
+    opt.zero_grad()
+    q_policy_vals = policy_net(states, None)
+    next_q_target_vals = target_net(next_states, None)
+    next_q_policy_vals = policy_net(next_states, None)
+    cnt_losses = []
+    for k in range(info['N_ENSEMBLE']):
+        #TODO finish masking
+        total_used = torch.sum(masks[:,k])
+        if total_used > 0.0:
+            next_q_vals = next_q_target_vals[k].data
+            if info['DOUBLE_DQN']:
+                next_actions = next_q_policy_vals[k].data.max(1, True)[1]
+                next_qs = next_q_vals.gather(1, next_actions).squeeze(1)
+            else:
+                next_qs = next_q_vals.max(1)[0] # max returns a pair
 
-def train_student(step_number, last_save):
+            preds = q_policy_vals[k].gather(1, actions[:,None]).squeeze(1)
+            targets = rewards + info['GAMMA'] * next_qs * (1-terminal_flags)
+            l1loss = F.smooth_l1_loss(preds, targets, reduction='mean')
+            full_loss = masks[:,k]*l1loss
+            loss = torch.sum(full_loss/total_used)
+            cnt_losses.append(loss)
+            losses[k] = loss.cpu().detach().item()
+
+    loss = sum(cnt_losses)/info['N_ENSEMBLE']
+    loss.backward()
+    for param in policy_net.core_net.parameters():
+        if param.grad is not None:
+            # divide grads in core
+            param.grad.data *=1.0/float(info['N_ENSEMBLE'])
+    nn.utils.clip_grad_norm_(policy_net.parameters(), info['CLIP_GRAD'])
+    opt.step()
+    return np.mean(losses)
+#
+def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
+        avg_eval_reward = evaluate(step_number)
+        perf['eval_rewards'].append(avg_eval_reward)
+        perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
         epoch_frame = 0
-        same = [0 for pp in range(1000)]
         while epoch_frame < info['EVAL_FREQUENCY']:
             terminal = False
             life_lost = True
@@ -183,23 +194,18 @@ def train_student(step_number, last_save):
             active_head = heads[0]
             ptloss_list = []
             print("Gathering data with head=%s"%active_head)
-            # keep reward below 10 because the vq was not trained on a
-            # strong agent's data
             while not terminal:
                # eps
+                #if step_number < info['MIN_STEPS_TO_LEARN'] and random_state.rand() < info['EPS_INIT']:
+                #    action = random_state.randint(0, env.num_actions)
+                #else:
                 eps = random_state.rand()
                 if eps < info['EPS_INIT']:
                     action = random_state.randint(0, env.num_actions)
-                    #print(step_number, "random action train", action)
+                    print("random action eval", action)
                 else:
-                    expert_action, expert_state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=active_head)
-                    mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=active_head)
-                    action = expert_action
-                    if mb_action==expert_action:
-                        same.append(1)
-                    else:
-                        same.append(0)
-                    same = same[1:]
+                    #action, value = pt_get_latent_action(latent_state=latent_hist_state, active_head=active_head)
+                    action, state_value = get_action(policy_net=policy_net, state=mb_state_norm_function(latent_hist_state), active_head=active_head)
                 next_state, reward, life_lost, terminal = env.step(action)
                 next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
                 # Store transition in the replay memory
@@ -208,23 +214,33 @@ def train_student(step_number, last_save):
                                              frame=next_state[-1],
                                              reward=np.sign(reward),
                                              terminal=life_lost,
-                                             latent_frame=next_latent_state[0].cpu().numpy())
+                                             latent_frame=next_latent_state[0].cpu().numpy()
+                                             )
+                # dump oldest state
                 latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
 
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
                 state = next_state
+                #if step_number == info['MIN_STEPS_TO_LEARN']:
+                #    if info['VQ_MODEL_LOADPATH'] == '':
+                #        # need to write npz file and train vqvae on it
+                #        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
+                #        replay_memory.save_buffer(buff_filename)
+                #        # now the vq is trained -
+                #        vqenv.train_vq_model(buff_filename+'.npz')
+
                 if step_number > info['MIN_STEPS_TO_LEARN']:
                     if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                        ptloss = kl_latent_learn(step_number)
+                        #_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks,_latent_states, _latent_next_states  = replay_memory.get_minibatch(info['BATCH_SIZE'])
+                        ptloss = pt_latent_learn()#_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
                         ptloss_list.append(ptloss)
                     if step_number % info['TARGET_UPDATE'] == 0:
                         print("++++++++++++++++++++++++++++++++++++++++++++++++")
                         print('updating target network at %s'%step_number)
-                        mb_target_net.load_state_dict(mb_policy_net.state_dict())
+                        target_net.load_state_dict(policy_net.state_dict())
             print('END EPISODE', epoch_num, step_number, episode_reward_sum)
-            print("SAME/1000", np.sum(same))
             et = time.time()
             ep_time = et-st
             perf['steps'].append(step_number)
@@ -254,19 +270,6 @@ def train_student(step_number, last_save):
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
             epoch_num += 1
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
-        matplotlib_plot_all(perf, model_base_filedir)
-
-def reconstruct_from_latents(x_ds):
-    pt_latents = torch.stack(x_ds)[:,0]
-    return list((vqenv.sample_mean_from_latents(pt_latents)[:,0]*255).astype(np.uint8))
-
-def create_video(frames, name, train_step_number, last_index, episode_reward_sum):
-    if len(frames):
-        tmp4_fname = os.path.join(model_base_filedir, "ATARI_step%010d_%s_%06d_%03d.mp4"%(train_step_number, name, last_index, episode_reward_sum))
-        vwrite(tmp4_fname, np.array(frames, dtype=np.uint8))
 
 def evaluate(step_number):
     print("""
@@ -274,9 +277,7 @@ def evaluate(step_number):
          ####### Evaluation ######
          #########################
          """)
-    # with 9000 steps - expert gets about 250 pts
     eval_rewards = []
-    # only run one
     for eval_run in range(info['NUM_EVAL_EPISODES']):
         state = env.reset()
         latent_state, x_d = vqenv.get_state_representation(state[None])
@@ -299,20 +300,14 @@ def evaluate(step_number):
             if eps < info['EPS_EVAL']:
                action = random_state.randint(0, env.num_actions)
                print("random action eval", action)
-               mb_action, expert_action = -1, -1
-
             else:
-               expert_action, expert_state_value = get_action(policy_net=expert_policy_net, state=full_state_norm_function(state), active_head=None)
-               mb_action, mb_state_value = get_action(policy_net=mb_policy_net, state=mb_state_norm_function(latent_hist_state), active_head=None)
-               print(expert_state_value)
-               print(mb_state_value)
-               action = mb_action
+               action, mb_state_value = get_action(policy_net=policy_net, state=mb_state_norm_function(latent_hist_state), active_head=None)
                #action = expert_action
-            actions.append((expert_action, mb_action))
+            actions.append(action)
             next_state, reward, life_lost, terminal = env.step(action)
             if not evaluate_step_number%100:
-                print('eval,step,mb_action,expert_action,reward')
-                print(evaluate_step_number,mb_action,expert_action,reward)
+                print('eval,step,action,reward')
+                print(evaluate_step_number,action,reward)
             next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
             latent_hist_state = torch.cat((latent_hist_state[:,1:], next_latent_state[:,None]), dim=1)
             #latent_hist_state is of size [1,4,10,10]
@@ -323,7 +318,7 @@ def evaluate(step_number):
                     f,ax = plt.subplots(2,4, figsize=(4.5,1.5))
                     for i in range(hmean.shape[0]):
                         ax[0,i].imshow(hmean[i])
-                        ax[0,i].set_title('e%sm%s' %(actions[i-4][0], actions[i-4][1]))
+                        ax[0,i].set_title('a%s' %(actions[i-4]))
                         ax[0,i].axis('off')
                         ax[1,i].imshow(next_state[i])
                         ax[1,i].axis('off')
@@ -337,21 +332,21 @@ def evaluate(step_number):
                 # add current observation
                 frames_for_gif.append(cv2.resize(env.ale.getScreenRGB(), (80, 100)).astype(np.uint8) )
                 x_ds.append(x_d)
-                if len(x_ds) >= 48:
+                if len(x_ds) >= info['BATCH_SIZE']:
                     # todo - stop converting back and forth from np and
                     # precalculate array sizes
                     rec_frames_for_gif.extend(reconstruct_from_latents(x_ds))
                     x_ds = []
 
-                if len(frames_for_gif) >= 500:
-                    # create videos from previous 500 frames
+                if len(frames_for_gif) >= 1000:
+                    # create videos from previous 1000 frames
                     create_video(frames_for_gif, 'obs', step_number, evaluate_step_number, episode_reward_sum)
                     create_video(rec_frames_for_gif, 'rec', step_number, evaluate_step_number, episode_reward_sum)
                     # reset lists
                     frames_for_gif = []
                     rec_frames_for_gif = []
 
-            results_for_eval.append("%s, %s, %s, %s, %s" %(mb_action, expert_action, reward, life_lost, terminal))
+            results_for_eval.append("%s, %s, %s, %s" %(action, reward, life_lost, terminal))
             if not episode_steps%100:
                 print('eval', episode_steps, episode_reward_sum)
             state = next_state
@@ -375,6 +370,16 @@ def evaluate(step_number):
         avg_reward /= float(len(eval_rewards))
     return avg_reward
 
+def reconstruct_from_latents(x_ds):
+    pt_latents = torch.stack(x_ds)[:,0]
+    return list((vqenv.sample_mean_from_latents(pt_latents)[:,0]*255).astype(np.uint8))
+
+def create_video(frames, name, train_step_number, last_index, episode_reward_sum):
+    if len(frames):
+        tmp4_fname = os.path.join(model_base_filedir, "ATARI_step%010d_%s_%06d_%03d.mp4"%(train_step_number, name, last_index, episode_reward_sum))
+        vwrite(tmp4_fname, np.array(frames, dtype=np.uint8))
+
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
@@ -389,36 +394,28 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/breakout.bin', # gym prefix
+        "GAME":'roms/freeway.bin', # gym prefix
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        #"NAME":'MBReward_RUN_rerunwithnewstatemanager', # start files with name
-        #"NAME":'MBReward_RUN_rerunwithnewstatemanager_fullytrainedvqvae_lower_checkpoint', # start files with name
-        #"NAME":'MBReward_embedding_hist_SEED14_GAMMAp99_prior1MLReps', # start files with name
-        "NAME":"MBBreakout_learn_from_expert_restrict_reward",
-       # "NAME":"MBBreakout_expert_ball",
-        #"NAME":"DEBUG",
-        "EXPERT":"../../model_savedir/BreakoutNewActionAnnealingPRIOR00/BreakoutNewActionNoAnnealingPRIOR_0002501995q.pkl",
-        #"REPLAY_BUFFER_LOADPATH":"../../model_savedir/BreakoutNewActionAnnealingPRIOR00/BreakoutNewActionNoAnnealingPRIOR_0001501367q_train_buffer.npz",
+        "NAME":"MBFreeway_replay",
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
-        "PRIOR_SCALE":1, # what to scale prior by
+        "PRIOR_SCALE":10, # what to scale prior by
         "N_ENSEMBLE":9, # number of bootstrap heads to use. when 1, this is a normal dqn
         "BERNOULLI_PROBABILITY": 1.0, # Probability of experience to go to each head - if 1, every experience goes to every head
         "TARGET_UPDATE":10000, # how often to update target network
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":1000, # min steps needed to start training neural nets
-        "LEARN_EVERY_STEPS":1, # updates every 4 steps in osband
+        "MIN_STEPS_TO_LEARN":25000, # min steps needed to start training neural nets
+        "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
-        #"EPS_INIT":0.01,
-        "EPS_INIT":0.1,
+        "EPS_INIT":0.01,
         "EPS_FINAL":0.01, # 0.01 in osband
-        "EPS_EVAL":0.1, # 0 in osband, .05 in others....
+        "EPS_EVAL":0.0, # 0 in osband, .05 in others....
         "NUM_EVAL_EPISODES":1, # num examples to average in eval
         #"BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "BUFFER_SIZE":int(500000), # Buffer size for experience replay
@@ -427,18 +424,18 @@ if __name__ == '__main__':
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
         "EVAL_FREQUENCY":50000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
-        #"ADAM_LEARNING_RATE":6.25e-5,
-        "ADAM_LEARNING_RATE":1e-5,
-        "RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
-        "RMS_DECAY":0.95,
-        "RMS_MOMENTUM":0.0,
-        "RMS_EPSILON":0.00001,
-        "RMS_CENTERED":True,
+        "ADAM_LEARNING_RATE":6.25e-5,
+        #"ADAM_LEARNING_RATE":1e-4,
+        #"RMS_LEARNING_RATE": 0.00025, # according to paper = 0.00025
+        #"RMS_DECAY":0.95,
+        #"RMS_MOMENTUM":0.0,
+        #"RMS_EPSILON":0.00001,
+        #"RMS_CENTERED":True,
         "HISTORY_SIZE":4, # how many past frames to use for state input
         "N_EPOCHS":90000,  # Number of episodes to run
         "BATCH_SIZE":64, # Batch size to use for learning
         "GAMMA":.99, # Gamma weight in Q update
-        "PLOT_EVERY_EPISODES": 100,
+        "PLOT_EVERY_EPISODES": 5,
         "CLIP_GRAD":5, # Gradient clipping setting
         "SEED":14,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
@@ -446,8 +443,7 @@ if __name__ == '__main__':
         "RESHAPE_SIZE":10*10*16,
         "START_TIME":time.time(),
         "MAX_STEPS":int(50e6), # 50e6 steps is 200e6 frames
-        #"MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
-        "MAX_EPISODE_STEPS":300, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
+        "MAX_EPISODE_STEPS":27000, # Orig dqn give 18k steps, Rainbow seems to give 27k steps
         "FRAME_SKIP":4, # deterministic frame skips to match deepmind
         "MAX_NO_OP_FRAMES":30, # random number of noops applied to beginning of each episode
         "DEAD_AS_END":True, # do you send finished=true to agent while training when it loses a life
@@ -458,7 +454,9 @@ if __name__ == '__main__':
         #"VQ_MODEL_LOADPATH":'../../model_savedir/MBvqbt_reward_0041007872ex.pt',
         #"VQ_MODEL_LOADPATH":'../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0035503692ex.pt',
         #"VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout00/BreakoutVQ02/BreakoutVQ_0049509504ex.pt",
-        "VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ02/BreakoutVQ_0103269824ex.pt",
+        #"VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ02/BreakoutVQ_0103019776ex.pt",
+        #"VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ02/BreakoutVQ_0103019776ex.pt",
+        "VQ_MODEL_LOADPATH":"../../model_savedir/FRANKbootstrap_priorfreeway00/vqdiffactintreward512q00/vqdiffactintreward512q_0035503692ex.pt",
         "BETA":0.25,
         "ALPHA_REC":1.0,
         "ALPHA_ACT":2.0,
@@ -500,15 +498,6 @@ if __name__ == '__main__':
                                  bernoulli_probability=info['BERNOULLI_PROBABILITY'],
                                  latent_frame_height=info['LATENT_SIZE'],
                                  latent_frame_width=info['LATENT_SIZE'])
-   # latent_replay_memory = ReplayMemory(action_space=env.action_space,
-   #                              size=info['BUFFER_SIZE'],
-   #                              frame_height=info['LATENT_SIZE'],
-   #                              frame_width=info['LATENT_SIZE'],
-   #                              agent_history_length=info['HISTORY_SIZE'],
-   #                              batch_size=info['BATCH_SIZE'],
-   #                              num_heads=info['N_ENSEMBLE'],
-   #                              bernoulli_probability=info['BERNOULLI_PROBABILITY'])
-
 
     random_state = np.random.RandomState(info["SEED"])
 
@@ -564,31 +553,30 @@ if __name__ == '__main__':
     info['model_base_filepath'] = model_base_filepath
     info['num_actions'] = env.num_actions
     info['action_space'] = range(info['num_actions'])
-
     vqenv = VQEnv(info, vq_model_loadpath=info['VQ_MODEL_LOADPATH'], device='cpu')
 
-    mb_policy_net = mbEnsembleNet(n_ensemble=info['N_ENSEMBLE'],
+    policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                       num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
-    mb_target_net = mbEnsembleNet(n_ensemble=info['N_ENSEMBLE'],
+    target_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                       n_actions=env.num_actions,
                                       reshape_size=info['RESHAPE_SIZE'],
                                       num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                       num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
     if info['PRIOR']:
-        mb_prior_net = mbEnsembleNet(n_ensemble=info['N_ENSEMBLE'],
+        prior_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],
                                 n_actions=env.num_actions,
                                 reshape_size=info['RESHAPE_SIZE'],
                                 num_channels=info['HISTORY_SIZE'], dueling=info['DUELING'],
                                 num_clusters=vqenv.vq_info['NUM_K']).to(info['DEVICE'])
 
         print("using randomized prior")
-        mb_policy_net = mbNetWithPrior(mb_policy_net, mb_prior_net, info['PRIOR_SCALE'])
-        mb_target_net = mbNetWithPrior(mb_target_net, mb_prior_net, info['PRIOR_SCALE'])
+        policy_net = NetWithPrior(policy_net, prior_net, info['PRIOR_SCALE'])
+        target_net = NetWithPrior(target_net, prior_net, info['PRIOR_SCALE'])
 
-    mb_target_net.load_state_dict(mb_policy_net.state_dict())
+    target_net.load_state_dict(policy_net.state_dict())
     # create optimizer
     #opt = optim.RMSprop(policy_net.parameters(),
     #                    lr=info["RMS_LEARNING_RATE"],
@@ -596,41 +584,23 @@ if __name__ == '__main__':
     #                    eps=info["RMS_EPSILON"],
     #                    centered=info["RMS_CENTERED"],
     #                    alpha=info["RMS_DECAY"])
-    opt = optim.Adam(mb_policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
+    opt = optim.Adam(policy_net.parameters(), lr=info['ADAM_LEARNING_RATE'])
 
+    if args.model_loadpath is not '':
+        # what about random states - they will be wrong now???
+        # TODO - what about target net update cnt
+        target_net.load_state_dict(model_dict['target_net_state_dict'])
+        policy_net.load_state_dict(model_dict['policy_net_state_dict'])
+        opt.load_state_dict(model_dict['optimizer'])
+        print("loaded model state_dicts")
+        if args.buffer_loadpath == '':
+            args.buffer_loadpath = args.model_loadpath.replace('.pkl', '_train_buffer.npz')
+            print("auto loading buffer from:%s" %args.buffer_loadpath)
+            try:
+                replay_memory.load_buffer(args.buffer_loadpath)
+            except Exception as e:
+                print(e)
+                print('not able to load from buffer: %s. exit() to continue with empty buffer' %args.buffer_loadpath)
 
-
-    ########################################expert#############################
-    expert_model_dict = torch.load(info['EXPERT'])
-    expert_info = expert_model_dict['info']
-    if 'RESHAPE_SIZE' not in expert_info.keys():
-        expert_info['RESHAPE_SIZE'] = 64*7*7
-    expert_policy_net = EnsembleNet(n_ensemble=expert_info['N_ENSEMBLE'],
-                                      n_actions=env.num_actions,
-                                      reshape_size=expert_info['RESHAPE_SIZE'],
-                                      num_channels=expert_info['HISTORY_SIZE'],
-                                      dueling=expert_info['DUELING'],
-                                      ).to(info['DEVICE'])
-    expert_target_net = EnsembleNet(n_ensemble=expert_info['N_ENSEMBLE'],
-                                      n_actions=env.num_actions,
-                                      reshape_size=expert_info['RESHAPE_SIZE'],
-                                      num_channels=expert_info['HISTORY_SIZE'],
-                                      dueling=expert_info['DUELING'],
-                                      ).to(info['DEVICE'])
-    if info['PRIOR']:
-        expert_prior_net = EnsembleNet(n_ensemble=expert_info['N_ENSEMBLE'],
-                                n_actions=env.num_actions,
-                                reshape_size=expert_info['RESHAPE_SIZE'],
-                                num_channels=expert_info['HISTORY_SIZE'], dueling=expert_info['DUELING'],
-                                ).to(info['DEVICE'])
-
-        print("using randomized prior")
-        expert_policy_net = NetWithPrior(expert_policy_net, expert_prior_net, expert_info['PRIOR_SCALE'])
-        expert_target_net = NetWithPrior(expert_target_net, expert_prior_net, expert_info['PRIOR_SCALE'])
-
-    expert_target_net.load_state_dict(expert_policy_net.state_dict())
-    expert_target_net.load_state_dict(expert_model_dict['target_net_state_dict'])
-    expert_policy_net.load_state_dict(expert_model_dict['policy_net_state_dict'])
-
-    train_student(start_step_number, start_last_save)
+    train_sim(start_step_number, start_last_save)
 
