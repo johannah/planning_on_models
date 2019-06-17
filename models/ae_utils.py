@@ -1,11 +1,11 @@
 # base functions originally from https://github.com/pclucas14/pixel-cnn-pp/blob/master/utils.py#L34
-import pdb
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.nn.utils import weight_norm as wn
 import numpy as np
+from lstm_utils import plot_dict_losses
 from IPython import embed
 
 def to_scalar(arr):
@@ -295,6 +295,48 @@ def save_checkpoint(state, filename='model.pt'):
     print("starting save of model %s" %filename)
     torch.save(state, filename)
     print("finished save of model %s" %filename)
+
+
+def handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses, do_plot=True):
+    info['vq_train_losses_list'].append(avg_train_losses)
+    info['vq_train_cnts'].append(train_cnt)
+    info['vq_valid_losses_list'].append(avg_valid_losses)
+    info['vq_valid_cnts'].append(train_cnt)
+    print('examples %010d loss' %train_cnt, info['vq_train_losses_list'][-1])
+    # plot
+    if do_plot:
+        info['vq_last_plot'] = train_cnt
+        rolling = 3
+        if len(info['vq_train_losses_list'])<rolling*3:
+            rolling = 0
+        train_losses = np.array(info['vq_train_losses_list'])
+        valid_losses = np.array(info['vq_valid_losses_list'])
+        for i in range(valid_losses.shape[1]):
+            plot_name = info['vq_model_base_filepath'] + "_%010d_loss%s.png"%(train_cnt, i)
+            print("plotting", os.path.split(plot_name)[1])
+            plot_dict = {
+                         'valid loss %s'%i:{'index':info['vq_valid_cnts'],
+                                            'val':valid_losses[:,i]},
+                         'train loss %s'%i:{'index':info['vq_train_cnts'],
+                                            'val':train_losses[:,i]},
+                        }
+            plot_dict_losses(plot_dict, name=plot_name, rolling_length=rolling)
+        tot_plot_name = info['vq_model_base_filepath'] + "_%010d_loss.png"%train_cnt
+        tot_plot_dict = {
+                         'valid loss':{'index':info['vq_valid_cnts'],
+                                       'val':valid_losses.sum(axis=1)},
+                         'train loss':{'index':info['vq_train_cnts'],
+                                        'val':train_losses.sum(axis=1)},
+                    }
+        plot_dict_losses(tot_plot_dict, name=tot_plot_name, rolling_length=rolling)
+        print("plotting", os.path.split(tot_plot_name)[1])
+    return info
+
+
+def reshape_input(ss):
+    # reshape 84x84 because needs to be divisible by 2 for each of the 4 layers
+    return ss[:,:,2:-2,2:-2]
+
 
 #
 #def load_part_of_model(model, path):

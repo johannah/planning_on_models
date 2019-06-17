@@ -15,11 +15,12 @@ from IPython import embed
 def cv_preprocess_frame(observ, output_size):
     gray = cv2.cvtColor(observ, cv2.COLOR_RGB2GRAY)
     #output = cv2.resize(gray[34:,-16], (output_size, output_size))
-    #output_linear = cv2.resize(gray, (output_size, output_size), interpolation=cv2.INTER_LINEAR)
+    output_linear = cv2.resize(gray, (output_size, output_size), interpolation=cv2.INTER_LINEAR)
     # TODO - TODO - need to change from NEAREST TO LINEAR - balls in Breakout
     # vanish at times with NEAREST but only become lighter shades with LINEAR
-    output_nearest = cv2.resize(gray, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
-    return output_nearest
+    #output_nearest = cv2.resize(gray, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
+    #return output_nearest
+    return output_linear
 
 class Environment(object):
     def __init__(self,

@@ -41,7 +41,6 @@ def handle_checkpoint(cnt):
     print("finished checkpoint", time.time()-st)
     return cnt
 
-
 def full_state_norm_function(state):
     return  torch.Tensor(state.astype(np.float)/info['NORM_BY'])[None,:].to(info['DEVICE'])
 
@@ -173,9 +172,9 @@ def train_sim(step_number, last_save):
     """Contains the training and evaluation loops"""
     epoch_num = len(perf['steps'])
     while step_number < info['MAX_STEPS']:
-        avg_eval_reward = evaluate(step_number)
-        perf['eval_rewards'].append(avg_eval_reward)
-        perf['eval_steps'].append(step_number)
+        #avg_eval_reward = evaluate(step_number)
+        #perf['eval_rewards'].append(avg_eval_reward)
+        #perf['eval_steps'].append(step_number)
         ########################
         ####### Training #######
         ########################
@@ -228,10 +227,15 @@ def train_sim(step_number, last_save):
                 #        # need to write npz file and train vqvae on it
                 #        buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
                 #        replay_memory.save_buffer(buff_filename)
+                #        embed()
                 #        # now the vq is trained -
-                #        vqenv.train_vq_model(buff_filename+'.npz')
+                #        #vqenv.train_vq_model(buff_filename+'.npz')
 
                 if step_number > info['MIN_STEPS_TO_LEARN']:
+                    buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%step_number)
+                    replay_memory.save_buffer(buff_filename)
+                    embed()
+
                     if step_number % info['LEARN_EVERY_STEPS'] == 0:
                         #_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks,_latent_states, _latent_next_states  = replay_memory.get_minibatch(info['BATCH_SIZE'])
                         ptloss = pt_latent_learn()#_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
@@ -398,7 +402,8 @@ if __name__ == '__main__':
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
-        "NAME":"MBFreeway_replay",
+        #"NAME":"MBFreeway_replay",
+        "NAME":"MBFreeway_data",
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -409,7 +414,7 @@ if __name__ == '__main__':
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":25000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":5000, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "NORM_BY":255.,  # divide the float(of uint) by this number to normalize - max val of data is 255
         # I think this randomness might need to be higher
@@ -419,10 +424,10 @@ if __name__ == '__main__':
         "NUM_EVAL_EPISODES":1, # num examples to average in eval
         #"BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "BUFFER_SIZE":int(500000), # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":500000, # how often to write pkl of model and npz of data buffer
+        "CHECKPOINT_EVERY_STEPS":50000, # how often to write pkl of model and npz of data buffer
         #"CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
-        "EVAL_FREQUENCY":50000, # how often to run evaluation episodes
+        "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
         #"EVAL_FREQUENCY":1, # how often to run evaluation episodes
         "ADAM_LEARNING_RATE":6.25e-5,
         #"ADAM_LEARNING_RATE":1e-4,
@@ -437,7 +442,7 @@ if __name__ == '__main__':
         "GAMMA":.99, # Gamma weight in Q update
         "PLOT_EVERY_EPISODES": 5,
         "CLIP_GRAD":5, # Gradient clipping setting
-        "SEED":14,
+        "SEED":142,
         "RANDOM_HEAD":-1, # just used in plotting as demarcation
         "OBS_SIZE":(84,84),
         "RESHAPE_SIZE":10*10*16,
@@ -474,6 +479,9 @@ if __name__ == '__main__':
         "LATENT_SIZE":10,
         "VQ_SAVENAME":"VQ",
         "VQ_GAMMA":0.9,
+        "FORWARD_DROPOUT":0.25,
+        "FORWARD_LEARNING_RATE":1e-5,
+        "FORWARD_BATCH_SIZE":0.25,
     }
 
     info['FAKE_ACTS'] = [info['RANDOM_HEAD'] for x in range(info['N_ENSEMBLE'])]
@@ -553,6 +561,7 @@ if __name__ == '__main__':
     info['model_base_filepath'] = model_base_filepath
     info['num_actions'] = env.num_actions
     info['action_space'] = range(info['num_actions'])
+
     vqenv = VQEnv(info, vq_model_loadpath=info['VQ_MODEL_LOADPATH'], device='cpu')
 
     policy_net = EnsembleNet(n_ensemble=info['N_ENSEMBLE'],

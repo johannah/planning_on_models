@@ -128,116 +128,116 @@ def remove_chicken(gimg):
     gimg[chicken] = 0
     return gimg, chicken
 
-class FroggerDataset(Dataset):
-    def __init__(self, root_dir, transform=None, limit=None, max_pixel_used=254.0, min_pixel_used=0.0):
-        self.root_dir = root_dir
-        self.transform = transform
-        search_path = os.path.join(self.root_dir, '*.png')
-        self.max_pixel_used = max_pixel_used
-        self.min_pixel_used = min_pixel_used
-        ss = sorted(glob(search_path))
-        self.indexes = [s for s in ss if 'gen' not in s]
-        print("found %s files in %s" %(len(self.indexes), search_path))
-
-        if not len(self.indexes):
-            print("Error no files found at {}".format(search_path))
-            sys.exit()
-        if limit > 0:
-            self.indexes = self.indexes[:min(len(self.indexes), limit)]
-            print('limited to first %s examples' %len(self.indexes))
-
-    def __len__(self):
-        return len(self.indexes)
-
-    def __getitem__(self, idx):
-        img_name = self.indexes[idx]
-        image = imread(img_name)
-        if len(image.shape) == 2:
-            image = image[:,:,None].astype(np.float32)
-        if self.transform is not None:
-            # bt 0 and 1
-            image = (self.transform(image)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
-
-        return image,img_name
-
-
-class FreewayForwardDataset(Dataset):
-    def __init__(self,  data_file, number_condition=4,
-                        steps_ahead=1, limit=None, batch_size=300,
-                        max_pixel_used=254.0, min_pixel_used=0.0, augment_file="None",
-                        rdn_num=3949):
-
-        self.rdn = np.random.RandomState(rdn_num)
-        if augment_file is not "None":
-            self.do_augment = True
-        else:
-            self.do_augment = False
-
-        # index right now is by the oldest observation needed to compute
-        # prediction
-        self.data_file = os.path.abspath(data_file)
-        self.augment_data_file = os.path.abspath(augment_file)
-        self.num_condition = int(number_condition)
-        assert(self.num_condition>0)
-        self.steps_ahead = int(steps_ahead)
-        assert(self.steps_ahead>=0)
-        self.max_pixel_used = max_pixel_used
-        self.min_pixel_used = min_pixel_used
-        self.data = np.load(self.data_file)['arr_0']
-        if self.do_augment:
-            self.augmented_data = np.load(self.augment_data_file)['arr_0']
-        _,self.data_h,self.data_w = self.data.shape
-        self.num_examples = self.data.shape[0]-(self.steps_ahead+self.num_condition)
-        # index by observation number ( last sample of conditioning )
-        # if i ask for frame 3 - return w/ steps_ahead=1
-        # x = data[0,1,2,3]
-        # y = data[4]
-        self.index_array = np.arange(self.num_condition-1, self.data.shape[0]-self.steps_ahead)
-
-    def __max__(self):
-        return max(self.index_array)
-
-    def __len__(self):
-        return self.num_examples
-
-    def __getitem__(self, idx):
-        try:
-            n = idx.shape[0]
-        except:
-            n = 1
-        dx = []
-        add_range = np.arange(-(self.num_condition-1), 1)
-        # old way which doesnt allow augmentation
-        #for i in add_range:
-        #    i_idx = idx+i
-        #    dx.append(self.data[i_idx])
-        #dx = np.array(dx).swapaxes(1,0)
-
-        if self.do_augment:
-            # choose the augmented data for the most recent observations some of
-            # the time
-            start_augment_idx = self.rdn.choice(add_range, n, replace=True)
-        else:
-            # always choose the real data
-            start_augment_idx = np.zeros((n))
-
-        for nidx, start in enumerate(idx):
-            this_sample = []
-            for i in add_range:
-                i_idx = start+i
-                if i > start_augment_idx[nidx]:
-                    pp = 'pred'
-                    this_sample.append(self.augmented_data[i_idx])
-                else:
-                    pp = 'real'
-                    this_sample.append(self.data[i_idx])
-                #print(start, i_idx, i,pp, start_augment_idx[nidx])
-            dx.append(this_sample)
-
-        dy = self.data[idx+self.steps_ahead][:,None]
-        x = (torch.FloatTensor(dx)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
-        y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
-        return x,y
+#class FroggerDataset(Dataset):
+#    def __init__(self, root_dir, transform=None, limit=None, max_pixel_used=254.0, min_pixel_used=0.0):
+#        self.root_dir = root_dir
+#        self.transform = transform
+#        search_path = os.path.join(self.root_dir, '*.png')
+#        self.max_pixel_used = max_pixel_used
+#        self.min_pixel_used = min_pixel_used
+#        ss = sorted(glob(search_path))
+#        self.indexes = [s for s in ss if 'gen' not in s]
+#        print("found %s files in %s" %(len(self.indexes), search_path))
+#
+#        if not len(self.indexes):
+#            print("Error no files found at {}".format(search_path))
+#            sys.exit()
+#        if limit > 0:
+#            self.indexes = self.indexes[:min(len(self.indexes), limit)]
+#            print('limited to first %s examples' %len(self.indexes))
+#
+#    def __len__(self):
+#        return len(self.indexes)
+#
+#    def __getitem__(self, idx):
+#        img_name = self.indexes[idx]
+#        image = imread(img_name)
+#        if len(image.shape) == 2:
+#            image = image[:,:,None].astype(np.float32)
+#        if self.transform is not None:
+#            # bt 0 and 1
+#            image = (self.transform(image)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+#
+#        return image,img_name
+#
+#
+#class FreewayForwardDataset(Dataset):
+#    def __init__(self,  data_file, number_condition=4,
+#                        steps_ahead=1, limit=None, batch_size=300,
+#                        max_pixel_used=254.0, min_pixel_used=0.0, augment_file="None",
+#                        rdn_num=3949):
+#
+#        self.rdn = np.random.RandomState(rdn_num)
+#        if augment_file is not "None":
+#            self.do_augment = True
+#        else:
+#            self.do_augment = False
+#
+#        # index right now is by the oldest observation needed to compute
+#        # prediction
+#        self.data_file = os.path.abspath(data_file)
+#        self.augment_data_file = os.path.abspath(augment_file)
+#        self.num_condition = int(number_condition)
+#        assert(self.num_condition>0)
+#        self.steps_ahead = int(steps_ahead)
+#        assert(self.steps_ahead>=0)
+#        self.max_pixel_used = max_pixel_used
+#        self.min_pixel_used = min_pixel_used
+#        self.data = np.load(self.data_file)['arr_0']
+#        if self.do_augment:
+#            self.augmented_data = np.load(self.augment_data_file)['arr_0']
+#        _,self.data_h,self.data_w = self.data.shape
+#        self.num_examples = self.data.shape[0]-(self.steps_ahead+self.num_condition)
+#        # index by observation number ( last sample of conditioning )
+#        # if i ask for frame 3 - return w/ steps_ahead=1
+#        # x = data[0,1,2,3]
+#        # y = data[4]
+#        self.index_array = np.arange(self.num_condition-1, self.data.shape[0]-self.steps_ahead)
+#
+#    def __max__(self):
+#        return max(self.index_array)
+#
+#    def __len__(self):
+#        return self.num_examples
+#
+#    def __getitem__(self, idx):
+#        try:
+#            n = idx.shape[0]
+#        except:
+#            n = 1
+#        dx = []
+#        add_range = np.arange(-(self.num_condition-1), 1)
+#        # old way which doesnt allow augmentation
+#        #for i in add_range:
+#        #    i_idx = idx+i
+#        #    dx.append(self.data[i_idx])
+#        #dx = np.array(dx).swapaxes(1,0)
+#
+#        if self.do_augment:
+#            # choose the augmented data for the most recent observations some of
+#            # the time
+#            start_augment_idx = self.rdn.choice(add_range, n, replace=True)
+#        else:
+#            # always choose the real data
+#            start_augment_idx = np.zeros((n))
+#
+#        for nidx, start in enumerate(idx):
+#            this_sample = []
+#            for i in add_range:
+#                i_idx = start+i
+#                if i > start_augment_idx[nidx]:
+#                    pp = 'pred'
+#                    this_sample.append(self.augmented_data[i_idx])
+#                else:
+#                    pp = 'real'
+#                    this_sample.append(self.data[i_idx])
+#                #print(start, i_idx, i,pp, start_augment_idx[nidx])
+#            dx.append(this_sample)
+#
+#        dy = self.data[idx+self.steps_ahead][:,None]
+#        x = (torch.FloatTensor(dx)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+#        y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+#        return x,y
 
 def find_component_proportion(data, unique):
     """
@@ -756,72 +756,72 @@ class AtariDataset(Dataset):
         relative_indexes = self.random_state.choice(self.relative_indexes, self.batch_size)
         return self.get_framediff_data(relative_indexes)
 
-# used to be Dataloader, but overloaded
-class AtariDataLoader():
-    def __init__(self, train_load_function, test_load_function,
-                 batch_size, random_number=394):
-
-        self.done = False
-        self.test_done = False
-
-        self.batch_size = batch_size
-        self.test_loader = test_load_function
-        self.train_loader = train_load_function
-        self.last_test_batch_idx = self.test_loader.index_array.min()+1
-        self.last_batch_idx = self.train_loader.index_array.min()+1
-
-        self.train_rdn = np.random.RandomState(random_number)
-        self.test_rdn = np.random.RandomState(random_number)
-
-        self.reset_batch()
-        self.num_batches = len(self.train_loader)/self.batch_size
-
-    def reset_batch(self):
-        self.unique_index_array = np.arange(self.train_loader.index_array.shape[0], dtype=np.int)
-
-    def validation_data(self):
-        batch_choice = self.test_rdn.choice(self.test_loader.index_array, self.batch_size, replace=False)
-        vx,vy = self.test_loader[batch_choice]
-        return vx,vy,batch_choice
-
-    def validation_ordered_batch(self):
-        batch_choice = np.arange(self.last_test_batch_idx, self.last_test_batch_idx+self.batch_size)
-        self.last_test_batch_idx += self.batch_size
-        batch_choice = batch_choice[batch_choice<max(self.test_loader.index_array)]
-        batch_choice = batch_choice[batch_choice>min(self.test_loader.index_array)]
-        if batch_choice.shape[0] <= 1:
-            self.test_done = True
-        x,y = self.test_loader[batch_choice]
-        return x,y,batch_choice
-
-    def ordered_batch(self):
-        batch_choice = np.arange(self.last_batch_idx, self.last_batch_idx+self.batch_size)
-        self.last_batch_idx += self.batch_size
-        batch_choice = batch_choice[batch_choice<max(self.train_loader.index_array)]
-        batch_choice = batch_choice[batch_choice>min(self.train_loader.index_array)]
-        if batch_choice.shape[0] <= 1:
-            self.done = True
-        x,y = self.train_loader[batch_choice]
-        return x,y,batch_choice
-
-    def next_batch(self):
-        batch_choice = self.train_rdn.choice(self.train_loader.index_array, self.batch_size, replace=False)
-        x,y = self.train_loader[batch_choice]
-        return x,y,batch_choice
-
-    def next_unique_batch(self):
-        reset = False
-        batch_indexes = self.train_rdn.choice(self.unique_index_array, self.batch_size, replace=False)
-        # absolute indexes are different than the indexing indexes
-        batch_choices = self.train_loader.index_array[batch_indexes]
-        x,y = self.train_loader[batch_choices]
-        # remove used indexes
-        not_in = np.logical_not(np.isin(self.unique_index_array, batch_indexes))
-        self.unique_index_array = self.unique_index_array[not_in]
-        if len(self.unique_index_array) < self.batch_size:
-            self.reset_batch()
-            reset = True
-        return x,y,batch_choices,reset
+## used to be Dataloader, but overloaded
+#class AtariDataLoader():
+#    def __init__(self, train_load_function, test_load_function,
+#                 batch_size, random_number=394):
+#
+#        self.done = False
+#        self.test_done = False
+#
+#        self.batch_size = batch_size
+#        self.test_loader = test_load_function
+#        self.train_loader = train_load_function
+#        self.last_test_batch_idx = self.test_loader.index_array.min()+1
+#        self.last_batch_idx = self.train_loader.index_array.min()+1
+#
+#        self.train_rdn = np.random.RandomState(random_number)
+#        self.test_rdn = np.random.RandomState(random_number)
+#
+#        self.reset_batch()
+#        self.num_batches = len(self.train_loader)/self.batch_size
+#
+#    def reset_batch(self):
+#        self.unique_index_array = np.arange(self.train_loader.index_array.shape[0], dtype=np.int)
+#
+#    def validation_data(self):
+#        batch_choice = self.test_rdn.choice(self.test_loader.index_array, self.batch_size, replace=False)
+#        vx,vy = self.test_loader[batch_choice]
+#        return vx,vy,batch_choice
+#
+#    def validation_ordered_batch(self):
+#        batch_choice = np.arange(self.last_test_batch_idx, self.last_test_batch_idx+self.batch_size)
+#        self.last_test_batch_idx += self.batch_size
+#        batch_choice = batch_choice[batch_choice<max(self.test_loader.index_array)]
+#        batch_choice = batch_choice[batch_choice>min(self.test_loader.index_array)]
+#        if batch_choice.shape[0] <= 1:
+#            self.test_done = True
+#        x,y = self.test_loader[batch_choice]
+#        return x,y,batch_choice
+#
+#    def ordered_batch(self):
+#        batch_choice = np.arange(self.last_batch_idx, self.last_batch_idx+self.batch_size)
+#        self.last_batch_idx += self.batch_size
+#        batch_choice = batch_choice[batch_choice<max(self.train_loader.index_array)]
+#        batch_choice = batch_choice[batch_choice>min(self.train_loader.index_array)]
+#        if batch_choice.shape[0] <= 1:
+#            self.done = True
+#        x,y = self.train_loader[batch_choice]
+#        return x,y,batch_choice
+#
+#    def next_batch(self):
+#        batch_choice = self.train_rdn.choice(self.train_loader.index_array, self.batch_size, replace=False)
+#        x,y = self.train_loader[batch_choice]
+#        return x,y,batch_choice
+#
+#    def next_unique_batch(self):
+#        reset = False
+#        batch_indexes = self.train_rdn.choice(self.unique_index_array, self.batch_size, replace=False)
+#        # absolute indexes are different than the indexing indexes
+#        batch_choices = self.train_loader.index_array[batch_indexes]
+#        x,y = self.train_loader[batch_choices]
+#        # remove used indexes
+#        not_in = np.logical_not(np.isin(self.unique_index_array, batch_indexes))
+#        self.unique_index_array = self.unique_index_array[not_in]
+#        if len(self.unique_index_array) < self.batch_size:
+#            self.reset_batch()
+#            reset = True
+#        return x,y,batch_choices,reset
 
 
 class IndexedDataset(Dataset):
@@ -995,81 +995,81 @@ class EpisodicVqVaeFroggerDataset(Dataset):
 
 
 
-class AtariActionDataset(Dataset):
-    def __init__(self,  data_file, number_condition=4,
-                        steps_ahead=1, limit=None, batch_size=300,
-                        augment_file="None",
-                        rdn_num=3949):
-
-        self.rdn = np.random.RandomState(rdn_num)
-        if augment_file is not "None":
-            self.do_augment = True
-        else:
-            self.do_augment = False
-
-        # index right now is by the oldest observation needed to compute
-        # prediction
-        self.data_file = os.path.abspath(data_file)
-        self.augment_data_file = os.path.abspath(augment_file)
-        self.num_condition = int(number_condition)
-        assert(self.num_condition>0)
-        self.steps_ahead = int(steps_ahead)
-        assert(self.steps_ahead>=0)
-        self.data = np.load(self.data_file)
-        if self.do_augment:
-            self.augmented_data = np.load(self.augment_data_file)
-        num_examples,self.data_h,self.data_w = self.data['states'].shape
-        self.num_examples = self.num_examples-(self.steps_ahead+self.num_condition)
-        # index by observation number ( last sample of conditioning )
-        # if i ask for frame 3 - return w/ steps_ahead=1
-        # x = data[0,1,2,3], action
-        # y = data[1,2,3,4], reward
-        self.index_array = np.arange(self.num_condition-1, self.data.shape[0]-self.steps_ahead)
-
-    def __max__(self):
-        return max(self.index_array)
-
-    def __len__(self):
-        return self.num_examples
-
-    def __getitem__(self, idx):
-        try:
-            n = idx.shape[0]
-        except:
-            n = 1
-        dx = []
-        add_range = np.arange(-(self.num_condition-1), 1)
-        # old way which doesnt allow augmentation
-        #for i in add_range:
-        #    i_idx = idx+i
-        #    dx.append(self.data[i_idx])
-        #dx = np.array(dx).swapaxes(1,0)
-
-        if self.do_augment:
-            # choose the augmented data for the most recent observations some of
-            # the time
-            start_augment_idx = self.rdn.choice(add_range, n, replace=True)
-        else:
-            # always choose the real data
-            start_augment_idx = np.zeros((n))
-
-        for nidx, start in enumerate(idx):
-            this_sample = []
-            for i in add_range:
-                i_idx = start+i
-                if i > start_augment_idx[nidx]:
-                    pp = 'pred'
-                    this_sample.append(self.augmented_data[i_idx])
-                else:
-                    pp = 'real'
-                    this_sample.append(self.data[i_idx])
-                #print(start, i_idx, i,pp, start_augment_idx[nidx])
-            dx.append(this_sample)
-
-        dy = self.data[idx+self.steps_ahead][:,None]
-        x = (torch.FloatTensor(dx)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
-        y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
-        return x,y
+#class AtariActionDataset(Dataset):
+#    def __init__(self,  data_file, number_condition=4,
+#                        steps_ahead=1, limit=None, batch_size=300,
+#                        augment_file="None",
+#                        rdn_num=3949):
+#
+#        self.rdn = np.random.RandomState(rdn_num)
+#        if augment_file is not "None":
+#            self.do_augment = True
+#        else:
+#            self.do_augment = False
+#
+#        # index right now is by the oldest observation needed to compute
+#        # prediction
+#        self.data_file = os.path.abspath(data_file)
+#        self.augment_data_file = os.path.abspath(augment_file)
+#        self.num_condition = int(number_condition)
+#        assert(self.num_condition>0)
+#        self.steps_ahead = int(steps_ahead)
+#        assert(self.steps_ahead>=0)
+#        self.data = np.load(self.data_file)
+#        if self.do_augment:
+#            self.augmented_data = np.load(self.augment_data_file)
+#        num_examples,self.data_h,self.data_w = self.data['states'].shape
+#        self.num_examples = self.num_examples-(self.steps_ahead+self.num_condition)
+#        # index by observation number ( last sample of conditioning )
+#        # if i ask for frame 3 - return w/ steps_ahead=1
+#        # x = data[0,1,2,3], action
+#        # y = data[1,2,3,4], reward
+#        self.index_array = np.arange(self.num_condition-1, self.data.shape[0]-self.steps_ahead)
+#
+#    def __max__(self):
+#        return max(self.index_array)
+#
+#    def __len__(self):
+#        return self.num_examples
+#
+#    def __getitem__(self, idx):
+#        try:
+#            n = idx.shape[0]
+#        except:
+#            n = 1
+#        dx = []
+#        add_range = np.arange(-(self.num_condition-1), 1)
+#        # old way which doesnt allow augmentation
+#        #for i in add_range:
+#        #    i_idx = idx+i
+#        #    dx.append(self.data[i_idx])
+#        #dx = np.array(dx).swapaxes(1,0)
+#
+#        if self.do_augment:
+#            # choose the augmented data for the most recent observations some of
+#            # the time
+#            start_augment_idx = self.rdn.choice(add_range, n, replace=True)
+#        else:
+#            # always choose the real data
+#            start_augment_idx = np.zeros((n))
+#
+#        for nidx, start in enumerate(idx):
+#            this_sample = []
+#            for i in add_range:
+#                i_idx = start+i
+#                if i > start_augment_idx[nidx]:
+#                    pp = 'pred'
+#                    this_sample.append(self.augmented_data[i_idx])
+#                else:
+#                    pp = 'real'
+#                    this_sample.append(self.data[i_idx])
+#                #print(start, i_idx, i,pp, start_augment_idx[nidx])
+#            dx.append(this_sample)
+#
+#        dy = self.data[idx+self.steps_ahead][:,None]
+#        x = (torch.FloatTensor(dx)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+#        y = (torch.FloatTensor(dy)-self.min_pixel_used)/float(self.max_pixel_used-self.min_pixel_used)
+#        return x,y
 
 
 

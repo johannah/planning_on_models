@@ -1,13 +1,28 @@
 import numpy as np
 import time
+from IPython import embed
+
+def find_component_proportion(data, unique):
+    if unique == []:
+        unique = list(set(data))
+    component_percentages = []
+    num = data.shape[0]
+    for u in unique:
+        num_u = np.where(data == u)[0].shape[0]
+        print('val', u, 'num', num_u)
+        if num_u:
+            component_percentages.append(num_u/float(num))
+        else:
+            component_percentages.append(0.0)
+    return component_percentages
 
 # This function was mostly pulled from
 # https://github.com/fg91/Deep-Q-Learning/blob/master/DQN.ipynb
 class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
-    def __init__(self, action_space, size=1000000, frame_height=84, frame_width=84,
+    def __init__(self, action_space=5, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
-                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0):
+                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file=''):
         """
         Args:
             action_space: number of actions allowed
@@ -20,24 +35,30 @@ class ReplayMemory:
             bernoulli_probability: bernoulli probability that an experience will go to a particular head
             latent_frame_height/width: size of latent representations, if 0, then no latents are stored
         """
-        self.bernoulli_probability = bernoulli_probability
-        assert(self.bernoulli_probability > 0)
-        self.size = size
-        self.frame_height = frame_height
-        self.frame_width = frame_width
-        self.agent_history_length = agent_history_length
-        self.count = 0
-        self.current = 0
-        self.num_heads = num_heads
-        # Pre-allocate memory
-        self.actions = np.empty(self.size, dtype=np.int32)
-        self.rewards = np.empty(self.size, dtype=np.float32)
-        self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
-        self.latent_frame_height = latent_frame_height
-        self.latent_frame_width = latent_frame_width
-        self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
-        self.terminal_flags = np.empty(self.size, dtype=np.bool)
-        self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
+        if load_file != '':
+            self.load_buffer(load_file)
+        else:
+            self.bernoulli_probability = bernoulli_probability
+            assert(self.bernoulli_probability > 0)
+            self.size = size
+            self.frame_height = frame_height
+            self.frame_width = frame_width
+            self.agent_history_length = agent_history_length
+            self.count = 0
+            self.current = 0
+            self.num_heads = num_heads
+            # Pre-allocate memory
+            self.actions = np.empty(self.size, dtype=np.int32)
+            self.rewards = np.empty(self.size, dtype=np.float32)
+            self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
+            self.latent_frame_height = latent_frame_height
+            self.latent_frame_width = latent_frame_width
+            self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+            self.terminal_flags = np.empty(self.size, dtype=np.bool)
+            self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
+
+            if self.num_heads == 1:
+                assert(self.bernoulli_probability == 1.0)
 
         # Pre-allocate memory for the states and new_states in a minibatch
         self.states = np.empty((batch_size, self.agent_history_length,
@@ -51,8 +72,21 @@ class ReplayMemory:
 
         self.indices = np.empty(batch_size, dtype=np.int32)
         self.random_state = np.random.RandomState(393)
-        if self.num_heads == 1:
-            assert(self.bernoulli_probability == 1.0)
+
+    def percentages_rewards(self, unique_rewards=[]):
+        return find_component_proportion(self.rewards, unique_rewards)
+
+    def percentages_actions(self, unique_actions=[]):
+        return find_component_proportion(self.actions, unique_actions)
+
+    def num_actions(self):
+        return len(set(self.actions))
+
+    def num_rewards(self):
+        return len(set(self.rewards))
+
+    def num_examples(self):
+        return self.count
 
     def save_buffer(self, filepath):
         st = time.time()
@@ -64,7 +98,9 @@ class ReplayMemory:
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
-                 latent_frames=self.latent_frames
+                 latent_frames=self.latent_frames,
+                 latent_frame_height=self.latent_frame_height,
+                 latent_frame_width=self.latent_frame_width,
                  )
         print("finished saving buffer", time.time()-st)
 
@@ -87,6 +123,12 @@ class ReplayMemory:
         self.latent_frames = npfile['latent_frames']
         if self.num_heads == 1:
             assert(self.bernoulli_probability == 1.0)
+        try:
+            self.latent_frame_height = npfile['latent_frame_height']
+            self.latent_frame_width = npfile['latent_frame_width']
+        except:
+            self.latent_frame_height = self.latent_frames.shape[1]
+            self.latent_frame_width = self.latent_frames.shape[2]
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 
@@ -155,9 +197,9 @@ class ReplayMemory:
                                         self.frame_height, self.frame_width), dtype=np.uint8)
 
             self.latent_states = np.empty((batch_size, self.agent_history_length,
-                                    self.frame_height, self.frame_width), dtype=np.int16)
+                                    self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
             self.latent_new_states = np.empty((batch_size, self.agent_history_length,
-                                        self.frame_height, self.frame_width), dtype=np.int16)
+                                        self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
 
 
         if self.count < self.agent_history_length:
