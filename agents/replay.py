@@ -22,7 +22,7 @@ class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
     def __init__(self, action_space=5, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
-                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file=''):
+                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', sample_only=False):
         """
         Args:
             action_space: number of actions allowed
@@ -34,7 +34,9 @@ class ReplayMemory:
             num_heads: integer number of heads needed in mask
             bernoulli_probability: bernoulli probability that an experience will go to a particular head
             latent_frame_height/width: size of latent representations, if 0, then no latents are stored
+
         """
+        self.sample_only = sample_only
         if load_file != '':
             self.load_buffer(load_file)
         else:

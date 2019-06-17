@@ -65,9 +65,8 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
                      'vq_info':info,
                      }
             save_checkpoint(state, filename=filename)
-
         batches+=1
-        if not batches%10:
+        if not batches%500:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
 
 def train_vqvae(vqvae_model, opt, info, batch):
@@ -257,7 +256,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     if not debug:
-        parser.add_argument('-se', '--save_every', default=50000*5, type=int)
+        parser.add_argument('-se', '--save_every', default=50000*10, type=int)
     else:
         parser.add_argument('-se', '--save_every', default=10, type=int)
     parser.add_argument('-b', '--beta', default=0.25, type=float, help='scale for loss 3, commitment loss in vqvae')
@@ -268,9 +267,9 @@ if __name__ == '__main__':
     # 512 greatly outperformed 256 in freeway
     parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=64, type=int)
+    parser.add_argument('-bs', '--batch_size', default=84, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
-    parser.add_argument('-e', '--num_samples_to_train', default=100000000, type=int)
+    parser.add_argument('-e', '--num_samples_to_train', default=1e8, type=int)
     #parser.add_argument('-lr', '--learning_rate', default=1.5e-5) #- worked but took 0131013624 to train
     parser.add_argument('-lr', '--learning_rate', default=5e-5) #- worked but took 0131013624 to train
     args = parser.parse_args()
