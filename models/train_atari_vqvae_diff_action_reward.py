@@ -142,20 +142,20 @@ def valid_vqvae(train_cnt, vqvae_model, info, batch):
     # last state
     yhat_t = sample_from_discretized_mix_logistic(rec_ests[-1][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
     yhat_tm1 = sample_from_discretized_mix_logistic(rec_ests[-2][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
-    true_t = ((state_input[:n,-1].to('cpu')+1)/2.0).cpu().numpy()
-    true_tm1 = ((state_input[:n,-2].to('cpu')+1)/2.0).cpu().numpy()
+    true_t = state_input[:n,-1].cpu().numpy()
+    true_tm1 = state_input[:n,-2].cpu().numpy()
     print("yhat img", yhat_t.min().item(), yhat_t.max().item())
     print("true img", true_t.min().item(), true_t.max().item())
     img_name = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
     f,ax=plt.subplots(n,4, figsize=(n, n*1.5))
     for nn in range(n):
-        ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=0)
+        ax[nn, 0].imshow(true_tm1[nn], vmax=-1, vmin=1)
         ax[nn, 0].set_title('TA%s'%int(torch.argmax(actions[nn])))
-        ax[nn, 1].imshow(true_t[nn], vmax=1, vmin=0)
+        ax[nn, 1].imshow(true_t[nn], vmax=-1, vmin=1)
         ax[nn, 1].set_title('TR%s'%int(torch.argmax(rewards[nn])))
-        ax[nn, 2].imshow(yhat_tm1[nn,0], vmax=1, vmin=0)
+        ax[nn, 2].imshow(yhat_tm1[nn,0], vmax=-1, vmin=1)
         ax[nn, 2].set_title('PA%s'%int(torch.argmax(pred_actions[nn])))
-        ax[nn, 3].imshow(yhat_t[nn,0], vmax=1, vmin=0)
+        ax[nn, 3].imshow(yhat_t[nn,0], vmax=-1, vmin=1)
         ax[nn, 3].set_title('PR%s'%int(torch.argmax(pred_rewards[nn])))
         for i in range(4):
             ax[nn,i].axis('off')
