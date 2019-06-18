@@ -147,7 +147,7 @@ def valid_vqvae(train_cnt, vqvae_model, info, batch):
     print("yhat img", yhat_t.min().item(), yhat_t.max().item())
     print("true img", true_t.min().item(), true_t.max().item())
     img_name = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
-    f,ax=plt.subplots(n,4, figsize=(n, n*4))
+    f,ax=plt.subplots(n,4, figsize=(n, n*1.5))
     for nn in range(n):
         ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=0)
         ax[nn, 0].set_title('TA%s'%int(torch.argmax(actions[nn])))
