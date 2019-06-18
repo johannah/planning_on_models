@@ -104,7 +104,7 @@ def train_vqvae(vqvae_model, opt, info, batch):
 
 def valid_vqvae(train_cnt, vqvae_model, info, batch):
     vqvae_model.eval()
-    states,  actions, rewards, next_states, next_state_diffs = make_state(batch, info['DEVICE'], info['NORM_BY'])
+    states, actions, rewards, next_states, next_state_diffs = make_state(batch, info['DEVICE'], info['NORM_BY'])
     x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(states)
     z_q_x.retain_grad()
 
