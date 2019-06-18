@@ -19,23 +19,24 @@ from datasets import AtariDataset
 torch.manual_seed(394)
 sys.path.append('../agents')
 from replay import ReplayMemory
+import matplotlib.pyplot as plt
 
 def make_state(batch, DEVICE, NORM_BY):
-
     states, actions, rewards, next_states, terminal_flags, masks, latent_states, latent_next_states = batch
     # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
-    states = (2*reshape_input(torch.FloatTensor(states)/NORM_BY)-1).to(DEVICE)
-    next_states = (2*reshape_input(torch.FloatTensor(next_states)[:,-1:]/NORM_BY)-1).to(DEVICE)
-    diff = states[:,-1:]-next_states
+    #states = (2*reshape_input(torch.FloatTensor(states)/NORM_BY)-1).to(DEVICE)
+    # next state is the corresponding action
+    state_input = (2*reshape_input(torch.FloatTensor(next_states)/NORM_BY)-1).to(DEVICE)
+    #state_diff = state_input[:,-1:]-state_input[:,-2:-1]
     #diff = (reshape_input(torch.FloatTensor(pred_states)[:,1][:,None])).to(DEVICE)
     actions = torch.LongTensor(actions).to(DEVICE)
     rewards = torch.LongTensor(rewards).to(DEVICE)
     bs, _, h, w = states.shape
     # combine input together
-    return states, actions, rewards, next_states, diff
+    return state_input, actions, rewards#, next_states, state_diff
 
-def find_rec_loss(alpha, est, true, nr_mix, device):
-    return alpha*discretized_mix_logistic_loss(est, true, nr_mix=nr_mix, DEVICE=device)
+#def find_rec_loss(alpha, est, true, nr_mix, device):
+#    return alpha*discretized_mix_logistic_loss(est, true, nr_mix=nr_mix, DEVICE=device)
 
 def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=10000, save_every_samples=1000):
     batches = 0
@@ -49,7 +50,7 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
         avg_train_losses, vqvae_model, opt = train_vqvae(vqvae_model, opt, info, batch)
         batches+=1
         train_cnt+=info['VQ_BATCH_SIZE']
-        if ((train_cnt-info['vq_last_save'])>=save_every_samples):
+        if ((train_cnt-info['vq_last_save'])>=save_every_samples) or batches==0:
             info['vq_last_save'] = train_cnt
             info['vq_save_times'].append(time.time())
             valid_batch = valid_buffer.get_minibatch(info['VQ_BATCH_SIZE'])
@@ -69,16 +70,32 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
         if not batches%500:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
 
+def find_rec_losses(alpha, nr, nmix, x_d, true, DEVICE):
+    rec_losses = []
+    rec_ests = []
+    # get reconstruction losses for each channel
+    for i in range(true.shape[1]):
+        st = i*nmix
+        en = st+nmix
+        pred_x_d = x_d[:,st:en]
+        rec_ests.append(pred_x_d.detach())
+        rloss = alpha*discretized_mix_logistic_loss(pred_x_d, true[:,i][:,None], nr_mix=nr, DEVICE=DEVICE)
+        rec_losses.append(rloss)
+    return rec_losses, rec_ests
+
+
 def train_vqvae(vqvae_model, opt, info, batch):
     #for batch_idx, (data, label, data_index) in enumerate(train_loader):
     vqvae_model.train()
     opt.zero_grad()
-    #states, actions, rewards, values, pred_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_framediff_minibatch()
-    states,  actions, rewards, next_states, next_state_diffs = make_state(batch, info['DEVICE'], info['NORM_BY'])
-    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(states)
+    state_input, actions, rewards = make_state(batch, info['DEVICE'], info['NORM_BY'])
+    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(state_input)
     z_q_x.retain_grad()
-    loss_rec = find_rec_loss(alpha=info['ALPHA_REC'], est=x_d[:,:info['nmix']], true=next_states, nr_mix=info['NR_LOGISTIC_MIX'], device=info['DEVICE'])
-    loss_diff = find_rec_loss(alpha=info['ALPHA_REC'], est=x_d[:,info['nmix']:], true=next_state_diffs, nr_mix=info['NR_LOGISTIC_MIX'], device=info['DEVICE'])
+    rec_losses, rec_ests = find_rec_losses(alpha=info['ALPHA_REC'],
+                                 nr=info['NR_LOGISTIC_MIX'],
+                                 nmix=info['nmix'],
+                                 x_d=x_d, true=state_input,
+                                 DEVICE=info['DEVICE'])
 
     loss_act = info['ALPHA_ACT']*F.nll_loss(pred_actions, actions, weight=info['actions_weight'])
     loss_reward = info['ALPHA_REW']*F.nll_loss(pred_rewards, rewards, weight=info['rewards_weight'])
@@ -86,57 +103,102 @@ def train_vqvae(vqvae_model, opt, info, batch):
     loss_3 = info['BETA']*F.mse_loss(z_e_x, z_q_x.detach())
     vqvae_model.embedding.zero_grad()
 
+    [rec_losses[x].backward(retain_graph=True) for x in range(info['num_channels'])]
     loss_act.backward(retain_graph=True)
     loss_reward.backward(retain_graph=True)
-    loss_rec.backward(retain_graph=True)
-    loss_diff.backward(retain_graph=True)
     z_e_x.backward(z_q_x.grad, retain_graph=True)
     loss_2.backward(retain_graph=True)
     loss_3.backward()
 
     parameters = list(vqvae_model.parameters())
-    clip_grad_value_(parameters, 10)
+    clip_grad_value_(parameters, 5)
     opt.step()
     bs = float(x_d.shape[0])
-    avg_train_losses = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
+    avg_train_losses = [loss_reward.item()/bs, loss_act.item()/bs,
+                        rec_losses[0].item()/bs, rec_losses[1].item()/bs,
+                        rec_losses[2].item()/bs, rec_losses[3].item()/bs,
+                        loss_2.item()/bs, loss_3.item()/bs]
     opt.zero_grad()
     return avg_train_losses, vqvae_model, opt
 
 def valid_vqvae(train_cnt, vqvae_model, info, batch):
     vqvae_model.eval()
-    states, actions, rewards, next_states, next_state_diffs = make_state(batch, info['DEVICE'], info['NORM_BY'])
-    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(states)
-    z_q_x.retain_grad()
 
-    rec_est =  x_d[:, :info['nmix']]
-    diff_est = x_d[:, info['nmix']:]
-    loss_rec = find_rec_loss(alpha=info['ALPHA_REC'], est=rec_est, true=next_states, nr_mix=info['NR_LOGISTIC_MIX'], device=info['DEVICE'])
-    loss_diff = find_rec_loss(alpha=info['ALPHA_REC'], est=diff_est, true=next_state_diffs, nr_mix=info['NR_LOGISTIC_MIX'], device=info['DEVICE'])
+    state_input, actions, rewards = make_state(batch, info['DEVICE'], info['NORM_BY'])
+    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(state_input)
+    z_q_x.retain_grad()
+    rec_losses, rec_ests = find_rec_losses(alpha=info['ALPHA_REC'],
+                                 nr=info['NR_LOGISTIC_MIX'],
+                                 nmix=info['nmix'],
+                                 x_d=x_d, true=state_input,
+                                 DEVICE=info['DEVICE'])
 
     loss_act = info['ALPHA_ACT']*F.nll_loss(pred_actions, actions, weight=info['actions_weight'])
     loss_reward = info['ALPHA_REW']*F.nll_loss(pred_rewards, rewards, weight=info['rewards_weight'])
     loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
     loss_3 = info['BETA']*F.mse_loss(z_e_x, z_q_x.detach())
+    vqvae_model.embedding.zero_grad()
 
+    bs = float(x_d.shape[0])
+    avg_valid_losses = [loss_reward.item()/bs, loss_act.item()/bs,
+                        rec_losses[0].item()/bs, rec_losses[1].item()/bs,
+                        rec_losses[2].item()/bs, rec_losses[3].item()/bs,
+                        loss_2.item()/bs, loss_3.item()/bs]
 
     bs,yc,yh,yw = x_d.shape
-    yhat = sample_from_discretized_mix_logistic(rec_est, info['NR_LOGISTIC_MIX'])
-    n_imgs = 8
-    n = min(states.shape[0], n_imgs)
-    gold = (next_states.to('cpu')+1)/2.0
-    bs,_,h,w = gold.shape
-    # sample from discretized should be between 0 and 255
-    print("yhat sample", yhat[:,0].min().item(), yhat[:,0].max().item())
-    yimg = ((yhat + 1.0)/2.0).to('cpu')
-    print("yhat img", yhat.min().item(), yhat.max().item())
-    print("gold img", gold.min().item(), gold.max().item())
-    comparison = torch.cat([gold.view(bs,1,h,w)[:n],
-                            yimg.view(bs,1,h,w)[:n]])
+    n = min(state_input.shape[0],5)
+    # last state
+    yhat_t = sample_from_discretized_mix_logistic(rec_ests[-1][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
+    yhat_tm1 = sample_from_discretized_mix_logistic(rec_ests[-2][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
+    true_t = ((state_input[:n,-1].to('cpu')+1)/2.0).cpu().numpy()
+    true_tm1 = ((state_input[:n,-2].to('cpu')+1)/2.0).cpu().numpy()
+    print("yhat img", yhat_t.min().item(), yhat_t.max().item())
+    print("true img", true_t.min().item(), true_t.max().item())
     img_name = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
-    save_image(comparison, img_name, nrow=n)
-    bs = float(states.shape[0])
-    loss_list = [loss_reward.item()/bs, loss_act.item()/bs, loss_rec.item()/bs, loss_diff.item()/bs, loss_2.item()/bs, loss_3.item()/bs]
-    return loss_list
+    f,ax=plt.subplots(n,4, figsize=(n, n*4))
+    for nn in range(n):
+        ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=0)
+        ax[nn, 0].set_title('TA%s'%int(torch.argmax(actions[nn])))
+        ax[nn, 1].imshow(true_t[nn], vmax=1, vmin=0)
+        ax[nn, 1].set_title('TR%s'%int(torch.argmax(rewards[nn])))
+        ax[nn, 2].imshow(yhat_tm1[nn,0], vmax=1, vmin=0)
+        ax[nn, 2].set_title('PA%s'%int(torch.argmax(pred_actions[nn])))
+        ax[nn, 3].imshow(yhat_t[nn,0], vmax=1, vmin=0)
+        ax[nn, 3].set_title('PR%s'%int(torch.argmax(pred_rewards[nn])))
+        for i in range(4):
+            ax[nn,i].axis('off')
+
+    plt.tight_layout(pad=0.4, w_pad=0.5, h_pad=1.0)
+    plt.savefig(img_name)
+    plt.close()
+
+    img_name2 = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction2.png"%train_cnt
+    f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
+    for nn in range(n):
+        ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=0)
+        ax[nn, 0].set_title('TA%s'%int(actions[nn]))
+        ax[nn, 1].imshow(true_t[nn], vmax=1, vmin=0)
+        ax[nn, 1].set_title('TR%s'%int(rewards[nn]))
+        ax[nn, 2].imshow(yhat_tm1[nn,0])
+        ax[nn, 2].set_title('PA%s'%int(torch.argmax(pred_actions[nn])))
+        ax[nn, 3].imshow(yhat_t[nn,0])
+        ax[nn, 3].set_title('PR%s'%int(torch.argmax(pred_rewards[nn])))
+        for i in range(4):
+            ax[nn,i].axis('off')
+    plt.tight_layout(pad=0.4, w_pad=0.5, h_pad=1.0)
+    plt.savefig(img_name2)
+
+
+    #bs,h,w = gold.shape
+    ## sample from discretized should be between 0 and 255
+    #print("yhat sample", yhat[:,0].min().item(), yhat[:,0].max().item())
+    #yimg = ((yhat + 1.0)/2.0).to('cpu')
+    #print("yhat img", yhat.min().item(), yhat.max().item())
+    #print("gold img", gold.min().item(), gold.max().item())
+    #comparison = torch.cat([gold.view(bs,1,h,w)[:n],
+    #                        yimg.view(bs,1,h,w)[:n]])
+    #save_image(comparison, img_name, nrow=n)
+    return avg_valid_losses
 
 def init_train():
     train_data_file = args.train_buffer
@@ -215,9 +277,9 @@ def init_train():
 
     # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
     # decorelated channel
-    info['num_channels'] = 2
+    info['num_channels'] = 4
     info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['num_channels']
-    nmix = int(info['num_output_mixtures']/2)
+    nmix = int(info['num_output_mixtures']/info['num_channels'])
     info['nmix'] = nmix
     vqvae_model = VQVAErl(num_clusters=info['NUM_K'],
                         encoder_output_size=info['NUM_Z'],
@@ -236,6 +298,7 @@ def init_train():
         opt.load_state_dict(model_dict['vq_optimizer'])
         vqvae_model.embedding = model_dict['vq_embedding']
 
+
     #args.pred_output_size = 1*80*80
     ## 10 is result of structure of network
     #args.z_input_size = 10*10*args.num_z
@@ -252,7 +315,7 @@ if __name__ == '__main__':
     parser.add_argument('--valid_buffer', default='/usr/local/data/jhansen/planning/model_savedir/MBFreeway_init_valid/MBFreeway_data_0000005001q_train_buffer.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     #parser.add_argument('--savename', default='vqdiffactintreward')
-    parser.add_argument('--savename', default='FreewayVQ')
+    parser.add_argument('--savename', default='FreewayVQR4')
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     if not debug:
