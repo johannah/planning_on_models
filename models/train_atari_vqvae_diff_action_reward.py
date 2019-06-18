@@ -23,20 +23,12 @@ import matplotlib.pyplot as plt
 
 def make_state(batch, DEVICE, NORM_BY):
     states, actions, rewards, next_states, terminal_flags, masks, latent_states, latent_next_states = batch
-    # because we have 4 layers in vqvae, need to be divisible by 2, 4 times
-    #states = (2*reshape_input(torch.FloatTensor(states)/NORM_BY)-1).to(DEVICE)
     # next state is the corresponding action
     state_input = (2*reshape_input(torch.FloatTensor(next_states)/NORM_BY)-1).to(DEVICE)
-    #state_diff = state_input[:,-1:]-state_input[:,-2:-1]
-    #diff = (reshape_input(torch.FloatTensor(pred_states)[:,1][:,None])).to(DEVICE)
     actions = torch.LongTensor(actions).to(DEVICE)
     rewards = torch.LongTensor(rewards).to(DEVICE)
     bs, _, h, w = states.shape
-    # combine input together
-    return state_input, actions, rewards#, next_states, state_diff
-
-#def find_rec_loss(alpha, est, true, nr_mix, device):
-#    return alpha*discretized_mix_logistic_loss(est, true, nr_mix=nr_mix, DEVICE=device)
+    return state_input, actions, rewards
 
 def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=10000, save_every_samples=1000):
     batches = 0
@@ -50,7 +42,7 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
         avg_train_losses, vqvae_model, opt = train_vqvae(vqvae_model, opt, info, batch)
         batches+=1
         train_cnt+=info['VQ_BATCH_SIZE']
-        if ((train_cnt-info['vq_last_save'])>=save_every_samples) or batches==0:
+        if (((train_cnt-info['vq_last_save'])>=save_every_samples) or batches==0):
             info['vq_last_save'] = train_cnt
             info['vq_save_times'].append(time.time())
             valid_batch = valid_buffer.get_minibatch(info['VQ_BATCH_SIZE'])
@@ -319,7 +311,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     if not debug:
-        parser.add_argument('-se', '--save_every', default=50000*10, type=int)
+        parser.add_argument('-se', '--save_every', default=50000*5, type=int)
     else:
         parser.add_argument('-se', '--save_every', default=10, type=int)
     parser.add_argument('-b', '--beta', default=0.25, type=float, help='scale for loss 3, commitment loss in vqvae')
