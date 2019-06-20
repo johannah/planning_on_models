@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from torch.nn.utils.clip_grad import clip_grad_value_
 from ae_utils import discretized_mix_logistic_loss, sample_from_discretized_mix_logistic
 from ae_utils import handle_plot_ckpt, reshape_input
-torch.set_num_threads(4)
+torch.set_num_threads(2)
 #from torch.utils.data import Dataset, DataLoader
 from torchvision.utils import save_image
 from IPython import embed
@@ -40,7 +40,6 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
         st = time.time()
         batch = train_buffer.get_minibatch(info['VQ_BATCH_SIZE'])
         avg_train_losses, vqvae_model, opt = train_vqvae(vqvae_model, opt, info, batch)
-        batches+=1
         train_cnt+=info['VQ_BATCH_SIZE']
         if (((train_cnt-info['vq_last_save'])>=save_every_samples) or batches==0):
             info['vq_last_save'] = train_cnt
@@ -149,13 +148,13 @@ def valid_vqvae(train_cnt, vqvae_model, info, batch):
     img_name = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
     f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
     for nn in range(n):
-        ax[nn, 0].imshow(true_tm1[nn], vmax=-1, vmin=1)
+        ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=-1)
         ax[nn, 0].set_title('TA%s'%int(actions[nn]))
-        ax[nn, 1].imshow(true_t[nn], vmax=-1, vmin=1)
+        ax[nn, 1].imshow(true_t[nn], vmax=1, vmin=-1)
         ax[nn, 1].set_title('TR%s'%int(rewards[nn]))
-        ax[nn, 2].imshow(yhat_tm1[nn,0], vmax=-1, vmin=1)
+        ax[nn, 2].imshow(yhat_tm1[nn,0], vmax=1, vmin=-1)
         ax[nn, 2].set_title('PA%s'%int(torch.argmax(pred_actions[nn])))
-        ax[nn, 3].imshow(yhat_t[nn,0], vmax=-1, vmin=1)
+        ax[nn, 3].imshow(yhat_t[nn,0], vmax=1, vmin=-1)
         ax[nn, 3].set_title('PR%s'%int(torch.argmax(pred_rewards[nn])))
         for i in range(4):
             ax[nn,i].axis('off')
@@ -322,11 +321,11 @@ if __name__ == '__main__':
     # 512 greatly outperformed 256 in freeway
     parser.add_argument('-k', '--num_k', default=512, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=84, type=int)
+    parser.add_argument('-bs', '--batch_size', default=64, type=int)
     parser.add_argument('-ncond', '--number_condition', default=4, type=int)
     parser.add_argument('-e', '--num_samples_to_train', default=1e8, type=int)
     #parser.add_argument('-lr', '--learning_rate', default=1.5e-5) #- worked but took 0131013624 to train
-    parser.add_argument('-lr', '--learning_rate', default=5e-5) #- worked but took 0131013624 to train
+    parser.add_argument('-lr', '--learning_rate', type=float, default=5e-5) #- worked but took 0131013624 to train
     args = parser.parse_args()
     if args.cuda:
         DEVICE = 'cuda'
