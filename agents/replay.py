@@ -96,7 +96,7 @@ class ReplayMemory:
         np.savez(filepath,
                  frames=self.frames, actions=self.actions, rewards=self.rewards,
                  terminal_flags=self.terminal_flags, masks=self.masks,
-                 count=self.count, current=self.current,
+                 count=self.count, current=self.current, sizze=self.size,
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
@@ -123,14 +123,17 @@ class ReplayMemory:
         self.num_heads = npfile['num_heads']
         self.bernoulli_probability = npfile['bernoulli_probability']
         self.latent_frames = npfile['latent_frames']
+
         if self.num_heads == 1:
             assert(self.bernoulli_probability == 1.0)
         try:
             self.latent_frame_height = npfile['latent_frame_height']
             self.latent_frame_width = npfile['latent_frame_width']
+            self.size = npfile['size']
         except:
             self.latent_frame_height = self.latent_frames.shape[1]
             self.latent_frame_width = self.latent_frames.shape[2]
+            self.size = self.frames.shape[0]
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 

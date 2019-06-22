@@ -21,17 +21,20 @@ sys.path.append('../agents')
 from replay import ReplayMemory
 import matplotlib.pyplot as plt
 
+def prepare_state_for_vq(st, DEVICE, NORM_BY):
+    return (2*reshape_input(torch.FloatTensor(st)/NORM_BY)-1).to(DEVICE)
+
 def make_state(batch, DEVICE, NORM_BY):
     states, actions, rewards, next_states, terminal_flags, masks, latent_states, latent_next_states = batch
+    states = prepare_state_for_vq(states, DEVICE, NORM_BY)
+    next_states = prepare_state_for_vq(next_states, DEVICE, NORM_BY)
     # next state is the corresponding action
-    state_input = (2*reshape_input(torch.FloatTensor(next_states)/NORM_BY)-1).to(DEVICE)
     actions = torch.LongTensor(actions).to(DEVICE)
     rewards = torch.LongTensor(rewards).to(DEVICE)
     bs, _, h, w = states.shape
-    return state_input, actions, rewards
+    return states, actions, rewards, next_states
 
-def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=10000, save_every_samples=1000):
-    batches = 0
+def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=10000, save_every_samples=1000, batches=0):
     if len(info['vq_train_cnts']):
         train_cnt = info['vq_train_cnts'][-1]
     else:
@@ -39,7 +42,13 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
     while train_cnt < num_samples_to_train:
         st = time.time()
         batch = train_buffer.get_minibatch(info['VQ_BATCH_SIZE'])
-        avg_train_losses, vqvae_model, opt = train_vqvae(vqvae_model, opt, info, batch)
+        opt.zero_grad()
+        avg_train_losses, _, _, _ = train_vqvae(vqvae_model, info, batch)
+        parameters = list(vqvae_model.parameters())
+        clip_grad_value_(parameters, 5)
+        opt.step()
+        opt.zero_grad()
+
         train_cnt+=info['VQ_BATCH_SIZE']
         if (((train_cnt-info['vq_last_save'])>=save_every_samples) or batches==0):
             info['vq_last_save'] = train_cnt
@@ -60,6 +69,7 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
         batches+=1
         if not batches%500:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
+    return vqvae_model, opt
 
 def find_rec_losses(alpha, nr, nmix, x_d, true, DEVICE):
     rec_losses = []
@@ -74,18 +84,16 @@ def find_rec_losses(alpha, nr, nmix, x_d, true, DEVICE):
         rec_losses.append(rloss)
     return rec_losses, rec_ests
 
-
-def train_vqvae(vqvae_model, opt, info, batch):
-    #for batch_idx, (data, label, data_index) in enumerate(train_loader):
+def train_vqvae(vqvae_model, info, batch):
     vqvae_model.train()
-    opt.zero_grad()
-    state_input, actions, rewards = make_state(batch, info['DEVICE'], info['NORM_BY'])
-    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(state_input)
+    states, actions, rewards, next_states = make_state(batch, info['DEVICE'], info['NORM_BY'])
+    # use next_states because that is the t-1 action
+    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(next_states)
     z_q_x.retain_grad()
     rec_losses, rec_ests = find_rec_losses(alpha=info['ALPHA_REC'],
                                  nr=info['NR_LOGISTIC_MIX'],
                                  nmix=info['nmix'],
-                                 x_d=x_d, true=state_input,
+                                 x_d=x_d, true=next_states,
                                  DEVICE=info['DEVICE'])
 
     loss_act = info['ALPHA_ACT']*F.nll_loss(pred_actions, actions, weight=info['actions_weight'])
@@ -100,28 +108,23 @@ def train_vqvae(vqvae_model, opt, info, batch):
     z_e_x.backward(z_q_x.grad, retain_graph=True)
     loss_2.backward(retain_graph=True)
     loss_3.backward()
-
-    parameters = list(vqvae_model.parameters())
-    clip_grad_value_(parameters, 5)
-    opt.step()
     bs = float(x_d.shape[0])
     avg_train_losses = [loss_reward.item()/bs, loss_act.item()/bs,
                         rec_losses[0].item()/bs, rec_losses[1].item()/bs,
                         rec_losses[2].item()/bs, rec_losses[3].item()/bs,
                         loss_2.item()/bs, loss_3.item()/bs]
-    opt.zero_grad()
-    return avg_train_losses, vqvae_model, opt
+    return  avg_train_losses, z_e_x, z_q_x, [states, actions, rewards, next_states]
 
 def valid_vqvae(train_cnt, vqvae_model, info, batch):
     vqvae_model.eval()
-
-    state_input, actions, rewards = make_state(batch, info['DEVICE'], info['NORM_BY'])
-    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(state_input)
+    states, actions, rewards, next_states = make_state(batch, info['DEVICE'], info['NORM_BY'])
+    # use next_states because that is the t-1 action
+    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(next_states)
     z_q_x.retain_grad()
     rec_losses, rec_ests = find_rec_losses(alpha=info['ALPHA_REC'],
                                  nr=info['NR_LOGISTIC_MIX'],
                                  nmix=info['nmix'],
-                                 x_d=x_d, true=state_input,
+                                 x_d=x_d, true=next_states,
                                  DEVICE=info['DEVICE'])
 
     loss_act = info['ALPHA_ACT']*F.nll_loss(pred_actions, actions, weight=info['actions_weight'])

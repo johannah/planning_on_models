@@ -13,8 +13,8 @@ import torch.optim as optim
 import time
 from datasets import AtariDataset
 from forward_conv import BasicBlock, ForwardResNet
-from ae_utils import sample_from_discretized_mix_logistic
-from train_atari_action_vqvae import reshape_input
+from ae_utils import sample_from_discretized_mix_logistic, reshape_input
+from train_atari_vqvae_diff_action_reward import run as vqvae_run
 from vqvae import VQVAErl
 from create_reward_dataset import find_episodic_rewards, make_dataset
 from train_atari_vqvae_diff_action import train_vqvae
@@ -56,6 +56,7 @@ class VQEnv(object):
             for a in args.keys():
                 self.vq_info[a.upper()] = args[a]
 
+        self.vqvae_opt = self.vq_model_dict['vq_optimizer']
         self.vqvae_model = VQVAErl(num_clusters=self.vq_info['NUM_K'],
                             encoder_output_size=self.vq_info['NUM_Z'],
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
@@ -79,39 +80,42 @@ class VQEnv(object):
         self.forward_opt = optim.Adam(self.forward_model.parameters(), lr=self.vq_info['FORWARD_LEARNING_RATE'])
         self.forward_train_cnt = 0
 
-    def train_vq_model(self, train_buffer):
-        all_rewards, all_starts, all_ends = find_episodic_rewards(train_buffer)
-        reward_fnames = [train_buffer for x in range(len(all_rewards))]
-        train_data_file = make_dataset(all_rewards, all_starts, all_ends, reward_fnames, self.vq_info['VQ_GAMMA'], kind='training')
-        self.vq_info['train_data_file'] = train_data_file
-        self.vq_info['valid_data_file'] = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/valid_set_small.npz'
-        train_data_loader = AtariDataset(
-                                       self.vq_info['train_data_file'],
-                                       number_condition=self.vq_info['NUMBER_CONDITION'],
-                                       steps_ahead=1,
-                                       batch_size=self.vq_info['VQ_BATCH_SIZE'],
-                                       norm_by=self.vq_info['NORM_BY'],
-                                       unique_actions=self.vq_info['action_space'],
-                                       unique_rewards=self.vq_info['REWARD_SPACE'])
+    def train_vq_model(self, train_buffer, valid_buffer):
+        #self.vqvae_model, self.vq_opt = vqvae_run(self.vq_info, self.vqvae_model, self.vqvae_opt, train_buffer, valid_buffer, num_samples_to_train=1000000, save_every_samples=50000*5)
+        #train_batch = train_buffer.get_minibatch(self.vq_info['VQ_BATCH_SIZE'])
+        self.vqvae_model.train()
+        self.vqvae_opt.zero_grad()
+        #state_input, actions, rewards = make_state(batch, info['DEVICE'], info['NORM_BY'])
+        #x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(state_input)
+        #z_q_x.retain_grad()
+        #rec_losses, rec_ests = find_rec_losses(alpha=info['ALPHA_REC'],
+        #                             nr=info['NR_LOGISTIC_MIX'],
+        #                             nmix=info['nmix'],
+        #                             x_d=x_d, true=state_input,
+        #                             DEVICE=info['DEVICE'])
 
-        valid_data_loader = AtariDataset(
-                                       self.vq_info['valid_data_file'],
-                                       number_condition=self.vq_info['NUMBER_CONDITION'],
-                                       steps_ahead=1,
-                                       batch_size=self.vq_info['VQ_BATCH_SIZE'],
-                                       norm_by=self.vq_info['NORM_BY'],
-                                       unique_actions=self.vq_info['action_space'],
-                                       unique_rewards=self.vq_info['REWARD_SPACE'])
-        self.vq_info['size_training_set'] = train_data_loader.num_examples
-        self.vq_info['hsize'] = train_data_loader.data_h
-        self.vq_info['wsize'] = train_data_loader.data_w
-        actions_weight = 1-np.array(train_data_loader.percentages_actions)
-        rewards_weight = 1-np.array(train_data_loader.percentages_rewards)
-        actions_weight = torch.FloatTensor(actions_weight).to(self.DEVICE)
-        rewards_weight = torch.FloatTensor(rewards_weight).to(self.DEVICE)
-        self.vq_info['actions_weight'] = actions_weight
-        self.vq_info['rewards_weight'] = rewards_weight
-        self.vq_info['train_cnt'], self.vqvae_model, self.opt, self.vq_info = train_vqvae(self.vq_info['train_cnt'], self.vqvae_model, self.opt, self.vq_info, train_data_loader, valid_data_loader)
+        #loss_act = info['ALPHA_ACT']*F.nll_loss(pred_actions, actions, weight=info['actions_weight'])
+        #loss_reward = info['ALPHA_REW']*F.nll_loss(pred_rewards, rewards, weight=info['rewards_weight'])
+        #loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
+        #loss_3 = info['BETA']*F.mse_loss(z_e_x, z_q_x.detach())
+        #vqvae_model.embedding.zero_grad()
+
+        #[rec_losses[x].backward(retain_graph=True) for x in range(info['num_channels'])]
+        #loss_act.backward(retain_graph=True)
+        #loss_reward.backward(retain_graph=True)
+        #z_e_x.backward(z_q_x.grad, retain_graph=True)
+        #loss_2.backward(retain_graph=True)
+        #loss_3.backward()
+
+        #parameters = list(vqvae_model.parameters())
+        #clip_grad_value_(parameters, 5)
+        #opt.step()
+        #bs = float(x_d.shape[0])
+        #avg_train_losses = [loss_reward.item()/bs, loss_act.item()/bs,
+        #                    rec_losses[0].item()/bs, rec_losses[1].item()/bs,
+        #                    rec_losses[2].item()/bs, rec_losses[3].item()/bs,
+        #                    loss_2.item()/bs, loss_3.item()/bs]
+        #opt.zero_grad()
 
     def init_vq_model(self):
         #data_dir = os.path.split(train_data_file)[0]
@@ -139,7 +143,7 @@ class VQEnv(object):
         self.vq_info['num_output_mixtures']= (2*self.vq_info['NR_LOGISTIC_MIX']+self.vq_info['NR_LOGISTIC_MIX'])*self.vq_info['num_channels']
         nmix = int(self.vq_info['num_output_mixtures']/2)
         self.vq_info['nmix'] = nmix
-        self.vqvae_model = VQVAE(num_clusters=self.vq_info['NUM_K'],
+        self.vqvae_model = VQVAErl(num_clusters=self.vq_info['NUM_K'],
                             encoder_output_size=self.vq_info['NUM_Z'],
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
                             in_channels_size=self.vq_info['NUMBER_CONDITION'],
@@ -177,7 +181,7 @@ class VQEnv(object):
         self.vq_info['num_output_mixtures']= (2*self.vq_info['NR_LOGISTIC_MIX']+self.vq_info['NR_LOGISTIC_MIX'])*self.vq_info['num_channels']
         nmix = int(self.vq_info['num_output_mixtures']/2)
         self.vq_info['nmix'] = nmix
-        self.vqvae_model = VQVAE(num_clusters=self.vq_info['NUM_K'],
+        self.vqvae_model = VQVAErl(num_clusters=self.vq_info['NUM_K'],
                             encoder_output_size=self.vq_info['NUM_Z'],
                             num_output_mixtures=self.vq_info['num_output_mixtures'],
                             in_channels_size=self.vq_info['NUMBER_CONDITION'],
@@ -188,9 +192,6 @@ class VQEnv(object):
         parameters = list(self.vqvae_model.parameters())
         self.opt = optim.Adam(parameters, lr=self.vq_info['VQ_LEARNING_RATE'])
         self.action_space = range(self.vq_info['num_actions'])
-
-
-
 
     def decode_vq_from_latents(self, latents):
         latents = latents.long()
@@ -230,7 +231,7 @@ class VQEnv(object):
 
     def get_state_representation(self, state):
         # todo - transform from np to the right kind of torch array - need to
-        x_d,_,_,latents,_,_ = self.get_vq_state(state/self.vq_info['NORM_BY'])
+        x_d,_,z_q,latents,_,_ = self.get_vq_state(state/self.vq_info['NORM_BY'])
         #latent_state = torch.stack((latents[0][None,None], latents[1][None,None]), dim=0)
         return latents.float(), x_d
 

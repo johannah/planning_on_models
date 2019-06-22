@@ -49,7 +49,6 @@ class CoreNetEmbedding(nn.Module):
         self.conv2.apply(weights_init)
 
     def forward(self, x):
-        # expects to have no channels
         for e in range(self.num_channels):
             if not e:
                 xo = self.embeddings[e](x[:,e]).permute(0,3,1,2)
@@ -69,10 +68,9 @@ class CoreNet(nn.Module):
         self.reshape_size = reshape_size
         self.num_channels = num_channels
         # params from ddqn appendix
-        eo = 64
-        self.conv1 = nn.Conv2d(self.num_channels, eo*2, 3, 1, padding=(1,1))
-        self.conv2 = nn.Conv2d(eo*2, eo*4, 3, 1, padding=(1,1))
-        self.conv3 = nn.Conv2d(eo*4, eo*4, 3, 1, padding=(1,1))
+        self.conv1 = nn.Conv2d(self.num_channels, 64, 3, 1, padding=(1,1))
+        self.conv2 = nn.Conv2d(64, 32, 3, 1, padding=(1,1))
+        self.conv3 = nn.Conv2d(32, 16, 3, 1, padding=(1,1))
         self.conv1.apply(weights_init)
         self.conv2.apply(weights_init)
 
@@ -119,9 +117,9 @@ class HeadNet(nn.Module):
         return x
 
 class EnsembleNet(nn.Module):
-    def __init__(self, n_ensemble, n_actions, reshape_size, num_channels, dueling=False, num_clusters=0):
+    def __init__(self, n_ensemble, n_actions, reshape_size, num_channels, dueling=False, num_clusters=0, use_embedding=True):
         super(EnsembleNet, self).__init__()
-        if num_clusters == 0:
+        if not use_embedding:
             self.core_net = CoreNet(reshape_size=reshape_size, num_channels=num_channels)
         else:
             self.core_net = CoreNetEmbedding(reshape_size=reshape_size, num_channels=num_channels, num_clusters=num_clusters)
