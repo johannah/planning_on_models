@@ -34,7 +34,23 @@ def make_state(batch, DEVICE, NORM_BY):
     bs, _, h, w = states.shape
     return states, actions, rewards, next_states
 
-def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=10000, save_every_samples=1000, batches=0):
+def save_vqvae(info, train_cnt, vqvae_model, opt, avg_train_losses, valid_batch):
+    info['vq_last_save'] = train_cnt
+    info['vq_save_times'].append(time.time())
+    avg_valid_losses = valid_vqvae(train_cnt, vqvae_model, info, valid_batch)
+    handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses)
+    filename = info['VQ_MODEL_BASE_FILEDIR'] + "_%010dex.pt"%train_cnt
+    print("SAVING MODEL:%s" %filename)
+    print("Saving model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['vq_last_save']))
+    state = {
+             'vqvae_state_dict':vqvae_model.state_dict(),
+             'vq_optimizer':opt.state_dict(),
+             'vq_embedding':vqvae_model.embedding,
+             'vq_info':info,
+             }
+    save_checkpoint(state, filename=filename)
+
+def run_vqvae(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=10000, save_every_samples=1000, batches=0):
     if len(info['vq_train_cnts']):
         train_cnt = info['vq_train_cnts'][-1]
     else:
@@ -51,21 +67,8 @@ def run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train
 
         train_cnt+=info['VQ_BATCH_SIZE']
         if (((train_cnt-info['vq_last_save'])>=save_every_samples) or batches==0):
-            info['vq_last_save'] = train_cnt
-            info['vq_save_times'].append(time.time())
             valid_batch = valid_buffer.get_minibatch(info['VQ_BATCH_SIZE'])
-            avg_valid_losses = valid_vqvae(train_cnt, vqvae_model, info, valid_batch)
-            handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses)
-            filename = info['vq_model_base_filepath'] + "_%010dex.pt"%train_cnt
-            print("SAVING MODEL:%s" %filename)
-            print("Saving model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['vq_last_save']))
-            state = {
-                     'vqvae_state_dict':vqvae_model.state_dict(),
-                     'vq_optimizer':opt.state_dict(),
-                     'vq_embedding':vqvae_model.embedding,
-                     'vq_info':info,
-                     }
-            save_checkpoint(state, filename=filename)
+            save_vqvae(info, train_cnt, vqvae_model, opt, avg_train_losses, valid_batch)
         batches+=1
         if not batches%500:
             print("finished %s epoch after %s seconds at cnt %s"%(batches, time.time()-st, train_cnt))
@@ -102,7 +105,7 @@ def train_vqvae(vqvae_model, info, batch):
     loss_3 = info['BETA']*F.mse_loss(z_e_x, z_q_x.detach())
     vqvae_model.embedding.zero_grad()
 
-    [rec_losses[x].backward(retain_graph=True) for x in range(info['num_channels'])]
+    [rec_losses[x].backward(retain_graph=True) for x in range(info['HISTORY_SIZE'])]
     loss_act.backward(retain_graph=True)
     loss_reward.backward(retain_graph=True)
     z_e_x.backward(z_q_x.grad, retain_graph=True)
@@ -140,15 +143,15 @@ def valid_vqvae(train_cnt, vqvae_model, info, batch):
                         loss_2.item()/bs, loss_3.item()/bs]
 
     bs,yc,yh,yw = x_d.shape
-    n = min(state_input.shape[0],5)
+    n = min(next_states.shape[0],5)
     # last state
     yhat_t = sample_from_discretized_mix_logistic(rec_ests[-1][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
     yhat_tm1 = sample_from_discretized_mix_logistic(rec_ests[-2][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
-    true_t = state_input[:n,-1].cpu().numpy()
-    true_tm1 = state_input[:n,-2].cpu().numpy()
+    true_t = next_states[:n,-1].cpu().numpy()
+    true_tm1 = next_states[:n,-2].cpu().numpy()
     print("yhat img", yhat_t.min().item(), yhat_t.max().item())
     print("true img", true_t.min().item(), true_t.max().item())
-    img_name = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction.png"%train_cnt
+    img_name = info['VQ_MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction.png"%train_cnt
     f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
     for nn in range(n):
         ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=-1)
@@ -166,7 +169,8 @@ def valid_vqvae(train_cnt, vqvae_model, info, batch):
     plt.savefig(img_name)
     plt.close()
 
-    img_name2 = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction2.png"%train_cnt
+    #img_name2 = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction2.png"%train_cnt
+    img_name2 = info['VQ_MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction2.png"%train_cnt
     f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
     for nn in range(n):
         ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=0)
@@ -219,7 +223,7 @@ def init_train():
                  'vq_last_plot':0,
                  'NORM_BY':255.0,
                  'vq_model_loadpath':args.model_loadpath,
-                 'vq_model_base_filedir':model_base_filedir,
+                 'VQ_MODEL_BASE_FILEDIR':model_base_filedir,
                  'vq_model_base_filepath':model_base_filepath,
                  'vq_train_data_file':train_data_file,
                  'VQ_SAVENAME':args.savename,
@@ -271,9 +275,9 @@ def init_train():
 
     # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
     # decorelated channel
-    info['num_channels'] = 4
-    info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['num_channels']
-    nmix = int(info['num_output_mixtures']/info['num_channels'])
+    info['HISTORY_SIZE'] = 4
+    info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['HISTORY_SIZE']
+    nmix = int(info['num_output_mixtures']/info['HISTORY_SIZE'])
     info['nmix'] = nmix
     vqvae_model = VQVAErl(num_clusters=info['NUM_K'],
                         encoder_output_size=info['NUM_Z'],
@@ -297,7 +301,7 @@ def init_train():
     ## 10 is result of structure of network
     #args.z_input_size = 10*10*args.num_z
     #train_cnt = train_vqvae(train_cnt, vqvae_model, opt, info, train_data_loader, valid_data_loader)
-    run(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=args.num_samples_to_train, save_every_samples=args.save_every)
+    run_vqvae(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=args.num_samples_to_train, save_every_samples=args.save_every)
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
