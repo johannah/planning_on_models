@@ -22,7 +22,7 @@ class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
     def __init__(self, action_space=5, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
-                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', sample_only=False):
+                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', sample_only=False, seed=393):
         """
         Args:
             action_space: number of actions allowed
@@ -73,7 +73,7 @@ class ReplayMemory:
                                     self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
 
         self.indices = np.empty(batch_size, dtype=np.int32)
-        self.random_state = np.random.RandomState(393)
+        self.random_state = np.random.RandomState(seed)
 
     def percentages_rewards(self, unique_rewards=[]):
         return find_component_proportion(self.rewards, unique_rewards)

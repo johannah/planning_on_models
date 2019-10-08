@@ -27,8 +27,14 @@ sys.path.append('../models')
 from ae_utils import sample_from_discretized_mix_logistic
 
 from train_atari_vqvae_diff_action_reward import prepare_state_for_vq, train_vqvae, VQVAErl, run_vqvae, save_vqvae, make_state
+"""
+TODO
+- auto load random buffer -
+- split params into sep file
+- save a copy of the plots for each checkpoint
+"""
 
-def handle_checkpoint(cnt):
+def handle_checkpoint(cnt, perf, filename_modifier=''):
     st = time.time()
     print("beginning checkpoint", st)
     state = {'info':info,
@@ -38,12 +44,16 @@ def handle_checkpoint(cnt):
              'target_net_state_dict':target_net.state_dict(),
              'perf':perf,
             }
-    filename = os.path.abspath(model_base_filepath + "_%010dq.pkl"%cnt)
+    filename = os.path.abspath(model_base_filepath + "_%010d%sq.pkl"%(cnt,filename_modifier))
     save_checkpoint(state, filename)
     # npz will be added
-    buff_filename = os.path.abspath(model_base_filepath + "_%010dq_train_buffer"%cnt)
+    buff_filename = os.path.abspath(model_base_filepath + "_%010d%sq_train_buffer"%(cnt,filename_modifier))
+    valid_buff_filename = os.path.abspath(model_base_filepath + "_%010d%sq_valid_buffer"%(cnt,filename_modifier))
     replay_memory.save_buffer(buff_filename)
+    valid_replay_memory.save_buffer(valid_buff_filename)
     print("finished checkpoint", time.time()-st)
+    model_base_filedir = os.path.split(model_base_filepath)[0]
+    matplotlib_plot_all(perf, model_base_filedir)
     return cnt
 
 #def full_state_norm_function(state):
@@ -67,7 +77,7 @@ def get_action(policy_net, state, active_head=None):
         action = data.most_common(1)[0][0]
     return action, torch.stack(vals)[:,0].detach().cpu().numpy()
 
-def pt_latent_learn(vqvae_model, opt):# latent_states, actions, rewards, latent_next_states, terminal_flags, masks):
+def pt_latent_learn(vqvae_model, opt):
     opt.zero_grad()
     batch = replay_memory.get_minibatch(info['BATCH_SIZE'])
     states, actions, rewards, next_states = make_state(batch, info['DEVICE'], info['NORM_BY'])
@@ -76,8 +86,8 @@ def pt_latent_learn(vqvae_model, opt):# latent_states, actions, rewards, latent_
     # do losses based on next state estimate
     # backward() for state_representation happens in train_vqvae - still need to
     # step
-    #avg_vq_train_losses, next_z_q_x, next_z_e_x, pt_data = train_vqvae(vqvae_model, info, batch)
-    #states, actions, rewards, next_states = pt_data
+    avg_vq_train_losses, next_z_q_x, next_z_e_x, pt_data = train_vqvae(vqvae_model, info, batch)
+    states, actions, rewards, next_states = pt_data
     rewards = rewards.float()
     # get representation for current state
     with torch.no_grad():
@@ -90,6 +100,7 @@ def pt_latent_learn(vqvae_model, opt):# latent_states, actions, rewards, latent_
     next_q_policy_vals = policy_net(next_z_e_x, None)
     z_e_x.retain_grad()
     next_z_e_x.retain_grad()
+    # TODO - what do the representations here look slike - plot them
     # trying to work on e rather than q to look at grads
     # z_q_x dows not give .grads to vqvae_model
     #q_policy_vals = policy_net(z_q_x, None)
@@ -140,7 +151,8 @@ def train_sim(step_number, last_save, vqvae_model, opt):
         ########################
         epoch_frame = 0
 
-        avg_eval_reward = evaluate(step_number, vqvae_model)
+        #avg_eval_reward = evaluate(step_number, vqvae_model)
+        avg_eval_reward = -10
         perf['eval_rewards'].append(avg_eval_reward)
         perf['eval_steps'].append(step_number)
         while epoch_frame < info['EVAL_FREQUENCY']:
@@ -161,10 +173,12 @@ def train_sim(step_number, last_save, vqvae_model, opt):
             ptloss_list = []
             print("Gathering data with head=%s"%active_head)
             # at every new episode - recalculate action/reward weight
-            rewards_weight = 1-np.array(replay_memory.percentages_rewards(range(info['num_rewards'])))
-            actions_weight = 1-np.array(replay_memory.percentages_actions(range(info['num_actions'])))
-            actions_weight = torch.FloatTensor(actions_weight).to(info['DEVICE'])
+
+            rewards_weight = 1-np.array(replay_memory.percentages_rewards(range(replay_memory.num_rewards())))
+            actions_weight = 1-np.array(replay_memory.percentages_actions(range(replay_memory.num_actions())))
             rewards_weight = torch.FloatTensor(rewards_weight).to(info['DEVICE'])
+            actions_weight = torch.FloatTensor(actions_weight).to(info['DEVICE'])
+            # rewards weight
             info['actions_weight'] = actions_weight
             info['rewards_weight'] = rewards_weight
             while not terminal:
@@ -183,37 +197,36 @@ def train_sim(step_number, last_save, vqvae_model, opt):
                 #TODO - add latents from initial training buffer to replay buffer
                 replay_memory.add_experience(action=action,
                                              frame=next_state[-1],
-                                             reward=np.sign(reward),
+                                             reward=1+np.sign(reward), # add one so that rewards are <=0
                                              terminal=life_lost,
                                              )
                 step_number += 1
                 epoch_frame += 1
                 episode_reward_sum += reward
+                # DEBUG
+                vqvae_model, opt = run_vqvae(info, vqvae_model, opt, replay_memory, valid_replay_memory,
+                                                     num_samples_to_train=1000000, save_every_samples=500000, batches=0)
+
                 if step_number == info['MIN_STEPS_TO_LEARN']:
-                    print("TRAIN VQVAE")
-                    #TODO
-                    last_save = handle_checkpoint(step_number)
-                    valid_batch = valid_replay_memory.get_minibatch(info['VQ_BATCH_SIZE'])
-                    save_vqvae(info, info['vq_train_cnt'], vqvae_model, opt, avg_vq_train_losses, valid_batch)
-                    vqvae_model, opt = run_vqvae(info, vqvae_model, opt, replay_memory, valid_replay_memory,
-                                                 num_samples_to_train=30000000, save_every_samples=250000, batches=0)
-                elif step_number > info['MIN_STEPS_TO_LEARN']:
+                    last_save = handle_checkpoint(step_number, perf, filename_modifier='_random')
+                    #TODO and
+                if step_number > info['MIN_STEPS_TO_LEARN']:
                     if step_number % info['VQ_LEARN_EVERY_STEPS']:
-                        valid_batch = valid_replay_memory.get_minibatch(info['VQ_BATCH_SIZE'])
+                        print("training vq")
                         vqvae_model, opt = run_vqvae(info, vqvae_model, opt, replay_memory, valid_replay_memory,
-                                                     num_samples_to_train=30000000, save_every_samples=250000, batches=0)
+                                                     num_samples_to_train=1000000, save_every_samples=500000, batches=0)
+                        valid_batch = valid_replay_memory.get_minibatch(info['VQ_BATCH_SIZE'])
                         save_vqvae(info, info['vq_train_cnt'], vqvae_model, opt, avg_vq_train_losses, valid_batch)
-                elif step_number > info['MIN_STEPS_TO_LEARN']:
                     if step_number % info['LEARN_EVERY_STEPS'] == 0:
-                        #_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks,_latent_states, _latent_next_states  = replay_memory.get_minibatch(info['BATCH_SIZE'])
-                        vqvae_model, opt, ptloss, avg_vq_train_losses = pt_latent_learn(vqvae_model, opt)#_latent_states, _actions, _rewards, _latent_next_states, _terminal_flags, _masks)
+                        vqvae_model, opt, ptloss, avg_vq_train_losses = pt_latent_learn(vqvae_model, opt)
                         info['vq_train_cnt'] += info['VQ_BATCH_SIZE']
                         ptloss_list.append(ptloss)
                     if step_number % info['TARGET_UPDATE'] == 0:
                         print("++++++++++++++++++++++++++++++++++++++++++++++++")
                         print('updating target network at %s'%step_number)
                         target_net.load_state_dict(policy_net.state_dict())
-
+                    if step_number-last_save >= info['CHECKPOINT_EVERY_STEPS']:
+                        last_save = handle_checkpoint(step_number, perf)
 
             print('END EPISODE', epoch_num, step_number, episode_reward_sum)
             et = time.time()
@@ -232,11 +245,6 @@ def train_sim(step_number, last_save, vqvae_model, opt):
             perf['episode_times'].append(ep_time)
             perf['episode_relative_times'].append(time.time()-info['START_TIME'])
             perf['avg_rewards'].append(np.mean(perf['episode_reward'][-100:]))
-
-            if not epoch_num or (step_number-last_save) >= info['CHECKPOINT_EVERY_STEPS']:
-                if not epoch_num or step_number > info['MIN_STEPS_TO_LEARN']:
-                    last_save = handle_checkpoint(step_number)
-
             if not epoch_num or not epoch_num%info['PLOT_EVERY_EPISODES']:
                 matplotlib_plot_all(perf, model_base_filedir)
                 # TODO plot title
@@ -244,6 +252,7 @@ def train_sim(step_number, last_save, vqvae_model, opt):
                 print('last rewards', perf['episode_reward'][-info['PLOT_EVERY_EPISODES']:])
                 with open('rewards.txt', 'a') as reward_file:
                     print(len(perf['episode_reward']), step_number, perf['avg_rewards'][-1], file=reward_file)
+
             epoch_num += 1
 
 def evaluate(step_number, vqvae_model):
@@ -278,9 +287,14 @@ def evaluate(step_number, vqvae_model):
                print("random action eval", action)
             else:
                action, mb_state_value = get_action(policy_net=policy_net, state=z_e_x, active_head=None)
-               #action = expert_action
             actions.append(action)
             next_state, reward, life_lost, terminal = env.step(action)
+            valid_replay_memory.add_experience(action=action,
+                                         frame=next_state[-1],
+                                         reward=1+np.sign(reward), # add one so that rewards are <=0
+                                         terminal=life_lost,
+                                             )
+
             if not evaluate_step_number%100:
                 print('eval,step,action,reward')
                 print(evaluate_step_number,action,reward)
@@ -288,19 +302,20 @@ def evaluate(step_number, vqvae_model):
             #next_latent_state, x_d = vqenv.get_state_representation(next_state[None])
             with torch.no_grad():
                 x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(next_state)
+            # TODO - plot actions
             if not eval_run:
-                if evaluate_step_number < 300:
-                    #hx_d,pa,pr=vqenv.decode_vq_from_latents(latent_state)
-                    last_x_d = x_d[:,info['nmix']*3:]
-                    #hmean = (vqenv.sample_mean_from_latents(last_x_d)[:,0]*255).astype(np.uint8)
-                    embed()
-                    hmean = sample_from_discretized_mix_logistic(last_x_d[-1], info['NR_LOGISTIC_MIX']).cpu().numpy()
+                if evaluate_step_number < 100:
                     f,ax = plt.subplots(2,4, figsize=(4.5,1.5))
-                    for i in range(hmean.shape[0]):
-                        ax[0,i].imshow(hmean[i])
+                    np_next_state = next_state.cpu().numpy()
+                    for i in range(info['HISTORY_SIZE']):
+                        this_x_d = x_d[:,i*info['nmix']:(i+1)*info['nmix']]
+                        hmean = sample_from_discretized_mix_logistic(this_x_d, info['NR_LOGISTIC_MIX']).cpu().numpy()[0]
+                        hmean_img = (hmean[0]*255).astype(np.uint8)
+                        ax[0,i].imshow(hmean_img)
                         ax[0,i].set_title('a%s' %(actions[i-4]))
                         ax[0,i].axis('off')
-                        ax[1,i].imshow(next_state[i])
+                        # TODO which order is next state? this is
+                        ax[1,i].imshow(np_next_state[0,i])
                         ax[1,i].axis('off')
                     fname = os.path.join(exp_dir, "%06d.png"%evaluate_step_number)
                     plt.savefig(fname)
@@ -361,37 +376,37 @@ def create_video(frames, name, train_step_number, last_index, episode_reward_sum
 
 def init_vq_model(info):
     if info['VQ_MODEL_LOADPATH'] == '':
-         run_num = 0
-         vq_model_base_filedir = os.path.join(info['model_base_filedir'], 'VQ%02d'%run_num)
-         while os.path.exists(vq_model_base_filedir):
-             run_num +=1
-             vq_model_base_filedir = os.path.join(info['model_base_filedir'], 'VQ%02d'%run_num)
-         os.makedirs(vq_model_base_filedir)
-         #model_base_filepath = os.path.join(model_base_filedir, args.savename)
-         #print("MODEL BASE FILEPATH", model_base_filepath)
-         info['BETA']=0.25
-         info['ALPHA_REC']=1.0
-         info['ALPHA_ACT']=2.0
-         info['ALPHA_REW']=1.0
-         info['NUM_Z']=64
-         info['NUM_K']=512
-         info['NR_LOGISTIC_MIX']=10
-         info['VQ_BATCH_SIZE']=64
-         info['NUMBER_CONDITION']=4
-         info['VQ_LEARNING_RATE']=1e-4
-         info['NUM_SAMPLES']=40
-         info['VQ_NUM_EXAMPLES_TO_TRAIN']=10000000
-         info['VQ_SAVE_EVERY']=250000
-         info['VQ_MIN_BATCHES_BEFORE_SAVE']=1000
-         info['LATENT_SIZE']=10
-         info['vq_train_cnt'] = 0
-         info['vq_train_cnts'] = []
-         info['vq_train_losses_list'] = []
-         info['vq_valid_cnts'] = []
-         info['vq_valid_losses_list'] = []
-         info['vq_save_times'] = []
-         info['vq_last_save'] = 0
-         info['vq_last_plot'] = 0
+        run_num = 0
+        vq_model_base_filedir = os.path.join(info['model_base_filedir'], 'VQ%02d'%run_num)
+        while os.path.exists(vq_model_base_filedir):
+            run_num +=1
+            vq_model_base_filedir = os.path.join(info['model_base_filedir'], 'VQ%02d'%run_num)
+        os.makedirs(vq_model_base_filedir)
+        #model_base_filepath = os.path.join(model_base_filedir, args.savename)
+        #print("MODEL BASE FILEPATH", model_base_filepath)
+        info['BETA']=0.25
+        info['ALPHA_REC']=1.0
+        info['ALPHA_ACT']=2.0
+        info['ALPHA_REW']=1.0
+        info['NUM_Z']=64
+        info['NUM_K']=512
+        info['NR_LOGISTIC_MIX']=10
+        info['VQ_BATCH_SIZE']=64
+        info['NUMBER_CONDITION']=4
+        info['VQ_LEARNING_RATE']=1e-4
+        info['NUM_SAMPLES']=40
+        info['VQ_NUM_EXAMPLES_TO_TRAIN']=10000000
+        info['VQ_SAVE_EVERY']=250000
+        info['VQ_MIN_BATCHES_BEFORE_SAVE']=1000
+        info['LATENT_SIZE']=10
+        info['vq_train_cnt'] = 0
+        info['vq_train_cnts'] = []
+        info['vq_train_losses_list'] = []
+        info['vq_valid_cnts'] = []
+        info['vq_valid_losses_list'] = []
+        info['vq_save_times'] = []
+        info['vq_last_save'] = 0
+        info['vq_last_plot'] = 0
     else:
         print('loading model from: %s' %info['VQ_MODEL_LOADPATH'])
         model_dict = torch.load(info['VQ_MODEL_LOADPATH'])
@@ -419,12 +434,9 @@ def init_vq_model(info):
     #train_buffer = ReplayMemory(load_file=train_data_file)
     #valid_buffer = ReplayMemory(load_file=valid_data_file)
 
-    #info['num_actions'] = train_buffer.num_actions()
     #info['size_training_set'] = train_buffer.num_examples()
     #info['hsize'] = train_buffer.frame_height
     #info['wsize'] = train_buffer.frame_width
-    #info['num_rewards'] = train_buffer.num_rewards()
-
     #rewards_weight = 1-np.array(train_buffer.percentages_rewards())
     #actions_weight = 1-np.array(train_buffer.percentages_actions())
     #actions_weight = torch.FloatTensor(actions_weight).to(DEVICE)
@@ -469,13 +481,13 @@ if __name__ == '__main__':
     print("running on %s"%device)
 
     info = {
-        "GAME":'roms/breakout.bin', # gym prefix
+        "GAME":'roms/pong.bin', # gym prefix
         "N_PLAYOUT":50,
         "MIN_SCORE_GIF":-1, # min score to plot gif in eval
         "DEVICE":device, #cpu vs gpu set by argument
         #"NAME":"MBFreeway_replay",
         #"NAME":"MBBreakout_train_init",
-        "NAME":"MBBreakout_train_vq_every",
+        "NAME":"MBPong_train_vq",
         "DUELING":True, # use dueling dqn
         "DOUBLE_DQN":True, # use double dqn
         "PRIOR":True, # turn on to use randomized prior
@@ -486,7 +498,7 @@ if __name__ == '__main__':
         # 500000 may be too much
         # could consider each of the heads once
         #"MIN_STEPS_TO_LEARN":100000, # min steps needed to start training neural nets
-        "MIN_STEPS_TO_LEARN":40000, # min steps needed to start training neural nets
+        "MIN_STEPS_TO_LEARN":10000, # min steps needed to start training neural nets
         #"MIN_STEPS_TO_LEARN":400, # min steps needed to start training neural nets
         "LEARN_EVERY_STEPS":4, # updates every 4 steps in osband
         "VQ_LEARN_EVERY_STEPS":6400, # update every 6400 steps in simple
@@ -498,7 +510,7 @@ if __name__ == '__main__':
         "NUM_EVAL_EPISODES":1, # num examples to average in eval
         #"BUFFER_SIZE":int(1e6), # Buffer size for experience replay
         "BUFFER_SIZE":int(500000), # Buffer size for experience replay
-        "CHECKPOINT_EVERY_STEPS":50000, # how often to write pkl of model and npz of data buffer
+        "CHECKPOINT_EVERY_STEPS":100000, # how often to write pkl of model and npz of data buffer
         #"CHECKPOINT_EVERY_STEPS":1e6, # how often to write pkl of model and npz of data buffer
         #"EVAL_FREQUENCY":500000, # how often to run evaluation episodes
         "EVAL_FREQUENCY":100000, # how often to run evaluation episodes
@@ -537,8 +549,8 @@ if __name__ == '__main__':
         #"VQ_MODEL_LOADPATH":"../../model_savedir/MBBreakout_init_dataset/BreakoutVQ02/BreakoutVQ_0103019776ex.pt",
         #"VQ_MODEL_LOADPATH":"../../model_savedir/MBFreeway_init_train/FreewayR4LR1e400/FreewayR4LR1e4_0029255680ex.pt",
         "VQ_MODEL_LOADPATH":"",#"../../model_savedir/MBFreeway_init_train/FreewayR4LR1e400/FreewayR4LR1e4_0058261248ex.pt",
-        "REPLAY_MEMORY_LOADPATH":"", #"../../model_savedir/MBFreeway_init_train/MBFreeway_data_0000040001q_train_buffer.npz",
-        "REPLAY_MEMORY_VALID_LOADPATH":"/usr/local/data/jhansen/planning/model_savedir/MBBreakout_valid_init00/MBBreakout_valid_init_0000005000q_train_buffer.npz",
+        "REPLAY_MEMORY_LOADPATH":"../../model_savedir/MBPong_0000010000random_agentq_train_buffer.npz",
+        "REPLAY_MEMORY_VALID_LOADPATH":"../../model_savedir/MBPong_0000010000random_agentq_valid_buffer.npz",
         "USE_EMBEDDING":False,# if use_embedding in ensemble model - input should be float, otherwise long
         "FORWARD_DROPOUT":0.25,
         "FORWARD_LEARNING_RATE":1e-5,
@@ -557,7 +569,6 @@ if __name__ == '__main__':
                       num_frames=info['HISTORY_SIZE'], no_op_start=info['MAX_NO_OP_FRAMES'], rand_seed=info['SEED'],
                       dead_as_end=info['DEAD_AS_END'], max_episode_steps=info['MAX_EPISODE_STEPS'])
 
-    valid_replay_memory = ReplayMemory(load_file=info['REPLAY_MEMORY_VALID_LOADPATH'])
     # create replay buffer
     if info['REPLAY_MEMORY_LOADPATH'] == "":
         replay_memory = ReplayMemory(action_space=env.action_space,
@@ -571,11 +582,24 @@ if __name__ == '__main__':
                                  #latent_frame_height=info['LATENT_SIZE'],
                                  #latent_frame_width=info['LATENT_SIZE'])
                                   )
-
     else:
         replay_memory = ReplayMemory(load_file=info['REPLAY_MEMORY_LOADPATH'])
-        valid_replay_memory = ReplayMemory(load_file=info['REPLAY_MEMORY_VALID_LOADPATH'])
         start_step_number = replay_memory.count
+    if info['REPLAY_MEMORY_LOADPATH'] == "":
+        valid_replay_memory = ReplayMemory(action_space=env.action_space,
+                                 size=int(info['BUFFER_SIZE']*.1),
+                                 frame_height=info['OBS_SIZE'][0],
+                                 frame_width=info['OBS_SIZE'][1],
+                                 agent_history_length=info['HISTORY_SIZE'],
+                                 batch_size=info['BATCH_SIZE'],
+                                 num_heads=info['N_ENSEMBLE'],
+                                 bernoulli_probability=info['BERNOULLI_PROBABILITY'],
+                                 #latent_frame_height=info['LATENT_SIZE'],
+                                 #latent_frame_width=info['LATENT_SIZE'])
+                                  )
+
+    else:
+        valid_replay_memory = ReplayMemory(load_file=info['REPLAY_MEMORY_VALID_LOADPATH'])
     random_state = np.random.RandomState(info["SEED"])
 
     if args.model_loadpath != '':

@@ -29,13 +29,14 @@ class Environment(object):
                  num_frames=4,
                  frame_size=84,
                  no_op_start=30,
-                 rand_seed=393,
+                 seed=393,
                  dead_as_end=True,
                  max_episode_steps=18000,
                  autofire=False):
         self.max_episode_steps = max_episode_steps
-        self.random_state = np.random.RandomState(rand_seed+15)
-        self.ale = self._init_ale(rand_seed, rom_file)
+        self.random_state = np.random.RandomState(seed+15)
+        print('loading game from:%s'%rom_file)
+        self.ale = self._init_ale(seed, rom_file)
         # normally (160, 210)
         self.actions = self.ale.getMinimalActionSet()
         self.action_space = len(self.actions)
@@ -56,10 +57,10 @@ class Environment(object):
         self.end = True
 
     @staticmethod
-    def _init_ale(rand_seed, rom_file):
+    def _init_ale(seed, rom_file):
         assert os.path.exists(rom_file), '%s does not exists.'
         ale = ALEInterface()
-        ale.setInt('random_seed', rand_seed)
+        ale.setInt('random_seed', seed)
         ale.setBool('showinfo', False)
         ale.setInt('frame_skip', 1)
         ale.setFloat('repeat_action_probability', 0.0)

@@ -13,6 +13,7 @@ torch.set_num_threads(2)
 #from torch.utils.data import Dataset, DataLoader
 from torchvision.utils import save_image
 from IPython import embed
+from copy import deepcopy
 from ae_utils import save_checkpoint
 from vqvae import VQVAErl
 from datasets import AtariDataset
@@ -90,6 +91,7 @@ def find_rec_losses(alpha, nr, nmix, x_d, true, DEVICE):
 def train_vqvae(vqvae_model, info, batch):
     vqvae_model.train()
     states, actions, rewards, next_states = make_state(batch, info['DEVICE'], info['NORM_BY'])
+    # add one to the rewards so that they are all positive
     # use next_states because that is the t-1 action
     x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(next_states)
     z_q_x.retain_grad()
@@ -99,6 +101,7 @@ def train_vqvae(vqvae_model, info, batch):
                                  x_d=x_d, true=next_states,
                                  DEVICE=info['DEVICE'])
 
+    embed()
     loss_act = info['ALPHA_ACT']*F.nll_loss(pred_actions, actions, weight=info['actions_weight'])
     loss_reward = info['ALPHA_REW']*F.nll_loss(pred_rewards, rewards, weight=info['rewards_weight'])
     loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
@@ -108,7 +111,7 @@ def train_vqvae(vqvae_model, info, batch):
     [rec_losses[x].backward(retain_graph=True) for x in range(info['HISTORY_SIZE'])]
     loss_act.backward(retain_graph=True)
     loss_reward.backward(retain_graph=True)
-    z_e_x.backward(z_q_x.grad, retain_graph=True)
+    z_e_x.backward(deepcopy(z_q_x.grad), retain_graph=True)
     loss_2.backward(retain_graph=True)
     loss_3.backward()
     bs = float(x_d.shape[0])
