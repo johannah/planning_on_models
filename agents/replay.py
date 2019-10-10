@@ -22,7 +22,8 @@ class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
     def __init__(self, action_space=5, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
-                 bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', sample_only=False, seed=393):
+                 bernoulli_probability=1.0, load_file='', sample_only=False, seed=393):
+                # bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', sample_only=False, seed=393):
         """
         Args:
             action_space: number of actions allowed
@@ -33,7 +34,7 @@ class ReplayMemory:
             batch_size: Integer, Number if transitions returned in a minibatch
             num_heads: integer number of heads needed in mask
             bernoulli_probability: bernoulli probability that an experience will go to a particular head
-            latent_frame_height/width: size of latent representations, if 0, then no latents are stored
+           # latent_frame_height/width: size of latent representations, if 0, then no latents are stored
 
         """
         self.sample_only = sample_only
@@ -53,9 +54,9 @@ class ReplayMemory:
             self.actions = np.empty(self.size, dtype=np.int32)
             self.rewards = np.empty(self.size, dtype=np.float32)
             self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
-            self.latent_frame_height = latent_frame_height
-            self.latent_frame_width = latent_frame_width
-            self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+            #self.latent_frame_height = latent_frame_height
+            #self.latent_frame_width = latent_frame_width
+            #self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
             self.terminal_flags = np.empty(self.size, dtype=np.bool)
             self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
 
@@ -67,10 +68,10 @@ class ReplayMemory:
                                 self.frame_height, self.frame_width), dtype=np.uint8)
         self.new_states = np.empty((batch_size, self.agent_history_length,
                                     self.frame_height, self.frame_width), dtype=np.uint8)
-        self.latent_states = np.empty((batch_size, self.agent_history_length,
-                                self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
-        self.latent_new_states = np.empty((batch_size, self.agent_history_length,
-                                    self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+        #self.latent_states = np.empty((batch_size, self.agent_history_length,
+        #                        self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+        #self.latent_new_states = np.empty((batch_size, self.agent_history_length,
+        #                            self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
 
         self.indices = np.empty(batch_size, dtype=np.int32)
         self.random_state = np.random.RandomState(seed)
@@ -100,9 +101,9 @@ class ReplayMemory:
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
-                 latent_frames=self.latent_frames,
-                 latent_frame_height=self.latent_frame_height,
-                 latent_frame_width=self.latent_frame_width,
+                 #latent_frames=self.latent_frames,
+                 #latent_frame_height=self.latent_frame_height,
+                 #latent_frame_width=self.latent_frame_width,
                  )
         print("finished saving buffer", time.time()-st)
 
@@ -122,22 +123,22 @@ class ReplayMemory:
         self.frame_width = npfile['frame_width']
         self.num_heads = npfile['num_heads']
         self.bernoulli_probability = npfile['bernoulli_probability']
-        self.latent_frames = npfile['latent_frames']
+        #self.latent_frames = npfile['latent_frames']
 
         if self.num_heads == 1:
             assert(self.bernoulli_probability == 1.0)
         try:
-            self.latent_frame_height = npfile['latent_frame_height']
-            self.latent_frame_width = npfile['latent_frame_width']
+            #self.latent_frame_height = npfile['latent_frame_height']
+            #self.latent_frame_width = npfile['latent_frame_width']
             self.size = npfile['size']
         except:
-            self.latent_frame_height = self.latent_frames.shape[1]
-            self.latent_frame_width = self.latent_frames.shape[2]
+            #self.latent_frame_height = self.latent_frames.shape[1]
+            #self.latent_frame_width = self.latent_frames.shape[2]
             self.size = self.frames.shape[0]
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 
-    def add_experience(self, action, frame, reward, terminal, latent_frame=''):
+    def add_experience(self, action, frame, reward, terminal):#, latent_frame=''):
         """
         Args:
             action: An integer between 0 and env.action_space.n - 1
@@ -150,8 +151,8 @@ class ReplayMemory:
             raise ValueError('Dimension of frame is wrong!')
         self.actions[self.current] = action
         self.frames[self.current, ...] = frame
-        if type(latent_frame) is not str:
-            self.latent_frames[self.current, ...] = latent_frame
+        #if type(latent_frame) is not str:
+        #    self.latent_frames[self.current, ...] = latent_frame
         self.rewards[self.current] = reward
         self.terminal_flags[self.current] = terminal
         mask = self.random_state.binomial(1, self.bernoulli_probability, self.num_heads)
@@ -166,12 +167,12 @@ class ReplayMemory:
             raise ValueError("Index must be min 3")
         return self.frames[index-self.agent_history_length+1:index+1, ...]
 
-    def _get_latent_state(self, index):
-        if self.count is 0:
-            raise ValueError("The replay memory is empty!")
-        if index < self.agent_history_length - 1:
-            raise ValueError("Index must be min 3")
-        return self.latent_frames[index-self.agent_history_length+1:index+1, ...]
+    #def _get_latent_state(self, index):
+    #    if self.count is 0:
+    #        raise ValueError("The replay memory is empty!")
+    #    if index < self.agent_history_length - 1:
+    #        raise ValueError("Index must be min 3")
+    #    return self.latent_frames[index-self.agent_history_length+1:index+1, ...]
 
     def _get_valid_indices(self, batch_size):
         if batch_size != self.indices.shape[0]:
@@ -201,10 +202,10 @@ class ReplayMemory:
             self.new_states = np.empty((batch_size, self.agent_history_length,
                                         self.frame_height, self.frame_width), dtype=np.uint8)
 
-            self.latent_states = np.empty((batch_size, self.agent_history_length,
-                                    self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
-            self.latent_new_states = np.empty((batch_size, self.agent_history_length,
-                                        self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+            #self.latent_states = np.empty((batch_size, self.agent_history_length,
+            #                        self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+            #self.latent_new_states = np.empty((batch_size, self.agent_history_length,
+            #                            self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
 
 
         if self.count < self.agent_history_length:
@@ -215,8 +216,8 @@ class ReplayMemory:
         for i, idx in enumerate(self.indices):
             self.states[i] = self._get_state(idx - 1)
             self.new_states[i] = self._get_state(idx)
-            self.latent_states[i] = self._get_latent_state(idx - 1)
-            self.latent_new_states[i] = self._get_latent_state(idx)
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.latent_states, self.latent_new_states
+            #self.latent_states[i] = self._get_latent_state(idx - 1)
+            #self.latent_new_states[i] = self._get_latent_state(idx)
+        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]#, self.latent_states, self.latent_new_states
 
 
