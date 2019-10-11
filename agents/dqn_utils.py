@@ -13,7 +13,6 @@ def save_checkpoint(state, filename='model.pkl'):
     torch.save(state, filename)
     print("finished save of model %s" %filename)
 
-
 def seed_everything(seed=1234):
     #random.seed(seed)
     torch.manual_seed(seed)
@@ -21,19 +20,6 @@ def seed_everything(seed=1234):
     np.random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     #torch.backends.cudnn.deterministic = True
-
-def handle_step(random_state, cnt, S_hist, S_prime, action, reward, finished, k_used, acts, episodic_reward, replay_buffer, checkpoint='', n_ensemble=1, bernoulli_p=1.0):
-    # mask to determine which head can use this experience
-    exp_mask = random_state.binomial(1, bernoulli_p, n_ensemble).astype(np.uint8)
-    # at this observed state
-    experience =  [S_prime, action, reward, finished, exp_mask, k_used, acts, cnt]
-    batch = replay_buffer.send((checkpoint, experience))
-    # update so "state" representation is past history_size frames
-    S_hist.pop(0)
-    S_hist.append(S_prime)
-    episodic_reward += reward
-    cnt+=1
-    return cnt, S_hist, batch, episodic_reward
 
 def linearly_decaying_epsilon(num_warmup_steps, num_annealing_steps, final_epsilon, step):
     """ from Dopamine - Returns the current epsilon for the agent's epsilon-greedy policy.
