@@ -53,7 +53,7 @@ def get_frame_prepared_minibatch(ch, minibatch):
     assert(next_states.max() >= 0)
 
     rewards = torch.Tensor(rewards).to(ch.device)
-    assert(rewards.max() <= 1)
+    assert(rewards.max() <= 2)
     assert(rewards.min() >= 0)
     actions = torch.LongTensor(actions).to(ch.device)
     # TODO - check actions are valid
@@ -122,12 +122,12 @@ def train_agent(sm, model_dict, steps_to_train):
     start_step = deepcopy(sm.step_number)
     while (sm.step_number-start_step) < steps_to_train:
         #### START MAIN LOOP #####################################################################
-        state = sm.start_episode()
+        sm.start_episode()
         while not sm.terminal:
             is_random, action = sm.is_random_action()
             if not is_random:
                 # state coming from the model looks like (4,84,84) and is a uint8
-                pt_state = prepare_state(sm.ch, state[None])
+                pt_state = prepare_state(sm.ch, sm.state[None])
                 vals = get_action_vals(model_dict['policy_net'], pt_state)
                 action = single_head_action_function(vals, sm.active_head)
             sm.step(action)
@@ -220,7 +220,7 @@ if __name__ == '__main__':
     # this will load latest availalbe buffer - if none available - it will
     # create or load a random replay for this seed
     train_sm = StateManager(config_handler=ch)
-    train_sm.create_new_state_instance(phase='eval')
+    train_sm.create_new_state_instance(phase='train')
 
     eval_sm = StateManager(config_handler=ch)
     eval_sm.create_new_state_instance(phase='eval')

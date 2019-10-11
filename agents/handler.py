@@ -279,20 +279,25 @@ class StateManager():
         self.plot_progress(checkpoint_basepath)
         # TODO save this class - except for random state i assume
         self.memory_buffer.save_buffer(checkpoint_basepath+'.npz')
-        # preserve random state -
-        self.state_random_state = self.random_state.get_state()
-        fh = open(checkpoint_basepath+'.pkl', 'wb')
-        myvars = deepcopy(self.__dict__)
-        del myvars['random_state']
-        cPickle.dump(myvars, fh, 2)
-        fh.close()
-        del myvars
+        # TOO big - prob need to save specifics
+        ## preserve random state -
+        #self.state_random_state = self.random_state.get_state()
+        #fh = open(checkpoint_basepath+'.pkl', 'wb')
+        #myvars = deepcopy(self.__dict__)
+        ## delete the big stuff
+        #del myvars['episode_actions']
+        #del myvars['episode_rewards']
+        #del myvars['random_state']
+        #del myvars['memory_buffer']
+        #del myvars['env']
+        #cPickle.dump(myvars, fh, 2)
+        #fh.close()
+        #del myvars
 
     def end_episode(self):
         # catalog
         self.end_time = time.time()
         self.end_step_number = deepcopy(self.step_number)
-
         # add to lists
         self.episodic_reward.append(np.sum(self.episode_rewards))
         self.episodic_step_count.append(self.end_step_number-self.start_step_number)
@@ -308,9 +313,6 @@ class StateManager():
         self.start_time = time.time()
         self.random_state.shuffle(self.heads)
         self.active_head = self.heads[0]
-
-        if self.phase == 'train':
-            self.episode_heads.append(self.head)
 
         self.episode_losses = []
         self.episode_actions = []
@@ -351,7 +353,7 @@ class StateManager():
         #self.plot_data(edet_plot_path, det_plot_dict, suptitle, xname='episode', xdata=exdata)
         #self.plot_data(sdet_plot_path, det_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
         self.plot_data(edet_plot_path, det_plot_dict, suptitle, xname='episode')#, xdata=exdata)
-        self.plot_data(sdet_plot_path, det_plot_dict, suptitle, xname='steps')#, xdata=self.episodic_step_ends)
+        self.plot_data(sdet_plot_path, det_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
 
         rew_plot_dict = {
             'episodic reward':self.episodic_reward,
@@ -364,27 +366,33 @@ class StateManager():
         #self.plot_data(erew_plot_path, rew_plot_dict, suptitle, xname='episode', xdata=np.arange(self.episode_number))
         #self.plot_data(srew_plot_path, rew_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
         self.plot_data(erew_plot_path, rew_plot_dict, suptitle, xname='episode')#, xdata=np.arange(self.episode_number))
-        self.plot_data(srew_plot_path, rew_plot_dict, suptitle, xname='steps')#, xdata=self.episodic_step_ends)
+        self.plot_data(srew_plot_path, rew_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
 
-    def plot_data(self, savepath, plot_dict, suptitle, xname):#, xdata):
+    def plot_data(self, savepath, plot_dict, suptitle, xname, xdata=None):
         st = time.time()
         print('starting plot data')
         n = len(plot_dict.keys())
-        f,ax = plt.subplots(n,1,figsize=(3*n,5))
+        f,ax = plt.subplots(n,1,figsize=(6,3*n))
         #f,ax = plt.subplots(n,1)
-        for xx, name in enumerate(sorted(plot_dict.keys())):
-            #ax[xx].plot(xdata, plot_dict[name])
-            ax[xx].plot(plot_dict[name])
-            ax[xx].set_title('%s'%(name))
-            ax[xx].set_ylabel(name)
-            print(name, xname, st-time.time())
-        ax[xx].set_xlabel(xname)
-        f.suptitle('%s %s'%(self.phase, suptitle))
-        print('end sup', st-time.time())
-        f.savefig(savepath)
-        print("saved: %s" %savepath)
-        plt.close()
-        print('finished')
+        try:
+            for xx, name in enumerate(sorted(plot_dict.keys())):
+                if xdata is not None:
+                    ax[xx].plot(xdata, plot_dict[name])
+                else:
+                    ax[xx].plot(plot_dict[name])
+                ax[xx].set_title('%s'%(name))
+                ax[xx].set_ylabel(name)
+                print(name, xname, st-time.time())
+            ax[xx].set_xlabel(xname)
+            f.suptitle('%s %s'%(self.phase, suptitle))
+            print('end sup', st-time.time())
+            f.savefig(savepath)
+            print("saved: %s" %savepath)
+            plt.close()
+            print('finished')
+        except Exception:
+            print("plot")
+            embed()
 
     def handle_plotting(self, plot_basepath=''):
         # will plot at beginning of episode
@@ -408,8 +416,8 @@ class StateManager():
         self.episode_actions.append(action)
         self.episode_rewards.append(reward)
         self.step_number+=1
-        self.last_state = self.state
         self.state = next_state
+        self.last_state = self.state
 
     def set_eps(self):
         # TODO function to find eps - for now use constant
