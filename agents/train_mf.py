@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from dqn_model import EnsembleNet, NetWithPrior
 
 from IPython import embed
+# add annealing in
 
 def seed_everything(seed=1234):
     torch.manual_seed(seed)
@@ -53,8 +54,8 @@ def get_frame_prepared_minibatch(ch, minibatch):
     assert(next_states.max() >= 0)
 
     rewards = torch.Tensor(rewards).to(ch.device)
-    assert(rewards.max() <= 2)
-    assert(rewards.min() >= 0)
+    assert(rewards.max() <= 1)
+    assert(rewards.min() >= -1)
     actions = torch.LongTensor(actions).to(ch.device)
     # TODO - check actions are valid
     #TODO - which way are terminals?
@@ -71,6 +72,7 @@ def dqn_learn(sm, model_dict):
             minibatch = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
             prepared_minibatch = get_frame_prepared_minibatch(sm.ch, minibatch)
             states, actions, rewards, next_states, terminal_flags, masks = prepared_minibatch
+            print(states.sum(), next_states.sum(), actions.sum())
             # min history to learn is 200,000 frames in dqn - 50000 steps
             losses = [0.0 for _ in range(sm.ch.cfg['DQN']['n_ensemble'])]
             model_dict['opt'].zero_grad()
@@ -98,7 +100,6 @@ def dqn_learn(sm, model_dict):
                     losses[k] = loss.cpu().detach().item()
             loss = sum(cnt_losses)/float(sm.ch.cfg['DQN']['n_ensemble'])
             loss.backward()
-
             for param in model_dict['policy_net'].core_net.parameters():
                 if param.grad is not None:
                     # divide grads in core

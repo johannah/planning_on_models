@@ -48,7 +48,8 @@ def collect_random_experience(seed, env, memory_buffer, num_random_steps, num_ac
             # Store transition in the replay memory
             memory_buffer.add_experience(action=action,
                                          frame=next_state[-1],
-                                         reward=1+np.sign(reward), # add one so that rewards are <=0
+                                         #reward=1+np.sign(reward), # add one so that rewards are <=0
+                                         reward=np.sign(reward), # add one so that rewards are <=0
                                          terminal=life_lost,
                                          )
             step_number += 1
@@ -410,7 +411,8 @@ class StateManager():
         next_state, reward, self.life_lost, self.terminal = self.env.step(action)
         self.memory_buffer.add_experience(action=action,
                                             frame=next_state[-1],
-                                            reward=1+np.sign(reward),
+                                            #reward=1+np.sign(reward),
+                                            reward=np.sign(reward),
                                             terminal=self.life_lost,
                                             )
         self.episode_actions.append(action)
