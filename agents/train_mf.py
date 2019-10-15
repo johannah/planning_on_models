@@ -1,6 +1,5 @@
 """
 TODO - replay_memory_loadpath
-     - valid  - is it working??
 """
 import os
 import sys
@@ -63,8 +62,6 @@ def get_frame_prepared_minibatch(ch, minibatch):
     assert(rewards.max() <= 1)
     assert(rewards.min() >= -1)
     actions = torch.LongTensor(actions).to(ch.device)
-    # TODO - check actions are valid
-    #TODO - which way are terminals?
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(ch.device)
     masks = torch.FloatTensor(masks.astype(np.int)).to(ch.device)
     minibatch = states, actions, rewards, next_states, terminal_flags, masks
@@ -264,6 +261,6 @@ if __name__ == '__main__':
         checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
         save_models(checkpoint_basepath, model_dict)
         train_sm.save_checkpoint(checkpoint_basepath+'_train')
-        eval_sm.save_checkpoint(checkpoint_basepath+'_valid')
-        eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_valid')
+        eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
+        eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
 

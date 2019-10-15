@@ -280,6 +280,7 @@ class StateManager():
         buffer_path = filepath.replace('.pkl', '.npz')
         self.memory_buffer = ReplayMemory(load_file=buffer_path)
         # TODO should you load the count from the memory buffer - ?
+        # TODO what about episode number - it will be off now
         self.step_number = self.memory_buffer.count
 
     def save_checkpoint(self, checkpoint_basepath):
