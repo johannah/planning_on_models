@@ -172,15 +172,15 @@ def load_models(filepath, model_dict):
         model_dict[model_name].load_state_dict(model_state_dict[model_name])
     return model_dict
 
-def create_dqn_model_dict(ch, model_dict={}):
+def create_dqn_model_dict(ch, num_actions, model_dict={}):
     model_dict['policy_net'] = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
-                                      n_actions=ch.num_actions,
+                                      n_actions=num_actions,
                                       reshape_size=ch.cfg['DQN']['reshape_size'],
                                       num_channels=ch.cfg['ENV']['history_size'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
 
     model_dict['target_net'] = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
-                                      n_actions=ch.num_actions,
+                                      n_actions=num_actions,
                                       reshape_size=ch.cfg['DQN']['reshape_size'],
                                       num_channels=ch.cfg['ENV']['history_size'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
@@ -188,7 +188,7 @@ def create_dqn_model_dict(ch, model_dict={}):
     if ch.cfg['DQN']['prior']:
         print("using randomized prior")
         prior_net = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
-                                      n_actions=ch.num_actions,
+                                      n_actions=num_actions,
                                       reshape_size=ch.cfg['DQN']['reshape_size'],
                                       num_channels=ch.cfg['ENV']['history_size'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
@@ -239,7 +239,7 @@ if __name__ == '__main__':
             train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
             eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
 
-    model_dict = create_dqn_model_dict(ch)
+    model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
     if args.model_path != '':
         model_dict = load_models(args.model_path, model_dict)
     elif args.load_path != '':

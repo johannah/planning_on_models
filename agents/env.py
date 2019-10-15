@@ -38,8 +38,11 @@ class Environment(object):
         print('loading game from:%s'%rom_file)
         self.ale = self._init_ale(seed, rom_file)
         # normally (160, 210)
-        self.actions = self.ale.getMinimalActionSet()
-        self.action_space = len(self.actions)
+        # minimalactionset is not always sequential - for instance, in Breakout
+        # the action space is [0,1,3,4] - so use self.actions for choosing steps
+        self.action_space = self.ale.getMinimalActionSet()
+        self.num_actions = len(self.action_space)
+        self.actions = np.arange(self.num_actions)
 
         self.frame_skip = frame_skip
         self.num_frames = num_frames
@@ -67,10 +70,6 @@ class Environment(object):
         ale.setBool('color_averaging', False)
         ale.loadROM(rom_file)
         return ale
-
-    @property
-    def num_actions(self):
-        return len(self.actions)
 
     def _get_current_frame(self):
         # global glb_counter
@@ -122,7 +121,7 @@ class Environment(object):
         for i in range(self.frame_skip):
             if i == self.frame_skip - 1:
                 self.prev_screen = self.ale.getScreenRGB()
-            r = self.ale.act(self.actions[action_idx])
+            r = self.ale.act(self.action_space[action_idx])
             reward += r
         dead = (self.ale.lives() < old_lives)
         if self.dead_as_end and dead:

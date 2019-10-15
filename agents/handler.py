@@ -19,7 +19,7 @@ Copy .ini file over to working directory
 copy code to working directory
 """
 
-def collect_random_experience(seed, env, memory_buffer, num_random_steps, num_actions):
+def collect_random_experience(seed, env, memory_buffer, num_random_steps):
     # note that since we are making the env different here
     # we should always use a different env for the random portion vs the
     # learning agent
@@ -41,7 +41,7 @@ def collect_random_experience(seed, env, memory_buffer, num_random_steps, num_ac
         # at every new episode - recalculate action/reward weight
         state = env.reset()
         while not terminal:
-            action = random_state.randint(0, num_actions-1)
+            action = random_state.choice(env.actions)
             next_state, reward, life_lost, terminal = env.step(action)
             # TODO - dead as end? should be from ini file or is it handled
             # in env?
@@ -132,7 +132,7 @@ class ConfigHandler():
                 except Exception:
                     # handle list
                     if ',' in val:
-                        list_val = [int(x) for x in self.cfg['ENV']['action_space'][1:-1].split(',')]
+                        list_val = [int(x) for x in self.cfg['ENV'][key][1:-1].split(',')]
                         self.cfg[section][key] = list_val
 
     def _find_dependent_constants(self):
@@ -141,7 +141,6 @@ class ConfigHandler():
         self.cfg['ENV']['num_rewards'] = len(self.cfg['ENV']['reward_space'])
         self.norm_by = float(self.cfg['ENV']['norm_by'])
         self.num_rewards = len(self.cfg['ENV']['reward_space'])
-        self.num_actions = len(self.cfg['ENV']['action_space'])
 
     def get_random_buffer_path(self, phase, seed):
         assert phase in ['train', 'eval']
@@ -182,8 +181,7 @@ class ConfigHandler():
             return ""
 
     def create_empty_memory_buffer(self, seed, buffer_size):
-        return  ReplayMemory(action_space=self.cfg['ENV']['action_space'],
-                               size=buffer_size,
+        return  ReplayMemory(size=buffer_size,
                                frame_height=self.cfg['ENV']['obs_height'],
                                frame_width=self.cfg['ENV']['obs_width'],
                                agent_history_length=self.cfg['ENV']['history_size'],
@@ -229,7 +227,7 @@ class ConfigHandler():
             random_memory_buffer = self.create_empty_memory_buffer(seed, buffer_size)
 
             env = self.create_environment(seed)
-            random_memory_buffer = collect_random_experience(seed, env, random_memory_buffer, num_random_steps, self.num_actions)
+            random_memory_buffer = collect_random_experience(seed, env, random_memory_buffer, num_random_steps)
             # save the random buffer
             random_memory_buffer.save_buffer(random_buffer_path)
             return random_memory_buffer
@@ -448,7 +446,7 @@ class StateManager():
         self.set_eps()
         r = self.random_state.rand()
         if r < self.eps:
-            return True, self.random_state.randint(0, self.ch.num_actions-1)
+            return True, self.random_state.choice(self.env.actions)
         else:
             return False, -1
 
