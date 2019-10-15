@@ -1,4 +1,9 @@
+"""
+TODO - replay_memory_loadpath
+     - valid  - is it working??
+"""
 import os
+import sys
 import numpy as np
 import datetime
 import time
@@ -40,6 +45,7 @@ def vote_action_function(vals):
     data = Counter(acts)
     # TODO -  is most_common biased towards low action values?
     action =  data.most_common(1)[0][0]
+    print("vote", data, action)
     return action
 
 def get_frame_prepared_minibatch(ch, minibatch):
@@ -72,7 +78,6 @@ def dqn_learn(sm, model_dict):
             minibatch = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
             prepared_minibatch = get_frame_prepared_minibatch(sm.ch, minibatch)
             states, actions, rewards, next_states, terminal_flags, masks = prepared_minibatch
-            print(states.sum(), next_states.sum(), actions.sum())
             # min history to learn is 200,000 frames in dqn - 50000 steps
             losses = [0.0 for _ in range(sm.ch.cfg['DQN']['n_ensemble'])]
             model_dict['opt'].zero_grad()
@@ -142,17 +147,18 @@ def eval_agent(sm, model_dict, num_episodes_to_eval):
     start_episode = deepcopy(sm.episode_number)
     while (sm.episode_number-start_episode) < num_episodes_to_eval:
         #### START MAIN LOOP #####################################################################
-        state = sm.start_episode()
+        sm.start_episode()
         while not sm.terminal:
             is_random, action = sm.is_random_action()
             if not is_random:
-                pt_state = prepare_state(sm.ch, state[None])
+                pt_state = prepare_state(sm.ch, sm.state[None])
                 vals = get_action_vals(model_dict['policy_net'], pt_state)
                 action = vote_action_function(vals)
             sm.step(action)
         sm.end_episode()
-        sm.handle_plotting()
-        # TODO plot every
+        print('eval', np.sum(sm.episode_rewards))
+        print(sm.episode_rewards)
+        print(sm.episode_actions)
     return sm
 
 def save_models(checkpoint_basepath, model_dict):
@@ -163,8 +169,8 @@ def save_models(checkpoint_basepath, model_dict):
     print("saving models at: %s"%models_savepath)
     torch.save(model_state_dict, models_savepath)
 
-def load_models(checkpoint_basepath, model_dict):
-    model_state_dict = torch.load(checkpoint_basepath+'.pt')
+def load_models(filepath, model_dict):
+    model_state_dict = torch.load(filepath)
     for model_name in model_dict.keys():
         model_dict[model_name].load_state_dict(model_state_dict[model_name])
     return model_dict
@@ -202,29 +208,51 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
     from handler import ConfigHandler, StateManager
     parser = ArgumentParser()
-    parser.add_argument('config_path', help='pass name of config file that will be used to generate random data')
+    parser.add_argument('-cp', '--config_path', default='', help='path of config file that will be used to generate random data')
+    parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')
+    parser.add_argument('-mp', '--model_path', default='', help='path of .pt model file to load checkpoint')
     parser.add_argument('-c', '--cuda', action='store_true', default=False, help='flag to use cuda device')
     # TODO - add reload and continue of previous projects
 
     args = parser.parse_args()
     if args.cuda: device = 'cuda';
     else: device='cpu'
-    assert os.path.exists(args.config_path)
 
-
-    # load given configuration file and create experiment directory
-    ch = ConfigHandler(args.config_path, device=device)
-    seed_everything(ch.cfg['RUN']['train_seed'])
-    model_dict = create_dqn_model_dict(ch)
-    #TODO load model_dict
 
     # this will load latest availalbe buffer - if none available - it will
     # create or load a random replay for this seed
-    train_sm = StateManager(config_handler=ch)
-    train_sm.create_new_state_instance(phase='train')
+    train_sm = StateManager()
+    eval_sm = StateManager()
 
-    eval_sm = StateManager(config_handler=ch)
-    eval_sm.create_new_state_instance(phase='eval')
+    if args.config_path == '':
+        print('loading checkpoint and its config')
+        train_sm.load_checkpoint(filepath=args.load_path)
+        eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
+        ch = train_sm.ch
+        ch.device = device
+    else:
+        # load given configuration file and create experiment directory
+        ch = ConfigHandler(args.config_path, device=device)
+        if args.load_path == '':
+            print('creating new state instance')
+            train_sm.create_new_state_instance(config_handler=ch, phase='train')
+            eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
+        else:
+            print('loading checkpoint with specified config')
+            train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
+            eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
+
+    model_dict = create_dqn_model_dict(ch)
+    if args.model_path != '':
+        model_dict = load_models(args.model_path, model_dict)
+    elif args.load_path != '':
+        model_dict = load_models(args.load_path.replace('_train', '.pt'), model_dict)
+    else:
+        print('fresh models')
+
+
+    seed_everything(ch.cfg['RUN']['train_seed'])
+    #TODO load model_dict
 
     steps_to_train = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
     num_eval_episodes = ch.cfg['EVAL']['num_eval_episodes']
@@ -237,4 +265,5 @@ if __name__ == '__main__':
         save_models(checkpoint_basepath, model_dict)
         train_sm.save_checkpoint(checkpoint_basepath+'_train')
         eval_sm.save_checkpoint(checkpoint_basepath+'_valid')
+        eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_valid')
 

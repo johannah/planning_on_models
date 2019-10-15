@@ -7,7 +7,7 @@ import numpy as np
 import configparser
 from glob import glob
 from copy import deepcopy
-import _pickle as cPickle
+import pickle
 
 from env import Environment
 from replay import ReplayMemory
@@ -235,10 +235,11 @@ class ConfigHandler():
             return random_memory_buffer
 
 class StateManager():
-    def __init__(self, config_handler):
-        self.ch = config_handler
+    def __init__(self):
+        pass
 
-    def create_new_state_instance(self, phase):
+    def create_new_state_instance(self, config_handler, phase):
+        self.ch = config_handler
         self.save_time = time.time()-100000
         self.phase = phase
         self.step_number = 0
@@ -255,24 +256,31 @@ class StateManager():
 
         self.env = self.ch.create_environment(self.seed)
         self.memory_buffer = self.ch.load_memory_buffer(self.phase)
+        # TODO should you load the count from the memory buffer - ?
+        self.step_number = self.memory_buffer.count
 
 
-    def load_checkpoint(self, filepath):
+    def load_checkpoint(self, filepath, config_handler=''):
         # load previously saved state file
         fh = open(filepath, 'rb')
-        fdict = cPickle.load(fh)
+        fdict = pickle.load(fh)
         fh.close()
+        if config_handler != '':
+            # use given config handler
+            del fdict['ch']
+            self.ch = config_handler
+
         self.__dict__.update(fdict)
 
-        # handle random state
+        self.heads = np.arange(self.ch.cfg['DQN']['n_ensemble'])
         self.random_state = np.random.RandomState()
-        self.random_state.set_state(self.state_random_state)
-        del self.state_random_state
-
-        buffer_path = filepath.replace('.pkl', '.npz')
-        self.memory_buffer = ReplayMemory(load_file=buffer_path)
+        self.random_state.set_state(fdict['state_random_state'])
         # TODO NOTE this does not restart at same env state
         self.env = self.ch.create_environment(self.seed)
+        buffer_path = filepath.replace('.pkl', '.npz')
+        self.memory_buffer = ReplayMemory(load_file=buffer_path)
+        # TODO should you load the count from the memory buffer - ?
+        self.step_number = self.memory_buffer.count
 
     def save_checkpoint(self, checkpoint_basepath):
         # pass in step number because we always want to use training step number as reference
@@ -282,18 +290,25 @@ class StateManager():
         self.memory_buffer.save_buffer(checkpoint_basepath+'.npz')
         # TOO big - prob need to save specifics
         ## preserve random state -
-        #self.state_random_state = self.random_state.get_state()
-        #fh = open(checkpoint_basepath+'.pkl', 'wb')
-        #myvars = deepcopy(self.__dict__)
-        ## delete the big stuff
-        #del myvars['episode_actions']
-        #del myvars['episode_rewards']
-        #del myvars['random_state']
-        #del myvars['memory_buffer']
-        #del myvars['env']
-        #cPickle.dump(myvars, fh, 2)
-        #fh.close()
-        #del myvars
+        self.state_random_state = self.random_state.get_state()
+        save_dict = {
+                    'episodic_reward':self.episodic_reward,
+                    'episodic_reward_avg':self.episodic_reward_avg,
+                    'episodic_step_count':self.episodic_step_count,
+                    'episodic_step_ends':self.episodic_step_ends,
+                    'episodic_loss':self.episodic_loss,
+                    'episodic_times':self.episodic_times,
+                    'state_random_state':self.state_random_state,
+                    'episode_number':self.episode_number,
+                    'step_number':self.step_number,
+                    'phase':self.phase,
+                    'save_time':self.save_time,
+                    'ch':self.ch,
+                    }
+        fh = open(checkpoint_basepath+'.pkl', 'wb')
+        pickle.dump(save_dict, fh)
+        fh.close()
+        print('finished pickle in', time.time()-self.save_time)
 
     def end_episode(self):
         # catalog
@@ -332,7 +347,7 @@ class StateManager():
         plot_dict = {
                      'mean loss':self.episode_losses,
                      'actions':self.episode_actions,
-                     'rewards':self.episode_rewards, }
+                     'rewards':self.episode_rewards,}
         suptitle = 'E%s S%s-%s R%s'%(self.episode_number, self.start_step_number,
                                             self.end_step_number, self.episodic_reward[-1])
         plot_path = plot_basepath+'_ep%06d.png'%self.episode_number
