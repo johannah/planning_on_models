@@ -15,8 +15,8 @@ from replay import ReplayMemory
 from IPython import embed
 """
 TODO - create error checking for all of the variables in config
-Copy .ini file over to working directory
 copy code to working directory
+plot entire episode observed frames - could do this in a sep script
 """
 
 def collect_random_experience(seed, env, memory_buffer, num_random_steps):
@@ -145,7 +145,7 @@ class ConfigHandler():
     def get_random_buffer_path(self, phase, seed):
         assert phase in ['train', 'eval']
         game = os.path.split(self.cfg['ENV']['game'])[1].split('.')[0]
-        n = self.cfg['RUN']['num_pure_random_steps_%s'%phase]
+        n = self.cfg['DQN']['num_pure_random_steps_%s'%phase]
         buffer_size = self.cfg['RUN']['%s_buffer_size'%phase]
         filename = '%s_B%06dS%06d_N%05dRAND_%s.npz' %(game, buffer_size,  seed, n, phase)
         filepath = os.path.join(self.random_buffer_dir, filename)
@@ -200,8 +200,8 @@ class ConfigHandler():
         assert phase in ['train', 'eval']
         buffer_size = self.cfg['RUN']['%s_buffer_size'%phase]
         seed = self.cfg['RUN']['%s_seed'%phase]
-        init_empty_with_random=self.cfg['RUN']['load_random_%s_buffer'%phase]
-        num_random_steps = self.cfg['RUN']['num_pure_random_steps_%s'%phase]
+        init_empty_with_random=self.cfg['DQN']['load_random_%s_buffer'%phase]
+        num_random_steps = self.cfg['DQN']['num_pure_random_steps_%s'%phase]
         if load_previously_saved:
             buffer_path = self.search_for_latest_replay_buffer(phase)
             if buffer_path != "":
@@ -251,12 +251,23 @@ class StateManager():
         self.episodic_step_ends = []
         self.episodic_loss = []
         self.episodic_times = []
+        self.episodic_eps = []
 
         self.env = self.ch.create_environment(self.seed)
         self.memory_buffer = self.ch.load_memory_buffer(self.phase)
         # TODO should you load the count from the memory buffer - ?
         self.step_number = self.memory_buffer.count
+        self.setup_eps()
 
+    def setup_eps(self):
+        if self.phase == 'train':
+            self.eps_init = self.ch.cfg['DQN']['eps_init']
+            self.eps_final = self.ch.cfg['DQN']['eps_final']
+            self.eps_annealing_steps = self.ch.cfg['DQN']['eps_annealing_steps']
+            self.last_annealing_step = self.eps_annealing_steps + self.ch.cfg['DQN']['num_pure_random_steps_train']
+            if self.eps_annealing_steps > 0:
+                self.slope = -(self.eps_init - self.eps_final)/self.eps_annealing_steps
+                self.intercept = self.eps_init - self.slope*self.ch.cfg['DQN']['num_pure_random_steps_train']
 
     def load_checkpoint(self, filepath, config_handler=''):
         # load previously saved state file
@@ -280,6 +291,7 @@ class StateManager():
         # TODO should you load the count from the memory buffer - ?
         # TODO what about episode number - it will be off now
         self.step_number = self.memory_buffer.count
+        self.setup_eps()
 
     def save_checkpoint(self, checkpoint_basepath):
         # pass in step number because we always want to use training step number as reference
@@ -319,6 +331,7 @@ class StateManager():
         self.episodic_step_ends.append(self.end_step_number)
         self.episodic_loss.append(np.mean(self.episode_losses))
         self.episodic_times.append(self.end_time-self.start_time)
+        self.episodic_eps.append(self.eps)
         # smoothed reward over last 100 episodes
         self.episodic_reward_avg.append(np.mean(self.episodic_reward[-100:]))
         print("*** %s E%05d S%010d R%s ***"%(self.phase, self.episode_number, self.step_number, self.episodic_reward[-1]))
@@ -359,6 +372,7 @@ class StateManager():
             'episodic step count':self.episodic_step_count,
             'episodic time':self.episodic_times,
             'mean episodic loss':self.episodic_loss,
+            'eps':self.episodic_eps,
              }
 
         suptitle = 'Details E%s S%s'%(self.episode_number, self.end_step_number)
@@ -437,8 +451,12 @@ class StateManager():
 
     def set_eps(self):
         # TODO function to find eps - for now use constant
+        if self.step_number <= self.ch.cfg['DQN']['num_pure_random_steps_%s'%self.phase]:
+            self.eps = 1.0
         if self.phase == 'train':
-            self.eps = self.ch.cfg['DQN']['eps_init']
+            self.eps = self.eps_final
+            if self.step_number < self.last_annealing_step:
+                self.eps = self.slope*self.step_number+self.intercept
         else:
             self.eps = self.ch.cfg['EVAL']['eps_eval']
 

@@ -281,7 +281,6 @@ def down_shift(x, pad=None):
     pad = nn.ZeroPad2d((0, 0, 1, 0)) if pad is None else pad
     return pad(x)
 
-
 def right_shift(x, pad=None):
     # Pytorch ordering
     xs = [int(y) for y in x.size()]

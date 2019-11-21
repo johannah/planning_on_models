@@ -142,7 +142,7 @@ class ReplayMemory:
         Args:
             action: An integer between 0 and env.action_space.n - 1
                 determining the action the agent perfomed
-            frame: A (84, 84, 1) frame of an Atari game in grayscale
+            frame: A (84, 84) frame of an Atari game in grayscale
             reward: A float determining the reward the agend received for performing an action
             terminal: A bool stating whether the episode terminated
         """
@@ -201,22 +201,70 @@ class ReplayMemory:
             self.new_states = np.empty((batch_size, self.agent_history_length,
                                         self.frame_height, self.frame_width), dtype=np.uint8)
 
-            #self.latent_states = np.empty((batch_size, self.agent_history_length,
-            #                        self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
-            #self.latent_new_states = np.empty((batch_size, self.agent_history_length,
-            #                            self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
-
-
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
 
         self._get_valid_indices(batch_size)
 
         for i, idx in enumerate(self.indices):
+            # This seems correct to me
+            # when adding experience - every input frame is the "next frame",
+            # the action that got us to this frame, and the reward received
             self.states[i] = self._get_state(idx - 1)
             self.new_states[i] = self._get_state(idx)
-            #self.latent_states[i] = self._get_latent_state(idx - 1)
-            #self.latent_new_states[i] = self._get_latent_state(idx)
         return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]#, self.latent_states, self.latent_new_states
+
+    def reset_unique(self):
+        self.unique_indexes = np.arange(self.count)
+        self.random_state.shuffle(self.unique_indexes)
+        self.unique_index = 0
+        self.unique_available = True
+
+    def _get_unique_valid_indices(self, batch_size):
+        unique_indices = []
+        for i in range(batch_size):
+            while self.unique_index < len(self.unique_indexes):
+                index = self.unique_indexes[self.unique_index]
+                self.unique_index+=1
+                if index < self.agent_history_length:
+                    continue
+                if index >= self.current and index - self.agent_history_length <= self.current:
+                    continue
+                # dont add if there was a terminal flag in previous
+                # history_length steps
+                if self.terminal_flags[index - self.agent_history_length:index].any():
+                    continue
+                break
+            unique_indices.append(index)
+
+        if self.unique_index >= len(self.unique_indexes)-1:
+            self.unique_available = False
+
+        return np.array(unique_indices, np.int32)
+
+    def get_unique_minibatch(self, batch_size):
+        """
+        Returns a minibatch of batch_size
+        """
+        if self.count < self.agent_history_length:
+            raise ValueError('Not enough memories to get a minibatch')
+
+        unique_indices = self._get_unique_valid_indices(batch_size)
+        batch_size = unique_indices.shape[0]
+
+        if batch_size != self.states.shape[0]:
+            self.states = np.empty((batch_size, self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
+            self.new_states = np.empty((batch_size, self.agent_history_length,
+                                        self.frame_height, self.frame_width), dtype=np.uint8)
+
+
+        for i, idx in enumerate(unique_indices):
+            # This seems correct to me
+            # when adding experience - every input frame is the "next frame",
+            # the action that got us to this frame, and the reward received
+            self.states[i] = self._get_state(idx - 1)
+            self.new_states[i] = self._get_state(idx)
+        return self.states, self.actions[unique_indices], self.rewards[unique_indices], self.new_states, self.terminal_flags[unique_indices], self.masks[unique_indices], unique_indices
 
 

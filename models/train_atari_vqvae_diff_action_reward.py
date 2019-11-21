@@ -8,15 +8,13 @@ import torch
 from torch.nn import functional as F
 from torch.nn.utils.clip_grad import clip_grad_value_
 from ae_utils import discretized_mix_logistic_loss, sample_from_discretized_mix_logistic
-from ae_utils import handle_plot_ckpt, reshape_input
+from ae_utils import handle_plot_ckpt, reshape_input, save_checkpoint
 torch.set_num_threads(2)
 #from torch.utils.data import Dataset, DataLoader
 from torchvision.utils import save_image
 from IPython import embed
 from copy import deepcopy
-from ae_utils import save_checkpoint
 from vqvae import VQVAErl
-from datasets import AtariDataset
 torch.manual_seed(394)
 sys.path.append('../agents')
 from replay import ReplayMemory
@@ -36,29 +34,29 @@ def make_state(batch, DEVICE, NORM_BY):
     return states, actions, rewards, next_states
 
 def save_vqvae(info, train_cnt, vqvae_model, opt, avg_train_losses, valid_batch):
-    info['vq_last_save'] = train_cnt
-    info['vq_save_times'].append(time.time())
+    info['model_last_save'] = train_cnt
+    info['model_save_times'].append(time.time())
     avg_valid_losses = valid_vqvae(train_cnt, vqvae_model, info, valid_batch)
     handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses)
-    filename = info['VQ_MODEL_BASE_FILEDIR'] + "_%010dex.pt"%train_cnt
+    filename = info['MODEL_MODEL_BASE_FILEDIR'] + "_%010dex.pt"%train_cnt
     print("SAVING MODEL:%s" %filename)
-    print("Saving model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['vq_last_save']))
+    print("Saving model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['model_last_save']))
     state = {
-             'vqvae_state_dict':vqvae_model.state_dict(),
-             'vq_optimizer':opt.state_dict(),
-             'vq_embedding':vqvae_model.embedding,
-             'vq_info':info,
+             'model_state_dict':vqvae_model.state_dict(),
+             'model_optimizer':opt.state_dict(),
+             'model_embedding':vqvae_model.embedding,
+             'model_info':info,
              }
     save_checkpoint(state, filename=filename)
 
 def run_vqvae(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to_train=10000, save_every_samples=1000, batches=0):
-    if len(info['vq_train_cnts']):
-        train_cnt = info['vq_train_cnts'][-1]
+    if len(info['model_train_cnts']):
+        train_cnt = info['model_train_cnts'][-1]
     else:
         train_cnt = 0
     while train_cnt < num_samples_to_train:
         st = time.time()
-        batch = train_buffer.get_minibatch(info['VQ_BATCH_SIZE'])
+        batch = train_buffer.get_minibatch(info['MODEL_BATCH_SIZE'])
         opt.zero_grad()
         avg_train_losses, _, _, _ = train_vqvae(vqvae_model, info, batch)
         parameters = list(vqvae_model.parameters())
@@ -66,9 +64,9 @@ def run_vqvae(info, vqvae_model, opt, train_buffer, valid_buffer, num_samples_to
         opt.step()
         opt.zero_grad()
 
-        train_cnt+=info['VQ_BATCH_SIZE']
-        if (((train_cnt-info['vq_last_save'])>=save_every_samples) or batches==0):
-            valid_batch = valid_buffer.get_minibatch(info['VQ_BATCH_SIZE'])
+        train_cnt+=info['MODEL_BATCH_SIZE']
+        if (((train_cnt-info['model_last_save'])>=save_every_samples) or batches==0):
+            valid_batch = valid_buffer.get_minibatch(info['MODEL_BATCH_SIZE'])
             save_vqvae(info, train_cnt, vqvae_model, opt, avg_train_losses, valid_batch)
         batches+=1
         if not batches%500:
@@ -154,7 +152,7 @@ def valid_vqvae(train_cnt, vqvae_model, info, batch):
     true_tm1 = next_states[:n,-2].cpu().numpy()
     print("yhat img", yhat_t.min().item(), yhat_t.max().item())
     print("true img", true_t.min().item(), true_t.max().item())
-    img_name = info['VQ_MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction.png"%train_cnt
+    img_name = info['MODEL_MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction.png"%train_cnt
     f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
     for nn in range(n):
         ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=-1)
@@ -172,8 +170,8 @@ def valid_vqvae(train_cnt, vqvae_model, info, batch):
     plt.savefig(img_name)
     plt.close()
 
-    #img_name2 = info['vq_model_base_filepath'] + "_%010d_valid_reconstruction2.png"%train_cnt
-    img_name2 = info['VQ_MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction2.png"%train_cnt
+    #img_name2 = info['model_model_base_filepath'] + "_%010d_valid_reconstruction2.png"%train_cnt
+    img_name2 = info['MODEL_MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction2.png"%train_cnt
     f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
     for nn in range(n):
         ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=0)
@@ -207,56 +205,56 @@ def init_train():
     valid_data_file = args.valid_buffer
     #valid_data_file = '/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/valid_set_small.npz'
     if args.model_loadpath == '':
-         train_cnt = 0
-         run_num = 0
-         model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-         while os.path.exists(model_base_filedir):
-             run_num +=1
-             model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-         os.makedirs(model_base_filedir)
-         model_base_filepath = os.path.join(model_base_filedir, args.savename)
-         print("MODEL BASE FILEPATH", model_base_filepath)
+        train_cnt = 0
+        run_num = 0
+        model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+        while os.path.exists(model_base_filedir):
+            run_num +=1
+            model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+        os.makedirs(model_base_filedir)
+        model_base_filepath = os.path.join(model_base_filedir, args.savename)
+        print("MODEL BASE FILEPATH", model_base_filepath)
 
-         info = {'vq_train_cnts':[],
-                 'vq_train_losses_list':[],
-                 'vq_valid_cnts':[],
-                 'vq_valid_losses_list':[],
-                 'vq_save_times':[],
-                 'vq_last_save':0,
-                 'vq_last_plot':0,
-                 'NORM_BY':255.0,
-                 'vq_model_loadpath':args.model_loadpath,
-                 'VQ_MODEL_BASE_FILEDIR':model_base_filedir,
-                 'vq_model_base_filepath':model_base_filepath,
-                 'vq_train_data_file':train_data_file,
-                 'VQ_SAVENAME':args.savename,
-                 'DEVICE':DEVICE,
-                 'NUM_Z':args.num_z,
-                 'NUM_K':args.num_k,
-                 'NR_LOGISTIC_MIX':args.nr_logistic_mix,
-                 'BETA':args.beta,
-                 'ALPHA_REC':args.alpha_rec,
-                 'ALPHA_ACT':args.alpha_act,
-                 'ALPHA_REW':args.alpha_rew,
-                 'VQ_BATCH_SIZE':args.batch_size,
-                 'NUMBER_CONDITION':args.number_condition,
-                 'VQ_LEARNING_RATE':args.learning_rate,
-                 'VQ_SAVE_EVERY':args.save_every,
-                  }
+        info = {'model_train_cnts':[],
+                'model_train_losses_list':[],
+                'model_valid_cnts':[],
+                'model_valid_losses_list':[],
+                'model_save_times':[],
+                'model_last_save':0,
+                'model_last_plot':0,
+                'NORM_BY':255.0,
+                'model_model_loadpath':args.model_loadpath,
+                'MODEL_MODEL_BASE_FILEDIR':model_base_filedir,
+                'model_model_base_filepath':model_base_filepath,
+                'model_train_data_file':train_data_file,
+                'model_SAVENAME':args.savename,
+                'DEVICE':DEVICE,
+                'NUM_Z':args.num_z,
+                'NUM_K':args.num_k,
+                'NR_LOGISTIC_MIX':args.nr_logistic_mix,
+                'BETA':args.beta,
+                'ALPHA_REC':args.alpha_rec,
+                'ALPHA_ACT':args.alpha_act,
+                'ALPHA_REW':args.alpha_rew,
+                'MODEL_BATCH_SIZE':args.batch_size,
+                'NUMBER_CONDITION':args.number_condition,
+                'MODEL_LEARNING_RATE':args.learning_rate,
+                'MODEL_SAVE_EVERY':args.save_every,
+                 }
 
-         ## size of latents flattened - dependent on architecture of vqvae
-         #info['float_condition_size'] = 100*args.num_z
-         ## 3x logistic needed for loss
-         ## TODO - change loss
+        ## size of latents flattened - dependent on architecture of vqvae
+        #info['float_condition_size'] = 100*args.num_z
+        ## 3x logistic needed for loss
+        ## TODO - change loss
     else:
         print('loading model from: %s' %args.model_loadpath)
         model_dict = torch.load(args.model_loadpath)
-        info =  model_dict['vq_info']
+        info =  model_dict['model_info']
         model_base_filedir = os.path.split(args.model_loadpath)[0]
         model_base_filepath = os.path.join(model_base_filedir, args.savename)
-        train_cnt = info['vq_train_cnts'][-1]
+        train_cnt = info['model_train_cnts'][-1]
         info['loaded_from'] = args.model_loadpath
-        info['VQ_BATCH_SIZE'] = args.batch_size
+        info['MODEL_BATCH_SIZE'] = args.batch_size
         #if 'reward_weights' not in info.keys():
         #    info['reward_weights'] = [1,100]
     # create replay buffer
@@ -292,13 +290,12 @@ def init_train():
 
     print('using args', args)
     parameters = list(vqvae_model.parameters())
-    opt = optim.Adam(parameters, lr=info['VQ_LEARNING_RATE'])
+    opt = optim.Adam(parameters, lr=info['MODEL_LEARNING_RATE'])
     if args.model_loadpath != '':
         print("loading weights from:%s" %args.model_loadpath)
-        vqvae_model.load_state_dict(model_dict['vqvae_state_dict'])
-        opt.load_state_dict(model_dict['vq_optimizer'])
-        vqvae_model.embedding = model_dict['vq_embedding']
-
+        vqvae_model.load_state_dict(model_dict['modelvae_state_dict'])
+        opt.load_state_dict(model_dict['model_optimizer'])
+        vqvae_model.embedding = model_dict['model_embedding']
 
     #args.pred_output_size = 1*80*80
     ## 10 is result of structure of network

@@ -1,6 +1,6 @@
 [RUN]
 # directory name to save this experiment in
-NAME=MFBreakout_train
+NAME=MFBreakout_train_anneal
 # load buffer from previous agent
 REPLAY_MEMORY_LOADPATH=
 REPLAY_MEMORY_VALID_LOADPATH= 
@@ -12,20 +12,14 @@ EVAL_BUFFER_NAME=
 TRAIN_SEED = 14342
 EVAL_SEED = 100
 # Buffer size for experience replay
-TRAIN_BUFFER_SIZE = 500000
+TRAIN_BUFFER_SIZE = 1000000
 # eval buffer used for evaluating model_based
 EVAL_BUFFER_SIZE = 50000
 # how often to run evaluation (in steps)
 EVAL_AND_CHECKPOINT_EVERY_STEPS= 200000
 # how often to write pkl of model and npz of data buffer
-# if the random buffer doesn't exist, then create one
-LOAD_RANDOM_TRAIN_BUFFER= 1
-LOAD_RANDOM_EVAL_BUFFER= 1
-# if LOAD_RANDOM_phase_BUFFER prefill with this many steps
-NUM_PURE_RANDOM_STEPS_TRAIN = 50000
-NUM_PURE_RANDOM_STEPS_EVAL = 1000
 # max number of steps to train
-TOTAL_TRAIN_STEPS = 40000000
+TOTAL_TRAIN_STEPS = 25000000
 
 [EVAL]
 # How often to take a random step in evaluation.
@@ -130,10 +124,18 @@ USE_EMBEDDING=0
 # I think this randomness might need to be higher
 # EPS initially is usually high, then tapers down. With bootstrap, this isn't
 # needed I think
-EPS_INIT = 0.01
+# without any eps - the bootstrap/prior network on breakout did not train - high score of 40 
+EPS_ANNEALING_STEPS=1000000
+EPS_INIT = 1.0
 # 0.01 in osband
 EPS_FINAL = 0.01
-
+# if the random buffer doesn't exist, then create one
+LOAD_RANDOM_TRAIN_BUFFER=1
+LOAD_RANDOM_EVAL_BUFFER=1
+# if LOAD_RANDOM_phase_BUFFER prefill with this many steps
+NUM_PURE_RANDOM_STEPS_TRAIN = 50000
+NUM_PURE_RANDOM_STEPS_EVAL = 1000
+#
 
 [FORWARD]
 # TODO - the forward model is not incorporated yet
