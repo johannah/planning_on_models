@@ -11,12 +11,16 @@ https://github.com/pytorch/examples/blob/master/vae/main.py
 # TODO conv
 # TODO load function
 # daydream function
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import os
 import time
 import sys
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 import cv2
+from copy import deepcopy
 
 from torch import nn, optim
 import torch
@@ -85,6 +89,12 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
     assert load_buffer.count > 10
     return load_buffer
 
+def prepare_next_state(st, DEVICE, NORM_BY):
+    # states come in at uint8 - should be converted to float between 0 and 1
+    output = (reshape_input(torch.FloatTensor(st)/NORM_BY)).to(DEVICE)
+    assert output.max() < 1.01
+    assert output.min() > -.01
+    return output
 
 def prepare_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between -1 and 1
@@ -100,7 +110,7 @@ def make_state(batch, DEVICE, NORM_BY):
     # rewards are    [r0,  r1,  r2,  a3]
     states, actions, rewards, next_states, terminal_flags, masks = batch
     states = prepare_state(states, DEVICE, NORM_BY)
-    next_states = prepare_state(next_states, DEVICE, NORM_BY)
+    next_states = prepare_next_state(next_states, DEVICE, NORM_BY)
     # next state is the corresponding action
     actions = torch.LongTensor(actions).to(DEVICE)
     rewards = torch.LongTensor(rewards).to(DEVICE)
@@ -115,7 +125,7 @@ def save_model(info, model_dict):
     #handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses)
     # TODO - replace w valid
     #handle_plot_ckpt(train_cnt, info, avg_train_losses, avg_valid_losses)
-    filename = info['MODEL_BASE_FILEDIR'] + "_%010dex.pt"%train_cnt
+    filename = os.path.join(info['MODEL_BASE_FILEDIR'], "_%010dex.pt"%train_cnt)
     print("Saving model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['model_last_save']))
     print(filename)
     state = {
@@ -126,33 +136,21 @@ def save_model(info, model_dict):
     save_checkpoint(state, filename=filename)
     return info
 
-
-def find_rec_losses(alpha, nr, nmix, x_d, true, DEVICE):
-    rec_losses = []
-    rec_ests = []
-    # get reconstruction losses for each channel
-    for i in range(true.shape[1]):
-        st = i*nmix
-        en = st+nmix
-        pred_x_d = x_d[:,st:en]
-        rec_ests.append(pred_x_d.detach())
-        rloss = alpha*discretized_mix_logistic_loss(pred_x_d, true[:,i][:,None], nr_mix=nr, DEVICE=DEVICE)
-        rec_losses.append(rloss)
-    return rec_losses, rec_ests
+def add_losses(info, train_cnt, phase, kl_loss, rec_loss):
+    info['model_%s_cnts'%phase].append(train_cnt)
+    if '%s_kl_loss'%phase not in info['model_%s_losses'%phase].keys():
+        info['model_%s_losses'%phase]['%s_kl_loss'%phase] = []
+    info['model_%s_losses'%phase]['%s_kl_loss'%phase].append(kl_loss)
+    if '%s_rec_loss'%phase not in info['model_%s_losses'%phase].keys():
+        info['model_%s_losses'%phase]['%s_rec_loss'%phase] = []
+    info['model_%s_losses'%phase]['%s_rec_loss'%phase].append(rec_loss)
+    return info
 
 
-def train_acn(info, model_dict, train_buffer, valid_buffer, save_every_samples):
-
-
-    if not 'avg_train_kl_loss' in info['model_train_losses'].keys():
-        info['model_train_losses']['avg_train_kl_loss'] = []
-    if not 'avg_train_rec_loss' in info['model_train_losses'].keys():
-        info['model_train_losses']['avg_train_rec_loss'] = []
-
-
-    encoder_model = model_dict['encoder_model'].train()
-    prior_model = model_dict['prior_model'].train()
-    pcnn_decoder = model_dict['pcnn_decoder'].train()
+def train_acn(info, model_dict, data_buffers, phase='train'):
+    encoder_model = model_dict['encoder_model']
+    prior_model = model_dict['prior_model']
+    pcnn_decoder = model_dict['pcnn_decoder']
     opt = model_dict['opt']
 
     # add one to the rewards so that they are all positive
@@ -162,185 +160,167 @@ def train_acn(info, model_dict, train_buffer, valid_buffer, save_every_samples):
         train_cnt = info['model_train_cnts'][-1]
     else: train_cnt = 0
 
-    num_batches = train_buffer.count//info['MODEL_BATCH_SIZE']
+    num_batches = data_buffers['train'].count//info['MODEL_BATCH_SIZE']
     while train_cnt < 10000000:
+        if phase == 'valid':
+            encoder_model.eval()
+            prior_model.eval()
+            pcnn_decoder.eval()
+        else:
+            encoder_model.train()
+            prior_model.train()
+            pcnn_decoder.train()
+
         batch_num = 0
-        init_cnt = train_cnt
-        train_buffer.reset_unique()
-        train_kl_loss = 0.0
-        train_rec_loss = 0.0
-        print('-------------new epoch------------------')
+        data_buffers[phase].reset_unique()
+        print('-------------new epoch %s------------------'%phase)
         print('num batches', num_batches)
-        while train_buffer.unique_available:
+        while data_buffers[phase].unique_available:
             opt.zero_grad()
-            batch = train_buffer.get_unique_minibatch(info['MODEL_BATCH_SIZE'])
+            batch = data_buffers[phase].get_unique_minibatch(info['MODEL_BATCH_SIZE'])
             relative_indices = batch[-1]
             states, actions, rewards, next_states = make_state(batch[:-1], info['DEVICE'], info['NORM_BY'])
             next_state = next_states[:,-1:]
             bs = states.shape[0]
             #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
             z, u_q = encoder_model(states)
-            np_uq = u_q.detach().cpu().numpy()
-
-            if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
-                print('train bad')
-                embed()
 
             # add the predicted codes to the input
-            yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state,
-                                                    class_condition=actions,
-                                                    float_condition=z))
-            #yhat_batch = torch.sigmoid(pcnn_decoder(x=next_states, float_condition=z))
+            #yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state,
+            #                                        class_condition=actions,
+            #                                        float_condition=z))
+            yhat_batch = encoder_model.decode(z)
             prior_model.codes[relative_indices] = u_q.detach().cpu().numpy()
-            np_uq = u_q.detach().cpu().numpy()
-
-            if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
-                print('train bad')
-                embed()
 
             mix, u_ps, s_ps = prior_model(u_q)
+
+            # track losses
             kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, next_state, u_q, mix, u_ps, s_ps)
             loss = kl_loss + rec_loss
-            loss.backward()
-            parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
-            clip_grad_value_(parameters, 10)
-            train_kl_loss+= kl_loss.item()
-            train_rec_loss+= rec_loss.item()
-            opt.step()
-            # add batch size because it hasn't been added to train cnt yet
-            avg_train_kl_loss = train_kl_loss/float((train_cnt+bs)-init_cnt)
-            avg_train_rec_loss = train_rec_loss/float((train_cnt+bs)-init_cnt)
-            train_cnt += bs
+            # aatch size because it hasn't been added to train cnt yet
+
+
+            if not phase == 'valid':
+                loss.backward()
+                #parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+                parameters = list(encoder_model.parameters()) + list(prior_model.parameters())
+                clip_grad_value_(parameters, 10)
+                opt.step()
+                train_cnt += bs
+
+            if not batch_num%info['MODEL_LOG_EVERY_BATCHES']:
+                print(phase, train_cnt, batch_num, kl_loss.item(), rec_loss.item())
+                info = add_losses(info, train_cnt, phase, kl_loss.item(), rec_loss.item())
             batch_num+=1
-            if not batch_num%10:
-                print(train_cnt, batch_num, avg_train_kl_loss, avg_train_rec_loss)
-            if (((train_cnt-info['model_last_save'])>=save_every_samples)):
-                #valid_losses = valid_buffer.get_minibatch(info['MODEL_BATCH_SIZE'])
-                info['model_train_cnts'].append(train_cnt)
-                info['model_train_losses']['avg_train_kl_loss'].append(avg_train_kl_loss)
-                info['model_train_losses']['avg_train_rec_loss'].append(avg_train_rec_loss)
+
+        if (((train_cnt-info['model_last_save'])>=info['MODEL_SAVE_EVERY'])):
+            info = add_losses(info, train_cnt, phase, kl_loss.item(), rec_loss.item())
+            if phase == 'train':
+                # run as valid phase and get back to here
+                phase = 'valid'
+            else:
+                model_dict = {'encoder_model':encoder_model,
+                              'prior_model':prior_model,
+                              'pcnn_decoder':pcnn_decoder,
+                              'opt':opt}
                 info = save_model(info, model_dict)
-
-        model_dict = {'encoder_model':encoder_model,
-                     'prior_model':prior_model,
-                     'pcnn_decoder':pcnn_decoder,
-                     'opt':opt}
+                phase = 'train'
 
 
-#def valid_vqvae(train_cnt, vqvae_model, info, batch):
-#    vqvae_model.eval()
-#    states, actions, rewards, next_states = make_state(batch, info['DEVICE'], info['NORM_BY'])
-#    # use next_states because that is the t-1 action
-#    x_d, z_e_x, z_q_x, latents, pred_actions, pred_rewards = vqvae_model(next_states)
-#    z_q_x.retain_grad()
-#    rec_losses, rec_ests = find_rec_losses(alpha=info['ALPHA_REC'],
-#                                 nr=info['NR_LOGISTIC_MIX'],
-#                                 nmix=info['nmix'],
-#                                 x_d=x_d, true=next_states,
-#                                 DEVICE=info['DEVICE'])
-#
-#    loss_act = info['ALPHA_ACT']*F.nll_loss(pred_actions, actions, weight=info['actions_weight'])
-#    loss_reward = info['ALPHA_REW']*F.nll_loss(pred_rewards, rewards, weight=info['rewards_weight'])
-#    loss_2 = F.mse_loss(z_q_x, z_e_x.detach())
-#    loss_3 = info['BETA']*F.mse_loss(z_e_x, z_q_x.detach())
-#    vqvae_model.embedding.zero_grad()
-#
-#    bs = float(x_d.shape[0])
-#    avg_valid_losses = [loss_reward.item()/bs, loss_act.item()/bs,
-#                        rec_losses[0].item()/bs, rec_losses[1].item()/bs,
-#                        rec_losses[2].item()/bs, rec_losses[3].item()/bs,
-#                        loss_2.item()/bs, loss_3.item()/bs]
-#
-#    bs,yc,yh,yw = x_d.shape
-#    n = min(next_states.shape[0],5)
-#    # last state
-#    yhat_t = sample_from_discretized_mix_logistic(rec_ests[-1][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
-#    yhat_tm1 = sample_from_discretized_mix_logistic(rec_ests[-2][:n], info['NR_LOGISTIC_MIX']).cpu().numpy()
-#    true_t = next_states[:n,-1].cpu().numpy()
-#    true_tm1 = next_states[:n,-2].cpu().numpy()
-#    print("yhat img", yhat_t.min().item(), yhat_t.max().item())
-#    print("true img", true_t.min().item(), true_t.max().item())
-#    img_name = info['MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction.png"%train_cnt
-#    f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
-#    for nn in range(n):
-#        ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=-1)
-#        ax[nn, 0].set_title('TA%s'%int(actions[nn]))
-#        ax[nn, 1].imshow(true_t[nn], vmax=1, vmin=-1)
-#        ax[nn, 1].set_title('TR%s'%int(rewards[nn]))
-#        ax[nn, 2].imshow(yhat_tm1[nn,0], vmax=1, vmin=-1)
-#        ax[nn, 2].set_title('PA%s'%int(torch.argmax(pred_actions[nn])))
-#        ax[nn, 3].imshow(yhat_t[nn,0], vmax=1, vmin=-1)
-#        ax[nn, 3].set_title('PR%s'%int(torch.argmax(pred_rewards[nn])))
-#        for i in range(4):
-#            ax[nn,i].axis('off')
-#
-#    plt.tight_layout(pad=0.4, w_pad=0.5, h_pad=1.0)
-#    plt.savefig(img_name)
-#    plt.close()
-#
-#    #img_name2 = info['model_model_base_filepath'] + "_%010d_valid_reconstruction2.png"%train_cnt
-#    img_name2 = info['MODEL_BASE_FILEDIR'] + "_%010d_valid_reconstruction2.png"%train_cnt
-#    f,ax=plt.subplots(n,4, figsize=(4*2, n*2))
-#    for nn in range(n):
-#        ax[nn, 0].imshow(true_tm1[nn], vmax=1, vmin=0)
-#        ax[nn, 0].set_title('TA%s'%int(actions[nn]))
-#        ax[nn, 1].imshow(true_t[nn], vmax=1, vmin=0)
-#        ax[nn, 1].set_title('TR%s'%int(rewards[nn]))
-#        ax[nn, 2].imshow(yhat_tm1[nn,0])
-#        ax[nn, 2].set_title('PA%s'%int(torch.argmax(pred_actions[nn])))
-#        ax[nn, 3].imshow(yhat_t[nn,0])
-#        ax[nn, 3].set_title('PR%s'%int(torch.argmax(pred_rewards[nn])))
-#        for i in range(4):
-#            ax[nn,i].axis('off')
-#    plt.tight_layout(pad=0.4, w_pad=0.5, h_pad=1.0)
-#    plt.savefig(img_name2)
-#
-#
-#    #bs,h,w = gold.shape
-#    ## sample from discretized should be between 0 and 255
-#    #print("yhat sample", yhat[:,0].min().item(), yhat[:,0].max().item())
-#    #yimg = ((yhat + 1.0)/2.0).to('cpu')
-#    #print("yhat img", yhat.min().item(), yhat.max().item())
-#    #print("gold img", gold.min().item(), gold.max().item())
-#    #comparison = torch.cat([gold.view(bs,1,h,w)[:n],
-#    #                        yimg.view(bs,1,h,w)[:n]])
-#    #save_image(comparison, img_name, nrow=n)
-#    return avg_valid_losses
-#
+
+    model_dict = {'encoder_model':encoder_model,
+                 'prior_model':prior_model,
+                 'pcnn_decoder':pcnn_decoder,
+                 'opt':opt}
+
+    info = save_model(info, model_dict)
+
+def sample_acn(info, model_dict, data_buffers, num_samples=4, teacher_force=False):
+    print("sampling model")
+
+    encoder_model = model_dict['encoder_model']
+    prior_model = model_dict['prior_model']
+    pcnn_decoder = model_dict['pcnn_decoder']
+
+    for phase in ['train', 'validl']:
+        if len(info['model_train_cnts']):
+            train_cnt = info['model_train_cnts'][-1]
+        else:
+            train_cnt = 0
+
+        data_buffers[phase].reset_unique()
+        encoder_model.eval()
+        prior_model.eval()
+        #pcnn_decoder.eval()
+        print('-------------sample epoch %s------------------'%phase)
+
+        batch = data_buffers[phase].get_unique_minibatch(num_samples)
+        relative_indices = batch[-1]
+        states, actions, rewards, next_states = make_state(batch[:-1], info['DEVICE'], info['NORM_BY'])
+        next_state = next_states[:,-1:]
+        z, u_q = encoder_model(states)
+        basedir = info['loaded_from'].replace('.pt', '_%s'%phase)
+        if not os.path.exists(basedir):
+            os.makedirs(basedir)
+
+        if teacher_force:
+            print("teacher forcing")
+            canvas = next_state
+            basepath = os.path.join(basedir, '_tf')
+        else:
+            canvas = 0.0*next_state
+            basepath = os.path.join(basedir, '_')
+
+        npcanvas = np.zeros_like(canvas.detach().cpu().numpy())
+        npstates = states.cpu().numpy()
+        npnextstate = deepcopy(next_state.cpu().numpy())
+        npactions = actions.cpu().numpy()
+        for bi in range(npstates.shape[0]): #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
+            print('sampling %s'%bi)
+            for i in range(canvas.shape[1]):
+                for j in range(canvas.shape[2]):
+                    for k in range(canvas.shape[3]):
+                        output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1].detach(),
+                                                            float_condition=z[bi:bi+1].detach(),
+                                                            class_condition=actions[bi:bi+1].detach()))
+                        #  use dummy output
+                        #npcanvas[bi,i,j,k] = npnextstate[bi,i,j,k]
+                        npcanvas[bi,i,j,k] = output[0,0,j,k].detach().numpy()
+                        if teacher_force:
+                            canvas[bi,i,j,k] = output[0,0,j,k]
+            # npcanvas is 0 to 1, make it -1 to 1
+            norm_pred = ((npcanvas[bi,0]/npcanvas[bi,0].max())*2)-1
+            #norm_pred = npcanvas[bi,0]
+            f,ax = plt.subplots(1,6, sharey=True, figsize=(8,2))
+            for ns in range(4):
+                ax[ns].imshow(npstates[bi,ns], vmin=-1, vmax=1)
+                ax[ns].set_title('%s'%(ns))
+            ax[4].imshow(npnextstate[bi,0], vmin=-1, vmax=1)
+            ax[4].set_title('T%s'%(5))
+            # this is bt 0 and a tiny num - prob need to stretch
+            ax[5].imshow(norm_pred, vmin=-1, vmax=1)
+            ax[5].set_title('P%s'%(5))
+            print(norm_pred.min(), norm_pred.max())
+            print(npnextstate.min(), npnextstate.max())
+            fname = basepath+'%02d.png'%bi
+            print('plotting %s'%fname)
+            plt.savefig(fname)
+            embed()
 
 
-#def valid_acn(train_cnt, do_plot):
-#    valid_kl_loss = 0.0
-#    valid_rec_loss = 0.0
-#    print('starting valid', train_cnt)
-#    st = time.time()
-#    valid_cnt = 0
-#    encoder_model.eval()
-#    prior_model.eval()
-#    pcnn_decoder.eval()
-#    opt.zero_grad()
-#    i = 0
-#    states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = valid_data_loader.get_unique_minibatch()
-#    states = states.to(DEVICE)
-#    # 1 channel expected
-#    next_states = next_states[:,args.num_condition-1:].to(DEVICE)
-#    actions = actions.to(DEVICE)
-#    z, u_q = encoder_model(states)
+
+       # add the predicted codes to the input
+#        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state,
+#                                                class_condition=actions,
+#                                                float_condition=z))
+#        prior_model.codes[relative_indices] = u_q.detach().cpu().numpy()
 #
-#    np_uq = u_q.detach().cpu().numpy()
-#    if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
-#        print('baad')
-#        embed()
 #
-#    #yhat_batch = encoder_model.decode(u_q, s_q, data)
-#    # add the predicted codes to the input
-#    yhat_batch = torch.sigmoid(pcnn_decoder(x=next_states, class_condition=actions, float_condition=z))
-#    mix, u_ps, s_ps = prior_model(u_q)
-#    kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, next_states, u_q, mix, u_ps, s_ps)
-#    valid_kl_loss+= kl_loss.item()
-#    valid_rec_loss+= rec_loss.item()
-#    valid_cnt += states.shape[0]
-#    if i == 0 and do_plot:
+#
+#        mix, u_ps, s_ps = prior_model(u_q)
+#        canvas = 0.0*next_state
+
+
 #        print('writing img')
 #        n_imgs = 8
 #        n = min(states.shape[0], n_imgs)
@@ -362,13 +342,6 @@ def train_acn(info, model_dict, train_buffer, valid_buffer, save_every_samples):
 #        #save_image(ocomparison, img_name, nrow=n)
 #        #embed()
 #        print('finished writing img', img_name)
-#    valid_kl_loss/=float(valid_cnt)
-#    valid_rec_loss/=float(valid_cnt)
-#    print('====> valid kl loss: {:.4f}'.format(valid_kl_loss))
-#    print('====> valid rec loss: {:.4f}'.format(valid_rec_loss))
-#    print('finished valid', time.time()-st)
-#    return valid_kl_loss, valid_rec_loss
-
 
 def init_train():
     """ use args to setup inplace training """
@@ -396,14 +369,11 @@ def init_train():
                 'model_last_save':0,
                 'model_last_plot':0,
                 'NORM_BY':255.0,
-                'model_loadpath':args.model_loadpath,
                 'MODEL_BASE_FILEDIR':model_base_filedir,
                 'model_base_filepath':model_base_filepath,
                 'model_train_data_file':train_data_path,
                 'model_valid_data_file':valid_data_path,
                 'NUM_TRAINING_EXAMPLES':args.num_training_examples,
-                'MODEL_SAVENAME':args.savename,
-                'DEVICE':DEVICE,
                 'NUM_K':args.num_k,
                 'NR_LOGISTIC_MIX':args.nr_logistic_mix,
                 'NUM_PCNN_FILTERS':args.num_pcnn_filters,
@@ -416,8 +386,6 @@ def init_train():
                 'CODE_LENGTH':args.code_length,
                 'NUM_MIXTURES':args.num_mixtures,
                 'REQUIRE_UNIQUE_CODES':args.require_unique_codes,
-                'MODEL_LEARNING_RATE':args.learning_rate,
-                'MODEL_SAVE_EVERY':args.save_every,
                  }
 
         ## size of latents flattened - dependent on architecture
@@ -426,12 +394,18 @@ def init_train():
         ## TODO - change loss
     else:
         print('loading model from: %s' %args.model_loadpath)
-        model_dict = torch.load(args.model_loadpath)
+        model_dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
         info =  model_dict['model_info']
         model_base_filedir = os.path.split(args.model_loadpath)[0]
         model_base_filepath = os.path.join(model_base_filedir, args.savename)
         info['loaded_from'] = args.model_loadpath
         info['MODEL_BATCH_SIZE'] = args.batch_size
+    info['DEVICE'] = DEVICE
+    info['MODEL_SAVE_EVERY'] = args.save_every
+    info['MODEL_LOG_EVERY_BATCHES'] = args.log_every_batches
+    info['model_loadpath'] = args.model_loadpath
+    info['MODEL_SAVENAME'] = args.savename
+    info['MODEL_LEARNING_RATE'] = args.learning_rate
     # create replay buffer
     train_buffer = make_subset_buffer(train_data_path, max_examples=info['NUM_TRAINING_EXAMPLES'])
     valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(info['NUM_TRAINING_EXAMPLES']*.1))
@@ -477,23 +451,27 @@ def init_train():
                                  last_layer_bias=0.5,
                                  hsize=info['hsize'], wsize=info['wsize']).to(DEVICE)
 
-    parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+    #parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+    parameters = list(encoder_model.parameters()) + list(prior_model.parameters())
     opt = optim.Adam(parameters, lr=info['MODEL_LEARNING_RATE'])
 
     if args.model_loadpath != '':
         print("loading weights from:%s" %args.model_loadpath)
-        encoder_model.load_state_dict(model_dict['encoder_state_dict'])
-        prior_model.load_state_dict(model_dict['prior_state_dict'])
+        encoder_model.load_state_dict(model_dict['encoder_model_state_dict'])
+        prior_model.load_state_dict(model_dict['prior_model_state_dict'])
         pcnn_decoder.load_state_dict(model_dict['pcnn_decoder_state_dict'])
         #encoder_model.embedding = model_dict['model_embedding']
-        opt.load_state_dict(model_dict['model_optimizer'])
+        opt.load_state_dict(model_dict['opt_state_dict'])
 
     model_dict = {'encoder_model':encoder_model,
                   'prior_model':prior_model,
                   'pcnn_decoder':pcnn_decoder,
                   'opt':opt}
-
-    train_acn(info, model_dict, train_buffer, valid_buffer, save_every_samples=args.save_every)
+    data_buffers = {'train':train_buffer, 'valid':valid_buffer}
+    if args.sample:
+        sample_acn(info, model_dict, data_buffers, num_samples=args.num_samples, teacher_force=args.teacher_force)
+    else:
+        train_acn(info, model_dict, data_buffers)
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -501,14 +479,16 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train acn')
     parser.add_argument('--train_buffer', default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
     parser.add_argument('--valid_buffer', default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
+    parser.add_argument('-s', '--sample', action='store_true', default=False)
+    parser.add_argument('-ns', '--num_samples', default=5, type=int)
+    parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-d', '--debug', action='store_true', default=False)
     parser.add_argument('--savename', default='acn')
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     parser.add_argument('-se', '--save_every', default=100000*2, type=int)
-    parser.add_argument('-pe', '--plot_every', default=100000*2, type=int)
-    parser.add_argument('-le', '--log_every',  default=100000*2, type=int)
+    parser.add_argument('-le', '--log_every_batches', default=50, type=int)
 
 
     parser.add_argument('-bs', '--batch_size', default=84, type=int)
@@ -521,7 +501,7 @@ if __name__ == '__main__':
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
     parser.add_argument('-ne', '--num_training_examples', default=100000, type=int)
-    parser.add_argument('-lr', '--learning_rate', default=1e-4)
+    parser.add_argument('-lr', '--learning_rate', default=1e-5)
     #parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=6)
     parser.add_argument('-pf', '--num_pcnn_filters', default=16, type=int)

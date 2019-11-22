@@ -67,13 +67,52 @@ class ConvVAE(nn.Module):
         # input_image == 28 -> eo=7
         # encoder_output_size will vary based on input
         self.eo = encoder_output_size
-        self.fc21 = nn.Linear(self.eo, code_len)
+        self.fc21 = nn.Linear(self.eo, self.code_len)
+        #self.embedding = nn.Embedding(code_len, code_len)
+        #self.embedding.weight.data.copy_(1./code_len * torch.randn(code_len, code_len))
+        self.fc22 = nn.Linear(self.code_len, self.eo)
+        self.decoder = nn.Sequential(
+                      nn.ConvTranspose2d(in_channels=3,
+                      out_channels=3,
+                      kernel_size=4,
+                      stride=2, padding=1),
+                      nn.BatchNorm2d(3),
+                      nn.ReLU(True),
+                 nn.ConvTranspose2d(in_channels=3,
+                      out_channels=3,
+                      kernel_size=4,
+                      stride=2, padding=1),
+        # 3x16x16
+            nn.BatchNorm2d(3),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(in_channels=3,
+                      out_channels=3,
+                      kernel_size=6,
+                      stride=2, padding=0),
+                      nn.BatchNorm2d(3),
+                    # 3x32x32
+                   nn.ReLU(True),
+                   nn.ConvTranspose2d(in_channels=3,
+                      out_channels=1,
+                      kernel_size=1,
+                      stride=1, padding=0),
+            nn.Sigmoid()
+                  )
+
 
     def encode(self, x):
         o = self.encoder(x)
-        ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
-        #print(o.shape, ol.shape)
-        return self.fc21(ol)
+        #print('oe', o.shape)
+        o = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
+        #print('ov', o.shape)
+        o = self.fc21(o)
+        #print('o21', o.shape)
+        return o
+
+    def decode(self, z):
+        # view (N<H<W<C) permute 0, 3, 1, 2
+        z = z.view(z.shape[0], 3, 4, 4)
+        return self.decoder(z)
 
     def reparameterize(self, mu):
         if self.training:
