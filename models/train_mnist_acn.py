@@ -36,7 +36,7 @@ class VAE(nn.Module):
         self.fc3 = nn.Linear(code_len,h)
         self.fc4 = nn.Linear(h, input_size)
         # TODO set fc4 bias to 0.5 for sigmoid
-        self.fc4.biad.data.fill_(0.5)
+        self.fc4.bias.data.fill_(0.5)
 
     def encode(self,x):
         h1 = F.relu(self.fc1(x))
