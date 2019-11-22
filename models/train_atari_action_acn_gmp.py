@@ -29,7 +29,7 @@ from lstm_utils import plot_dict_losses
 from ae_utils import save_checkpoint
 from pixel_cnn import GatedPixelCNN
 from datasets import AtariDataset
-from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
+from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 torch.manual_seed(394)
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_kl_loss, avg_train_rec_loss):
@@ -144,7 +144,7 @@ def train_acn(train_cnt):
             print('train bad')
             embed()
         mix, u_ps, s_ps = prior_model(u_q)
-        kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, next_states, u_q, mix, u_ps, s_ps)
+        kl_loss, rec_loss = acn_gmp_loss_function(yhat_batch, next_states, u_q, mix, u_ps, s_ps)
         loss = kl_loss + rec_loss
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
@@ -190,7 +190,7 @@ def valid_acn(train_cnt, do_plot):
     # add the predicted codes to the input
     yhat_batch = torch.sigmoid(pcnn_decoder(x=next_states, class_condition=actions, float_condition=z))
     mix, u_ps, s_ps = prior_model(u_q)
-    kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, next_states, u_q, mix, u_ps, s_ps)
+    kl_loss,rec_loss = acn_gmp_loss_function(yhat_batch, next_states, u_q, mix, u_ps, s_ps)
     valid_kl_loss+= kl_loss.item()
     valid_rec_loss+= rec_loss.item()
     valid_cnt += states.shape[0]

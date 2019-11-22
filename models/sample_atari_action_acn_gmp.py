@@ -16,7 +16,7 @@ import config
 from IPython import embed
 from pixel_cnn import GatedPixelCNN
 from datasets import AtariDataset
-from acn_mdn import ConvVAE
+from acn_gmp import ConvVAE
 from copy import deepcopy
 
 torch.manual_seed(394)

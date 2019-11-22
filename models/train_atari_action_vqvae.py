@@ -1,12 +1,3 @@
-"""
-Associative Compression Network based on https://arxiv.org/pdf/1804.02476v2.pdf
-
-Strongly referenced ACN implementation and blog post from:
-http://jalexvig.github.io/blog/associative-compression-networks/
-
-Base VAE referenced from pytorch examples:
-https://github.com/pytorch/examples/blob/master/vae/main.py
-"""
 
 # TODO conv
 # TODO load function
@@ -31,7 +22,6 @@ from vqvae_module import VQVAE_ENCODER, VQVAE_PCNN_DECODER, VQVAE, get_vqvae_los
 #from vqvae import VQVAE_ENCODER
 #from pixel_cnn import GatedPixelCNN
 from datasets import AtariDataset
-from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
 torch.manual_seed(394)
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss_1, avg_train_loss_2, avg_train_loss_3):
@@ -228,7 +218,7 @@ def valid_vqvae(train_cnt, do_plot=False):
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
-    parser = ArgumentParser(description='train acn')
+    parser = ArgumentParser(description='train ')
     parser.add_argument('--train_data_file', default='/usr/local/data/jhansen/planning/model_savedir/FRANKbootstrap_priorfreeway00/training_set.npz')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('--savename', default='vqpcnnrec')

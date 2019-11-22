@@ -320,8 +320,8 @@ def log_gau_kl3(pm, lpv, qm, lqv):
     p4 = pm.shape[2]
     return 0.5 * (p1 + p2 + p3 - p4)
 
-def acn_mdn_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
-    ''' compare mdn with k=1 (u_q) to a true mdn
+def acn_gmp_loss_function(y_hat, y, u_q, pi_ps, u_ps, s_ps):
+    ''' compare gmp with k=1 (u_q) to a true gmp
     '''
     batch_size = y_hat.shape[0]
     # create pi of 1.0 for every sample in minibatch

@@ -22,7 +22,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.clip_grad import clip_grad_value_
 from datasets import IndexedDataset
-from acn_mdn_single import ConvVAE, PriorNetwork, acn_loss_function, acn_mdn_loss_function
+from acn_gmp_single import ConvVAE, PriorNetwork, acn_loss_function, acn_gmp_loss_function
 import config
 from torchvision.utils import save_image
 from IPython import embed
@@ -120,10 +120,10 @@ def train_acn(train_cnt):
             embed()
         prior_model.codes[data_index] = np_uq
         #prior_model.fit_knn(prior_model.codes)
-        # output is mdn
+        # output is gmp
         mix,u_ps, s_ps = prior_model(u_q)
         #kl_loss, rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
-        kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, mix,  u_ps, s_ps)
+        kl_loss, rec_loss = acn_gmp_loss_function(yhat_batch, data, u_q, mix,  u_ps, s_ps)
         loss = kl_loss + rec_loss
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
@@ -162,7 +162,7 @@ def test_acn(train_cnt, do_plot):
             embed()
         mix,u_ps, s_ps = prior_model(u_q)
         #kl_loss,rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
-        kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, data, u_q, mix, u_ps, s_ps)
+        kl_loss,rec_loss = acn_gmp_loss_function(yhat_batch, data, u_q, mix, u_ps, s_ps)
         #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
         test_kl_loss+= kl_loss.item()
         test_rec_loss+= rec_loss.item()
@@ -195,7 +195,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='train vq-vae for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
-    parser.add_argument('-sn', '--savename', default='mdnlkl32mix')
+    parser.add_argument('-sn', '--savename', default='gmplkl32mix')
     parser.add_argument('-se', '--save_every', default=60000*6, type=int)
     parser.add_argument('-pe', '--plot_every', default=60000*2, type=int)
     parser.add_argument('-le', '--log_every', default=60000*2, type=int)

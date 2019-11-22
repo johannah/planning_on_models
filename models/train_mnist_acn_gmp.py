@@ -22,7 +22,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.clip_grad import clip_grad_value_
 from datasets import IndexedDataset
-from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
+from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 import config
 from torchvision.utils import save_image
 from IPython import embed
@@ -93,6 +93,7 @@ def train_acn(train_cnt):
         z, u_q = encoder_model(data)
         #yhat_batch = encoder_model.decode(u_q, s_q, data)
         # add the predicted codes to the input
+        # TODO - this isn't how you sample pcnn
         yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
 
         np_uq = u_q.detach().cpu().numpy()
@@ -101,15 +102,17 @@ def train_acn(train_cnt):
             embed()
         prior_model.codes[data_index] = np_uq
         #prior_model.fit_knn(prior_model.codes)
-        # output is mdn
+        # output is gmp
         mixtures, u_ps, s_ps = prior_model(u_q)
-        loss = acn_mdn_loss_function(yhat_batch, data, u_q, mixtures, u_ps, s_ps)
+        kl_reg, rec_loss = acn_gmp_loss_function(yhat_batch, data, u_q, mixtures, u_ps, s_ps)
+        loss = kl_reg + rec_loss
+        if not batch_idx%10:
+            print(train_cnt, batch_idx, kl_reg.item(), rec_loss.item())
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
         clip_grad_value_(parameters, 10)
         train_loss+= loss.item()
         opt.step()
-        print(loss)
         # add batch size because it hasn't been added to train cnt yet
         avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
         print('batch',train_cnt, avg_train_loss)
@@ -140,7 +143,8 @@ def test_acn(train_cnt, do_plot):
             print('baad')
             embed()
         mixtures, u_ps, s_ps = prior_model(u_q)
-        loss = acn_mdn_loss_function(yhat_batch, data, u_q, mixtures, u_ps, s_ps)
+        kl_reg, rec_loss = acn_gmp_loss_function(yhat_batch, data, u_q, mixtures, u_ps, s_ps)
+        loss = kl_reg+rec_loss
         #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
         test_loss+= loss.item()
         if i == 0 and do_plot:
@@ -166,8 +170,9 @@ def save_checkpoint(state, filename='model.pkl'):
 
 
 if __name__ == '__main__':
+    # THIS DOESN"T SEEM TO BE WORKING
     from argparse import ArgumentParser
-    parser = ArgumentParser(description='train vq-vae for freeway')
+    parser = ArgumentParser(description='')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-sn', '--savename', default='meannologgau')

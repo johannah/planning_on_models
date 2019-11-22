@@ -31,7 +31,7 @@ from vqvae import VQVAE
 #from vqvae import VQVAE_ENCODER
 #from pixel_cnn import GatedPixelCNN
 from datasets import AtariDataset
-from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
+from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 torch.manual_seed(394)
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss_1, avg_train_loss_2, avg_train_loss_3):

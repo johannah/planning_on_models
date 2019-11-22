@@ -30,31 +30,41 @@ from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_losses
 from pixel_cnn import GatedPixelCNN
-from acn_mdn import PriorNetwork, ConvVAE
+from acn_gmp import PriorNetwork, ConvVAE
 
 torch.manual_seed(394)
 torch.set_num_threads(1)
 
 def sample_batch(data, label, batch_idx, name):
+    print('data', data.max(), data.min())
+    print('label', label.max(), label.min())
     z, u_q = encoder_model(data)
     print('generating %s images' %(data.shape[0]))
+    print('z', z.max(), z.min())
     print(batch_idx)
     if args.teacher_force:
         canvas = label
         name+='_tf'
     else:
         canvas = 0.0*label
-    label = label.detach().numpy()
+    label = data.detach().numpy()
     np_canvas = np.zeros_like(label)
     for bi in range(canvas.shape[0]):
         # sample one at a time due to memory constraints
-        print('sampling image', bi)
+        print('reconstructing image', bi)
         for i in range(canvas.shape[1]):
             for j in range(canvas.shape[2]):
                 for k in range(canvas.shape[3]):
-                    output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1], float_condition=z[bi:bi+1]))
+                    # what scale should canvas be?
+                    # data input is 0 to 1 in training
+                    output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1],
+                                                        float_condition=z[bi:bi+1]))
                     np_canvas[bi,i,j,k] = output[0,i,j,k].detach().numpy()
-        print("starting img")
+                    if not args.teacher_force:
+                        canvas[bi,i,j,k] = output[0,i,j,k]
+
+        # need to rescale - dml is scaled
+        print("starting img" )
         f,ax = plt.subplots(1,2)
         iname = os.path.join(output_savepath, '%s_%04d.png'%(name,bi))
         ax[0].imshow(label[bi,0])
@@ -63,6 +73,7 @@ def sample_batch(data, label, batch_idx, name):
         ax[1].set_title('est')
         plt.savefig(iname)
         print('saving', iname)
+        embed()
 
 
 
@@ -135,13 +146,14 @@ if __name__ == '__main__':
 
     encoder_model.eval()
     pcnn_decoder.eval()
-    for test_data, test_label, test_batch_index in test_loader:
-        break
-    sample_batch(test_data, test_data, test_batch_index, 'test')
-
     for train_data, train_label, train_batch_index in test_loader:
         break
     sample_batch(train_data, train_data, train_batch_index, 'train')
+
+
+    for test_data, test_label, test_batch_index in test_loader:
+        break
+    sample_batch(test_data, test_data, test_batch_index, 'test')
 
 
 

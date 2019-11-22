@@ -29,7 +29,7 @@ from torchvision.utils import save_image
 from IPython import embed
 from pixel_cnn import GatedPixelCNN
 from imageio import imsave
-from acn_mdn import ConvVAE, PriorNetwork
+from acn_gmp import ConvVAE, PriorNetwork
 torch.manual_seed(394)
 torch.set_num_threads(1)
 

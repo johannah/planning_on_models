@@ -320,7 +320,7 @@ def save_checkpoint(state, filename='model.pkl'):
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
-    parser = ArgumentParser(description='train vq-vae for freeway')
+    parser = ArgumentParser(description='')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)

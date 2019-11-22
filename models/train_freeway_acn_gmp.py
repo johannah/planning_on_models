@@ -27,7 +27,7 @@ from IPython import embed
 from lstm_utils import plot_dict_losses
 from pixel_cnn import GatedPixelCNN
 from datasets import FreewayForwardDataset, DataLoader
-from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
+from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 torch.manual_seed(394)
 
 def handle_plot_ckpt(do_plot, train_cnt, avg_train_kl_loss, avg_train_rec_loss):
@@ -128,7 +128,7 @@ def train_acn(train_cnt):
         #print(train_cnt)
         prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
         #mixtures, u_ps, s_ps = prior_model(u_q)
-        #loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures, u_ps, s_ps)
+        #loss = acn_gmp_loss_function(yhat_batch, label, u_q, mixtures, u_ps, s_ps)
         np_uq = u_q.detach().cpu().numpy()
         if np.isinf(np_uq).sum() or np.isnan(np_uq).sum():
             print('train bad')
@@ -137,9 +137,9 @@ def train_acn(train_cnt):
 #        parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
 #        clip_grad_value_(parameters, 10)
 #        train_loss+= loss.item()
-        mix,u_ps, s_ps = prior_model(u_q)
+        mix, u_ps, s_ps = prior_model(u_q)
         #kl_loss, rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
-        kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, label, u_q, mix,  u_ps, s_ps)
+        kl_loss, rec_loss = acn_gmp_loss_function(yhat_batch, label, u_q, mix,  u_ps, s_ps)
         loss = kl_loss + rec_loss
         loss.backward()
         parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
@@ -187,8 +187,8 @@ def test_acn(train_cnt, do_plot):
     # add the predicted codes to the input
     yhat_batch = torch.sigmoid(pcnn_decoder(x=label, float_condition=z))
     mix, u_ps, s_ps = prior_model(u_q)
-    #loss = acn_mdn_loss_function(yhat_batch, label, u_q, mixtures,  u_ps, s_ps)
-    kl_loss,rec_loss = acn_mdn_loss_function(yhat_batch, label, u_q, mix, u_ps, s_ps)
+    #loss = acn_gmp_loss_function(yhat_batch, label, u_q, mixtures,  u_ps, s_ps)
+    kl_loss,rec_loss = acn_gmp_loss_function(yhat_batch, label, u_q, mix, u_ps, s_ps)
     #loss = acn_loss_function(yhat_batch, data, u_q, u_p, s_p)
     test_kl_loss+= kl_loss.item()
     test_rec_loss+= rec_loss.item()
@@ -224,7 +224,7 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='train acn for freeway')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('--savename', default='fmdnlogkl3uniq')
+    parser.add_argument('--savename', default='fgmplogkl3uniq')
     parser.add_argument('-l', '--model_loadname', default=None)
     parser.add_argument('-da', '--data_augmented', default=False, action='store_true')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')

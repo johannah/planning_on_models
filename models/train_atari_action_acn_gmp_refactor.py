@@ -34,7 +34,7 @@ torch.manual_seed(394)
 from imageio import imsave
 from ae_utils import save_checkpoint, handle_plot_ckpt, reshape_input
 from pixel_cnn import GatedPixelCNN
-from acn_mdn import ConvVAE, PriorNetwork, acn_mdn_loss_function
+from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 sys.path.append('../agents')
 from replay import ReplayMemory
 
@@ -195,7 +195,7 @@ def train_acn(info, model_dict, data_buffers, phase='train'):
             mix, u_ps, s_ps = prior_model(u_q)
 
             # track losses
-            kl_loss, rec_loss = acn_mdn_loss_function(yhat_batch, next_state, u_q, mix, u_ps, s_ps)
+            kl_loss, rec_loss = acn_gmp_loss_function(yhat_batch, next_state, u_q, mix, u_ps, s_ps)
             loss = kl_loss + rec_loss
             # aatch size because it hasn't been added to train cnt yet
 
@@ -242,7 +242,7 @@ def sample_acn(info, model_dict, data_buffers, num_samples=4, teacher_force=Fals
     prior_model = model_dict['prior_model']
     pcnn_decoder = model_dict['pcnn_decoder']
 
-    for phase in ['train', 'validl']:
+    for phase in ['train', 'valid']:
         if len(info['model_train_cnts']):
             train_cnt = info['model_train_cnts'][-1]
         else:
@@ -260,52 +260,74 @@ def sample_acn(info, model_dict, data_buffers, num_samples=4, teacher_force=Fals
         next_state = next_states[:,-1:]
         z, u_q = encoder_model(states)
         basedir = info['loaded_from'].replace('.pt', '_%s'%phase)
+        basepath = os.path.join(basedir, '_')
         if not os.path.exists(basedir):
             os.makedirs(basedir)
 
-        if teacher_force:
-            print("teacher forcing")
-            canvas = next_state
-            basepath = os.path.join(basedir, '_tf')
-        else:
-            canvas = 0.0*next_state
-            basepath = os.path.join(basedir, '_')
-
-        npcanvas = np.zeros_like(canvas.detach().cpu().numpy())
         npstates = states.cpu().numpy()
         npnextstate = deepcopy(next_state.cpu().numpy())
         npactions = actions.cpu().numpy()
-        for bi in range(npstates.shape[0]): #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
-            print('sampling %s'%bi)
-            for i in range(canvas.shape[1]):
-                for j in range(canvas.shape[2]):
-                    for k in range(canvas.shape[3]):
-                        output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1].detach(),
-                                                            float_condition=z[bi:bi+1].detach(),
-                                                            class_condition=actions[bi:bi+1].detach()))
-                        #  use dummy output
-                        #npcanvas[bi,i,j,k] = npnextstate[bi,i,j,k]
-                        npcanvas[bi,i,j,k] = output[0,0,j,k].detach().numpy()
-                        if teacher_force:
-                            canvas[bi,i,j,k] = output[0,0,j,k]
-            # npcanvas is 0 to 1, make it -1 to 1
-            norm_pred = ((npcanvas[bi,0]/npcanvas[bi,0].max())*2)-1
-            #norm_pred = npcanvas[bi,0]
-            f,ax = plt.subplots(1,6, sharey=True, figsize=(8,2))
-            for ns in range(4):
-                ax[ns].imshow(npstates[bi,ns], vmin=-1, vmax=1)
-                ax[ns].set_title('%s'%(ns))
-            ax[4].imshow(npnextstate[bi,0], vmin=-1, vmax=1)
-            ax[4].set_title('T%s'%(5))
-            # this is bt 0 and a tiny num - prob need to stretch
-            ax[5].imshow(norm_pred, vmin=-1, vmax=1)
-            ax[5].set_title('P%s'%(5))
-            print(norm_pred.min(), norm_pred.max())
-            print(npnextstate.min(), npnextstate.max())
-            fname = basepath+'%02d.png'%bi
+
+        if not args.use_pcnn:
+            npnextstate_pred = encoder_model.decode(z).detach().cpu().numpy()
+            f,ax = plt.subplots(num_samples, 6, sharey=True, sharex=True, figsize=(6,num_samples))
+            for bi in range(npstates.shape[0]):
+                for ns in range(4):
+                    ax[bi,ns].imshow(npstates[bi,ns], vmin=-1, vmax=1)
+                    if bi == 0:
+                        ax[bi,ns].set_title('%s'%(ns))
+                ax[bi,4].imshow(npnextstate[bi,0])
+                # this is bt 0 and a tiny num - prob need to stretch
+                ax[bi,5].imshow(npnextstate_pred[bi,0])
+                if bi == 0:
+                    ax[bi,4].set_title('T%s'%(5))
+                    ax[bi,5].set_title('P%s'%(5))
+            fname = basepath+'batch.png'
             print('plotting %s'%fname)
             plt.savefig(fname)
-            embed()
+
+
+        else:
+            if teacher_force:
+                print("teacher forcing")
+                canvas = next_state
+                basepath+='pcnn_tf'
+            else:
+                canvas = 0.0*next_state
+                basepath+='pcnn'
+
+            npcanvas = np.zeros_like(canvas.detach().cpu().numpy())
+            for bi in range(npstates.shape[0]): #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
+                print('sampling %s'%bi)
+                for i in range(canvas.shape[1]):
+                    for j in range(canvas.shape[2]):
+                        for k in range(canvas.shape[3]):
+                            output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1].detach(),
+                                                                float_condition=z[bi:bi+1].detach(),
+                                                                class_condition=actions[bi:bi+1].detach()))
+                            #  use dummy output
+                            #npcanvas[bi,i,j,k] = npnextstate[bi,i,j,k]
+                            npcanvas[bi,i,j,k] = output[0,0,j,k].detach().numpy()
+                            if teacher_force:
+                                canvas[bi,i,j,k] = output[0,0,j,k]
+                # npcanvas is 0 to 1, make it -1 to 1
+                norm_pred = ((npcanvas[bi,0]/npcanvas[bi,0].max())*2)-1
+                #norm_pred = npcanvas[bi,0]
+                f,ax = plt.subplots(1,6, sharey=True, figsize=(8,2))
+                for ns in range(4):
+                    ax[ns].imshow(npstates[bi,ns], vmin=-1, vmax=1)
+                    ax[ns].set_title('%s'%(ns))
+                ax[4].imshow(npnextstate[bi,0], vmin=-1, vmax=1)
+                ax[4].set_title('T%s'%(5))
+                # this is bt 0 and a tiny num - prob need to stretch
+                ax[5].imshow(norm_pred, vmin=-1, vmax=1)
+                ax[5].set_title('P%s'%(5))
+                print(norm_pred.min(), norm_pred.max())
+                print(npnextstate.min(), npnextstate.max())
+                fname = basepath+'%02d.png'%bi
+                print('plotting %s'%fname)
+                plt.savefig(fname)
+                embed()
 
 
 
@@ -482,17 +504,18 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('-ns', '--num_samples', default=5, type=int)
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
+    parser.add_argument( '--use_pcnn', action='store_true', default=False)
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-d', '--debug', action='store_true', default=False)
     parser.add_argument('--savename', default='acn')
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-uniq', '--require_unique_codes', default=False, action='store_true')
     parser.add_argument('-se', '--save_every', default=100000*2, type=int)
-    parser.add_argument('-le', '--log_every_batches', default=50, type=int)
+    parser.add_argument('-le', '--log_every_batches', default=100, type=int)
 
 
-    parser.add_argument('-bs', '--batch_size', default=84, type=int)
-    # 4x40x40 input -> 768 output
+    parser.add_argument('-bs', '--batch_size', default=256, type=int)
+    # 4x36x36 input -> 768 output
     parser.add_argument('-eos', '--encoder_output_size', default=768, type=int)
     parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=48, type=int)
@@ -518,7 +541,7 @@ if __name__ == '__main__':
     if args.debug:
         args.save_every = 10
         args.plot_every = 10
-        args.log_every = 10
+        args.model_log_every_batches = 1
 
     init_train()
 
