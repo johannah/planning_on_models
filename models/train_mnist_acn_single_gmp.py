@@ -121,7 +121,7 @@ def train_acn(train_cnt):
         prior_model.codes[data_index] = np_uq
         #prior_model.fit_knn(prior_model.codes)
         # output is gmp
-        mix,u_ps, s_ps = prior_model(u_q)
+        mix, u_ps, s_ps = prior_model(u_q)
         #kl_loss, rec_loss = acn_loss_function(yhat_batch, data, u_q, u_ps, s_ps)
         kl_loss, rec_loss = acn_gmp_loss_function(yhat_batch, data, u_q, mix,  u_ps, s_ps)
         loss = kl_loss + rec_loss
