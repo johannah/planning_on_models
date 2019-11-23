@@ -98,16 +98,20 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
 
 def prepare_next_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between 0 and 1
-    output = (reshape_input(torch.FloatTensor(st)/NORM_BY)).to(DEVICE)
-    assert output.max() < 1.01
-    assert output.min() > -.01
-    return output
+    #output = (reshape_input(torch.FloatTensor(st)/NORM_BY)).to(DEVICE)
+    #assert output.max() < 1.01
+    #assert output.min() > -.01
+    o = (torch.FloatTensor(st)/255.0).to(DEVICE)
+    o[o>0] = 1.0
+    return o
 
 def prepare_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between -1 and 1
+    # st.shape is bs,4,40,40
     output = (2*reshape_input(torch.FloatTensor(st)/NORM_BY)-1).to(DEVICE)
-    assert output.max() < 1.01
-    assert output.min() > -1.01
+    #assert output.max() < 1.01
+    #assert output.min() > -1.01
+    # convert to 0 and 1
     return output
 
 def make_state(batch, DEVICE, NORM_BY):
@@ -181,7 +185,7 @@ class ConvVAE(nn.Module):
         # found via experimentation - 3 for mnist
         # input_image == 28 -> eo=7
         # for 36x36 input shape -> eo=9, raveled is 3240
-        self.eo=eo=encode_output_size = 9
+        self.eo=eo=encode_output_size = 10
         self.fc21 = nn.Linear(code_len*2*eo*eo, code_len)
         self.fc22 = nn.Linear(code_len*2*eo*eo, code_len)
         self.fc3 = nn.Linear(code_len, code_len*2*eo*eo)
@@ -233,7 +237,7 @@ class ConvVAE(nn.Module):
 
     def forward(self, x):
         mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
+        #z = self.reparameterize(mu, logvar)
         return self.decode(mu, logvar), mu, logvar
 
 def acn_loss_function_binary(y_hat, y, u_q, s_q, u_p, s_p):
@@ -397,7 +401,7 @@ def train_acn(train_cnt):
         prior_model.codes[batch_idx] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
-        mse, kl, loss = acn_loss_function_color(yhat_batch, data, u_q, s_q, u_p, s_p)
+        mse, kl, loss = acn_loss_function_binary(yhat_batch, data, u_q, s_q, u_p, s_p)
         loss.backward()
         train_loss+= loss.item()
         opt.step()
@@ -414,7 +418,7 @@ def test_acn(train_cnt, do_plot):
     test_loss = 0
     print('starting test', train_cnt)
     st = time.time()
-    print(len(test_loader))
+    seen = 0
     with torch.no_grad():
         valid_buffer.reset_unique()
         for i in range(10):
@@ -425,8 +429,9 @@ def test_acn(train_cnt, do_plot):
                 data = next_states[:,-1:]
                 yhat_batch, u_q, s_q = vae_model(data)
                 u_p, s_p = prior_model(u_q)
-                mse, kl, loss = acn_loss_function_color(yhat_batch, data, u_q, s_q, u_p, s_p)
+                mse, kl, loss = acn_loss_function_binary(yhat_batch, data, u_q, s_q, u_p, s_p)
                 test_loss+= loss.item()
+                seen += data.shape[0]
                 if i == 0 and do_plot:
                     print('writing img')
                     n = min(data.size(0), 8)
@@ -438,7 +443,7 @@ def test_acn(train_cnt, do_plot):
                     save_image(comparison.cpu(), img_name, nrow=n)
                     print('finished writing img', img_name)
 
-    test_loss /= len(test_loader.dataset)
+    test_loss /= seen
     print('====> Test set loss: {:.4f}'.format(test_loss))
     print('finished test', time.time()-st)
     return test_loss
@@ -889,7 +894,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn_breakout')
+    vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn_breakout_binary')
 
     train_data_path = args.train_buffer
     valid_data_path = args.valid_buffer
@@ -897,14 +902,14 @@ if __name__ == '__main__':
     valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(60000*.1))
 
 
-    train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-                                train=True, download=True,
-                                transform=transforms.ToTensor())
-    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    test_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-                               train=False, download=True,
-                               transform=transforms.ToTensor())
-    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
+    #train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
+    #                            train=True, download=True,
+    #                            transform=transforms.ToTensor())
+    #train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+    #test_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
+    #                           train=False, download=True,
+    #                           transform=transforms.ToTensor())
+    #test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
 
     info = {'train_cnts':[],
