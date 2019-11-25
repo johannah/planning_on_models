@@ -25,12 +25,12 @@ from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
 from torchvision.utils import save_image
 import config
-from IPython import embed
 from lstm_utils import plot_losses
 torch.manual_seed(394)
 torch.set_num_threads(4)
 from imageio import imsave
 from ae_utils import save_checkpoint, handle_plot_ckpt, reshape_input
+from ae_utils import discretized_mix_logistic_loss, sample_from_discretized_mix_logistic
 from pixel_cnn import GatedPixelCNN
 #from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 sys.path.append('../agents')
@@ -97,20 +97,29 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
     return load_buffer
 
 def prepare_next_state(st, DEVICE, NORM_BY):
-    # states come in at uint8 - should be converted to float between 0 and 1
-    #output = (reshape_input(torch.FloatTensor(st)/NORM_BY)).to(DEVICE)
+    # states come in at uint8
+    # Can use BCE if we convert to be between 0 and one - but this means we miss
+    # color detail
+    #o = (torch.FloatTensor(st)/255.0).to(DEVICE)
+    #o[o>0] = 1.0
+    #return o
+    #
+    # should be converted to float between -1 and 1
+    output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
+    assert output.max() < 1.01
+    assert output.min() > -1.01
+    # should be converted to float between 0 and 1
+    #output = (torch.FloatTensor(st)/NORM_BY).to(DEVICE)
     #assert output.max() < 1.01
     #assert output.min() > -.01
-    o = (torch.FloatTensor(st)/255.0).to(DEVICE)
-    o[o>0] = 1.0
-    return o
+    return output
 
 def prepare_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between -1 and 1
     # st.shape is bs,4,40,40
-    output = (2*reshape_input(torch.FloatTensor(st)/NORM_BY)-1).to(DEVICE)
-    #assert output.max() < 1.01
-    #assert output.min() > -1.01
+    output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
+    assert output.max() < 1.01
+    assert output.min() > -1.01
     # convert to 0 and 1
     return output
 
@@ -159,7 +168,7 @@ def add_losses(info, train_cnt, phase, kl_loss, rec_loss):
 
 # ConvVAE was also imported - not sure which one was used
 class ConvVAE(nn.Module):
-    def __init__(self, code_len, input_size=1):
+    def __init__(self, code_len, input_size=1, num_output_channels=30):
         super(ConvVAE, self).__init__()
         self.code_len = code_len
         self.encoder = nn.Sequential(
@@ -191,7 +200,7 @@ class ConvVAE(nn.Module):
         self.fc3 = nn.Linear(code_len, code_len*2*eo*eo)
 
         out_layer = nn.ConvTranspose2d(in_channels=16,
-                        out_channels=input_size,
+                        out_channels=num_output_channels,
                         kernel_size=4,
                         stride=2, padding=1)
 
@@ -223,6 +232,7 @@ class ConvVAE(nn.Module):
         c = self.reparameterize(mu,logvar)
         co = F.relu(self.fc3(c))
         col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
+        # c is 128x20, co 128x4000, col 128x10x10
         do = torch.sigmoid(self.decoder(col))
         return do
 
@@ -257,13 +267,10 @@ def acn_loss_function_binary(y_hat, y, u_q, s_q, u_p, s_p):
     acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
     return BCE,acn_KLD,BCE+acn_KLD
 
-
-def acn_loss_function_color(y_hat, y, u_q, s_q, u_p, s_p):
-    ''' reconstruction loss + coding cost
+def kl_loss_function(u_q, s_q, u_p, s_p):
+    '''  coding cost
      coding cost is the KL divergence bt posterior and conditional prior
      Args:
-         y_hat: reconstruction output
-         y: target
          u_q: mean of model posterior
          s_q: log std of model posterior
          u_p: mean of conditional prior
@@ -271,9 +278,9 @@ def acn_loss_function_color(y_hat, y, u_q, s_q, u_p, s_p):
 
      Returns: loss
      '''
-    MSE = F.mse_loss(y_hat, y, reduction='sum')
     acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
-    return MSE,acn_KLD,MSE+acn_KLD
+    return acn_KLD
+
 
 
 
@@ -382,6 +389,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
             handle_plot_ckpt(False, train_cnt, avg_train_loss)
 
 def train_acn(train_cnt):
+    test_acn(0,True)
     vae_model.train()
     prior_model.train()
     train_loss = 0
@@ -401,7 +409,10 @@ def train_acn(train_cnt):
         prior_model.codes[batch_idx] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
-        mse, kl, loss = acn_loss_function_binary(yhat_batch, data, u_q, s_q, u_p, s_p)
+        kl = kl_loss_function(u_q, s_q, u_p, s_p)
+        rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
+        #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
+        loss = kl+rec_loss
         loss.backward()
         train_loss+= loss.item()
         opt.step()
@@ -429,7 +440,9 @@ def test_acn(train_cnt, do_plot):
                 data = next_states[:,-1:]
                 yhat_batch, u_q, s_q = vae_model(data)
                 u_p, s_p = prior_model(u_q)
-                mse, kl, loss = acn_loss_function_binary(yhat_batch, data, u_q, s_q, u_p, s_p)
+                kl = kl_loss_function(u_q, s_q, u_p, s_p)
+                rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
+                loss = kl+rec_loss
                 test_loss+= loss.item()
                 seen += data.shape[0]
                 if i == 0 and do_plot:
@@ -437,8 +450,16 @@ def test_acn(train_cnt, do_plot):
                     n = min(data.size(0), 8)
                     bs = data.shape[0]
                     # shape?
-                    comparison = torch.cat([data.view(bs, 1, data.shape[2], data.shape[3])[:n],
-                                          yhat_batch.view(bs, 1, data.shape[2], data.shape[3])[:n]])
+                    # sample from discreteizezd should be bt 0 & 255
+                    yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
+                    yimg = ((yhat+1.0)/2.0)
+                    gold = (data+1)/2.0
+                    print('bef', yhat_batch.max(), yhat_batch.min())
+                    print('sam', yhat.max(), yhat.min())
+                    print('data', gold.max(), gold.min())
+                    bs,_,h,w = data.shape
+                    comparison = torch.cat([gold.view(bs, 1, h, w)[:n],
+                                            yimg.view(bs, 1, h, w)[:n]])
                     img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
                     save_image(comparison.cpu(), img_name, nrow=n)
                     print('finished writing img', img_name)
@@ -780,6 +801,7 @@ def init_train():
     info['nmix'] = nmix
     encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
                             encoder_output_size=args.encoder_output_size,
+                            num_output_channels=nmix,
                              ).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=info['NUM_TRAINING_EXAMPLES'],
                                code_length=info['CODE_LENGTH'],
@@ -889,6 +911,11 @@ if __name__ == '__main__':
     parser.add_argument('--train_buffer', default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
     parser.add_argument('--valid_buffer', default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
     args = parser.parse_args()
+
+    nr_logistic_mix = 10
+    num_output_channels = 1
+    nmix = (2*nr_logistic_mix+nr_logistic_mix)*num_output_channels
+
     if args.cuda:
         DEVICE = 'cuda'
     else:
