@@ -418,7 +418,8 @@ def train_acn(train_cnt):
         opt.step()
         # add batch size because it hasn't been added to train cnt yet
         avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
-        handle_checkpointing(train_cnt, avg_train_loss)
+        if train_cnt > 1000:
+            handle_checkpointing(train_cnt, avg_train_loss)
         train_cnt+=len(data)
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
