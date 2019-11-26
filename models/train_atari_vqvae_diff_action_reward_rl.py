@@ -149,7 +149,7 @@ def valid_vqvae(train_cnt, vqvae_model, info, valid_data_loader, do_plot=True):
         gold = (rec.to('cpu')+1)/2.0
         bs,_,h,w = gold.shape
         # sample from discretized should be between 0 and 255
-        # ^ not anymore - bt 0 and 1
+        # ^ not anymore - bt 0 and 1 or -1 and 1
         print("yhat sample", yhat[:,0].min().item(), yhat[:,0].max().item())
         yimg = ((yhat + 1.0)/2.0).to('cpu')
         print("yhat img", yhat.min().item(), yhat.max().item())

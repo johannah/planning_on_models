@@ -100,19 +100,20 @@ def prepare_next_state(st, DEVICE, NORM_BY):
     # states come in at uint8
     # Can use BCE if we convert to be between 0 and one - but this means we miss
     # color detail
-    #o = (torch.FloatTensor(st)/255.0).to(DEVICE)
-    #o[o>0] = 1.0
+    o = (torch.FloatTensor(st)/255.0).to(DEVICE)
+    o[o>0] = 1.0
+    o[o==0] = -1
     #return o
     #
     # should be converted to float between -1 and 1
-    output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
-    assert output.max() < 1.01
-    assert output.min() > -1.01
+    #output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
+    #assert output.max() < 1.01
+    #assert output.min() > -1.01
     # should be converted to float between 0 and 1
     #output = (torch.FloatTensor(st)/NORM_BY).to(DEVICE)
     #assert output.max() < 1.01
     #assert output.min() > -.01
-    return output
+    return o
 
 def prepare_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between -1 and 1
@@ -205,7 +206,8 @@ class ConvVAE(nn.Module):
                         stride=2, padding=1)
 
         # set bias to 0.5 for sigmoid
-        out_layer.bias.data.fill_(0.5)
+        # set bias to 0 for data output bt -1 and 1
+        out_layer.bias.data.fill_(0.0)
 
         self.decoder = nn.Sequential(
                nn.ConvTranspose2d(in_channels=code_len*2,
@@ -233,7 +235,9 @@ class ConvVAE(nn.Module):
         co = F.relu(self.fc3(c))
         col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
         # c is 128x20, co 128x4000, col 128x10x10
-        do = torch.sigmoid(self.decoder(col))
+        # no sigmoid - we want output bt -1 and 1 for dis mix log
+        #do = torch.sigmoid(self.decoder(col))
+        do = self.decoder(col)
         return do
 
     def reparameterize(self, mu, logvar):
@@ -389,7 +393,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
             handle_plot_ckpt(False, train_cnt, avg_train_loss)
 
 def train_acn(train_cnt):
-    test_acn(0,True)
+    #test_acn(0,True)
     vae_model.train()
     prior_model.train()
     train_loss = 0
@@ -418,7 +422,7 @@ def train_acn(train_cnt):
         opt.step()
         # add batch size because it hasn't been added to train cnt yet
         avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
-        if train_cnt > 1000:
+        if train_cnt > 50000:
             handle_checkpointing(train_cnt, avg_train_loss)
         train_cnt+=len(data)
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
@@ -439,6 +443,7 @@ def test_acn(train_cnt, do_plot):
                 batch_idx = batch[-1]
                 states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
                 data = next_states[:,-1:]
+                # yhat_batch is bt 0-1
                 yhat_batch, u_q, s_q = vae_model(data)
                 u_p, s_p = prior_model(u_q)
                 kl = kl_loss_function(u_q, s_q, u_p, s_p)
@@ -446,24 +451,34 @@ def test_acn(train_cnt, do_plot):
                 loss = kl+rec_loss
                 test_loss+= loss.item()
                 seen += data.shape[0]
-                if i == 0 and do_plot:
-                    print('writing img')
-                    n = min(data.size(0), 8)
-                    bs = data.shape[0]
-                    # shape?
-                    # sample from discreteizezd should be bt 0 & 255
-                    yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
-                    yimg = ((yhat+1.0)/2.0)
-                    gold = (data+1)/2.0
-                    print('bef', yhat_batch.max(), yhat_batch.min())
-                    print('sam', yhat.max(), yhat.min())
-                    print('data', gold.max(), gold.min())
-                    bs,_,h,w = data.shape
-                    comparison = torch.cat([gold.view(bs, 1, h, w)[:n],
-                                            yimg.view(bs, 1, h, w)[:n]])
-                    img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
-                    save_image(comparison.cpu(), img_name, nrow=n)
-                    print('finished writing img', img_name)
+                if i == 0:
+                    if do_plot:
+                         print('writing img')
+                         n = min(data.size(0), 8)
+                         bs = data.shape[0]
+                         yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
+                         # sampled yhat_batch is bt 0-1
+                         yimg = yhat
+                         yimg = ((yhat+1.0)/2.0)
+                         # yimg is bt 0.78 and 0.57 -
+                         print('data', data.max(), data.min())
+                         ## gold is bt 0 and .57
+                         #gold = (data+1)/2.0
+                         gold = data
+                         print('bef', yhat_batch.max(), yhat_batch.min())
+                         print('sam', yhat.max(), yhat.min())
+                         print('yimg', yimg.max(), yimg.min())
+                         print('gold', gold.max(), gold.min())
+                         bs,_,h,w = data.shape
+                         # data should be between 0 and 1 to be plotted with
+                         # save_image
+                         assert (yimg.min() >= 0)
+                         assert (yimg.max() <= 1)
+                         comparison = torch.cat([gold.view(bs, 1, h, w)[:n],
+                                                 yimg.view(bs, 1, h, w)[:n]])
+                         img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
+                         save_image(comparison.cpu(), img_name, nrow=n)
+                         print('finished writing img', img_name)
 
     test_loss /= seen
     print('====> Test set loss: {:.4f}'.format(test_loss))
@@ -701,12 +716,10 @@ def save_checkpoint(state, filename='model.pkl'):
 #                                yhat_batch.view(bs,1,h,w)[:n]])
 #        img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
 #        save_image(comparison, img_name, nrow=n)
-#        #embed()
 #        #ocomparison = torch.cat([onext_states,
 #        #                        oyhat_batch])
 #        #img_name = model_base_filepath + "_%010d_valid_reconstructionMINE.png"%train_cnt
 #        #save_image(ocomparison, img_name, nrow=n)
-#        #embed()
 #        print('finished writing img', img_name)
 
 def init_train():
@@ -896,7 +909,8 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('-l', '--model_loadname', default=None)
+    parser.add_argument('-s', '--sample', action='store_true', default=False)
+    parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=200000, type=int)
     parser.add_argument('-le', '--log_every', default=200000, type=int)
@@ -952,11 +966,25 @@ if __name__ == '__main__':
 
     size_training_set = train_buffer.count
 
+    train_cnt = 0
     vae_model = ConvVAE(args.code_length, input_size=1).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
-    parameters = list(vae_model.parameters()) + list(prior_model.parameters())
-    opt = optim.Adam(parameters, lr=args.learning_rate)
-    train_cnt = 0
-    while train_cnt < args.num_examples_to_train:
-        train_cnt = train_acn(train_cnt)
+    if args.model_loadpath !='':
+        _dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
+        vae_model.load_state_dict(_dict['vae_state_dict'])
+        prior_model.load_state_dict(_dict['prior_state_dict'])
+        info = _dict['info']
+        train_cnt = info['train_cnts'][-1]
+    vae_model.to(DEVICE)
+    prior_model.to(DEVICE)
+    # TODO write model loader and args.sample
+    if args.sample:
+        test_acn(train_cnt, True)
+    else:
+        parameters = list(vae_model.parameters()) + list(prior_model.parameters())
+        opt = optim.Adam(parameters, lr=args.learning_rate)
+        if args.model_loadpath !='':
+            opt.load_state_dict(_dict['optimizer'])
+        while train_cnt < args.num_examples_to_train:
+            train_cnt = train_acn(train_cnt)
 
