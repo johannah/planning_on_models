@@ -37,6 +37,7 @@ class ReplayMemory:
 
         """
         self.sample_only = sample_only
+        self.unique_available = False
         if load_file != '':
             self.load_buffer(load_file)
         else:
@@ -67,11 +68,6 @@ class ReplayMemory:
                                 self.frame_height, self.frame_width), dtype=np.uint8)
         self.new_states = np.empty((batch_size, self.agent_history_length,
                                     self.frame_height, self.frame_width), dtype=np.uint8)
-        #self.latent_states = np.empty((batch_size, self.agent_history_length,
-        #                        self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
-        #self.latent_new_states = np.empty((batch_size, self.agent_history_length,
-        #                            self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
-
         self.indices = np.empty(batch_size, dtype=np.int32)
         self.random_state = np.random.RandomState(seed)
 
@@ -100,9 +96,6 @@ class ReplayMemory:
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
-                 #latent_frames=self.latent_frames,
-                 #latent_frame_height=self.latent_frame_height,
-                 #latent_frame_width=self.latent_frame_width,
                  )
         print("finished saving buffer", time.time()-st)
 
@@ -165,13 +158,6 @@ class ReplayMemory:
         if index < self.agent_history_length - 1:
             raise ValueError("Index must be min 3")
         return self.frames[index-self.agent_history_length+1:index+1, ...]
-
-    #def _get_latent_state(self, index):
-    #    if self.count is 0:
-    #        raise ValueError("The replay memory is empty!")
-    #    if index < self.agent_history_length - 1:
-    #        raise ValueError("Index must be min 3")
-    #    return self.latent_frames[index-self.agent_history_length+1:index+1, ...]
 
     def _get_valid_indices(self, batch_size):
         if batch_size != self.indices.shape[0]:
@@ -244,7 +230,10 @@ class ReplayMemory:
 
     def get_unique_minibatch(self, batch_size):
         """
-        Returns a minibatch of batch_size
+        Returns a unique minibatch of batch_size -
+        self.reset_unique() must be called before utilizing this function or if
+        self.unique_available == False
+
         """
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
@@ -257,8 +246,6 @@ class ReplayMemory:
                                     self.frame_height, self.frame_width), dtype=np.uint8)
             self.new_states = np.empty((batch_size, self.agent_history_length,
                                         self.frame_height, self.frame_width), dtype=np.uint8)
-
-
         for i, idx in enumerate(unique_indices):
             # This seems correct to me
             # when adding experience - every input frame is the "next frame",
@@ -266,5 +253,8 @@ class ReplayMemory:
             self.states[i] = self._get_state(idx - 1)
             self.new_states[i] = self._get_state(idx)
         return self.states, self.actions[unique_indices], self.rewards[unique_indices], self.new_states, self.terminal_flags[unique_indices], self.masks[unique_indices], unique_indices
+
+def test_replay_values():
+    pass
 
 

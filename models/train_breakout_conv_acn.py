@@ -11,6 +11,9 @@ https://github.com/pytorch/examples/blob/master/vae/main.py
 # TODO conv
 # TODO load function
 # daydream function
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import os
 import sys
 import time
@@ -100,9 +103,8 @@ def prepare_next_state(st, DEVICE, NORM_BY):
     # states come in at uint8
     # Can use BCE if we convert to be between 0 and one - but this means we miss
     # color detail
-    o = (torch.FloatTensor(st)/255.0).to(DEVICE)
-    o[o>0] = 1.0
-    o[o==0] = -1
+    output = (torch.FloatTensor(st)/255.0).to(DEVICE)
+    output[output>0] = 1.0
     #return o
     #
     # should be converted to float between -1 and 1
@@ -111,9 +113,9 @@ def prepare_next_state(st, DEVICE, NORM_BY):
     #assert output.min() > -1.01
     # should be converted to float between 0 and 1
     #output = (torch.FloatTensor(st)/NORM_BY).to(DEVICE)
-    #assert output.max() < 1.01
-    #assert output.min() > -.01
-    return o
+    assert output.max() < 1.01
+    assert output.min() > -.01
+    return output
 
 def prepare_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between -1 and 1
@@ -206,8 +208,9 @@ class ConvVAE(nn.Module):
                         stride=2, padding=1)
 
         # set bias to 0.5 for sigmoid
+        out_layer.bias.data.fill_(0.5)
         # set bias to 0 for data output bt -1 and 1
-        out_layer.bias.data.fill_(0.0)
+        #out_layer.bias.data.fill_(0.0)
 
         self.decoder = nn.Sequential(
                nn.ConvTranspose2d(in_channels=code_len*2,
@@ -236,8 +239,8 @@ class ConvVAE(nn.Module):
         col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
         # c is 128x20, co 128x4000, col 128x10x10
         # no sigmoid - we want output bt -1 and 1 for dis mix log
-        #do = torch.sigmoid(self.decoder(col))
-        do = self.decoder(col)
+        do = torch.sigmoid(self.decoder(col))
+        #do = self.decoder(col)
         return do
 
     def reparameterize(self, mu, logvar):
@@ -414,7 +417,8 @@ def train_acn(train_cnt):
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
         kl = kl_loss_function(u_q, s_q, u_p, s_p)
-        rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
+        rec_loss = F.binary_cross_entropy(yhat_batch, data, reduction='sum')
+        #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
         loss = kl+rec_loss
         loss.backward()
@@ -427,6 +431,44 @@ def train_acn(train_cnt):
         train_cnt+=len(data)
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
+
+def tsne_plot(vae_model, train_cnt, data_buffer, num_clusters=30):
+    from sklearn.manifold import TSNE
+    from sklearn.cluster import KMeans
+    vae_model.eval()
+    test_loss = 0
+    print('starting tsne', train_cnt)
+    with torch.no_grad():
+        data_buffer.reset_unique()
+        batch = data_buffer.get_unique_minibatch(500)
+        batch_idxs = batch[-1]
+        states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
+        data = next_states[:,-1:]
+        # yhat_batch is bt 0-1
+        yhat_batch, u_q, s_q = vae_model(data)
+        X = u_q.cpu().numpy()
+        Xtsne = TSNE(n_components=2, perplexity=5).fit_transform(X)
+        Xclust = KMeans(n_clusters=num_clusters).fit_predict(Xtsne)
+        plt.figure(); plt.scatter(Xtsne[:,0], Xtsne[:,1], c=Xclust); plt.savefig('tsne.png'); plt.close()
+        npdata = data.cpu().numpy()[:,0]
+        for c in range(num_clusters):
+            inds = np.where(Xclust==c)[0]
+            n = len(inds)
+            sq = min([int(np.sqrt(n))+1, 5])
+            f,ax = plt.subplots(sq-1, sq, sharex=True, sharey=True)
+            cnt = 0
+            for h in range(sq-1):
+                for w in range(sq):
+                    if cnt < n:
+                        ax[h,w].imshow(npdata[inds[cnt]])
+                        ax[h,w].set_title('%d'%batch_idxs[inds[cnt]])
+                    cnt+=1
+            plt.savefig('train%010d_cluster_%03d.png'%(train_cnt, c)); plt.close()
+
+
+        embed()
+
+
 
 def test_acn(train_cnt, do_plot):
     vae_model.eval()
@@ -447,7 +489,8 @@ def test_acn(train_cnt, do_plot):
                 yhat_batch, u_q, s_q = vae_model(data)
                 u_p, s_p = prior_model(u_q)
                 kl = kl_loss_function(u_q, s_q, u_p, s_p)
-                rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
+                rec_loss = F.binary_cross_entropy(yhat_batch, data, reduction='sum')
+                #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
                 loss = kl+rec_loss
                 test_loss+= loss.item()
                 seen += data.shape[0]
@@ -456,17 +499,17 @@ def test_acn(train_cnt, do_plot):
                          print('writing img')
                          n = min(data.size(0), 8)
                          bs = data.shape[0]
-                         yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
+                         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
                          # sampled yhat_batch is bt 0-1
-                         yimg = yhat
-                         yimg = ((yhat+1.0)/2.0)
+                         yimg = yhat_batch
+                         #yimg = ((yhat+1.0)/2.0)
                          # yimg is bt 0.78 and 0.57 -
                          print('data', data.max(), data.min())
                          ## gold is bt 0 and .57
                          #gold = (data+1)/2.0
                          gold = data
                          print('bef', yhat_batch.max(), yhat_batch.min())
-                         print('sam', yhat.max(), yhat.min())
+                         #print('sam', yhat.max(), yhat.min())
                          print('yimg', yimg.max(), yimg.min())
                          print('gold', gold.max(), gold.min())
                          bs,_,h,w = data.shape
@@ -813,9 +856,13 @@ def init_train():
     info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['HISTORY_SIZE']
     nmix = int(info['num_output_mixtures']/info['HISTORY_SIZE'])
     info['nmix'] = nmix
+    #encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
+    #                        encoder_output_size=args.encoder_output_size,
+    #                        num_output_channels=nmix,
+    #                         ).to(DEVICE)
     encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
                             encoder_output_size=args.encoder_output_size,
-                            num_output_channels=nmix,
+                            num_output_channels=1
                              ).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=info['NUM_TRAINING_EXAMPLES'],
                                code_length=info['CODE_LENGTH'],
@@ -904,17 +951,20 @@ def init_train():
     #init_train()
 
 
+
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
     parser = ArgumentParser(description='')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-s', '--sample', action='store_true', default=False)
+    parser.add_argument('-t', '--tsne', action='store_true', default=False)
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=200000, type=int)
     parser.add_argument('-le', '--log_every', default=200000, type=int)
-    parser.add_argument('-bs', '--batch_size', default=128, type=int)
+    parser.add_argument('-bs', '--batch_size', default=256, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=20, type=int)
@@ -967,7 +1017,9 @@ if __name__ == '__main__':
     size_training_set = train_buffer.count
 
     train_cnt = 0
-    vae_model = ConvVAE(args.code_length, input_size=1).to(DEVICE)
+    vae_model = ConvVAE(args.code_length, input_size=1, num_output_channels=1).to(DEVICE)
+    #vae_model = ConvVAE(args.code_length, input_size=nmix, num_output_channels=1).to(DEVICE)
+
     prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
     if args.model_loadpath !='':
         _dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
@@ -980,9 +1032,12 @@ if __name__ == '__main__':
     # TODO write model loader and args.sample
     if args.sample:
         test_acn(train_cnt, True)
+    if args.tsne:
+        tsne_plot(vae_model, train_cnt, valid_buffer, num_clusters=30)
     else:
         parameters = list(vae_model.parameters()) + list(prior_model.parameters())
         opt = optim.Adam(parameters, lr=args.learning_rate)
+        test_acn(train_cnt, do_plot=True)
         if args.model_loadpath !='':
             opt.load_state_dict(_dict['optimizer'])
         while train_cnt < args.num_examples_to_train:
