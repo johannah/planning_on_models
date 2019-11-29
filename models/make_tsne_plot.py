@@ -39,19 +39,23 @@ import sys
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
 import mpld3
+from cv2 import resize
 
 from IPython.display import HTML
 from IPython import embed
 random_state = np.random.RandomState(4)
 
 import torch
-from train_breakout_conv_acn import ConvVAE, make_state
+from train_breakout_conv_acn_bce_reconstruction import ConvVAE, make_state
 sys.path.append('../agents')
 from replay import ReplayMemory
 
 DEVICE = 'cpu'
+
+# TODO - colorgradient related to time in episode
+# add step in episode number to replay buffer
 # load pretrained model
-model_loadpath = '../../model_savedir/sigcacn_breakout_binary_0049805312ex.pkl'
+model_loadpath = '../../model_savedir/results_train_breakout_acn_bce_binary_v2/sigcacn_breakout_binary_0049805312ex.pkl'
 # data buffer from experience replay of rl agent
 buffer_loadpath = '/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval_006000.npz'
 
@@ -66,20 +70,22 @@ code_length = _args.code_length
 vae_model = ConvVAE(code_length, input_size=1, num_output_channels=1)
 vae_model.to(DEVICE)
 
-def tsne_plot(X, images, num_clusters=30, perplexity=5, serve_port=8104, html_out_path):
-    print('computing TSNE and KMeans clustering')
+def tsne_plot(X, images, color, num_clusters=30, perplexity=5, serve_port=8104, html_out_path='mpld3.html'):
+    print('computing TSNE')
     Xtsne = TSNE(n_components=2, perplexity=perplexity).fit_transform(X)
-    Xclust = KMeans(n_clusters=num_clusters).fit_predict(Xtsne)
-
     x = Xtsne[:,0]
     y = Xtsne[:,1]
-    c = Xclust
+    # get color from kmeans cluster
+    #print('computing KMeans clustering')
+    #Xclust = KMeans(n_clusters=num_clusters).fit_predict(Xtsne)
+    #c = Xclust
+
 
     # Create list of image URIs
     html_imgs = []
     for nidx in range(npimgs.shape[0]):
-        f,ax = plt.subplots()
-        ax.imshow(npimgs[nidx])
+        f,ax = plt.subplots(figsize=(16,16))
+        ax.imshow(resize(npimgs[nidx], (200,200)))
         ax.set_title(batch_idxs[nidx])
         #fname = '%05d.html'%nidx
         dd = mpld3.fig_to_dict(f)
@@ -92,7 +98,7 @@ def tsne_plot(X, images, num_clusters=30, perplexity=5, serve_port=8104, html_ou
     fig, ax = plt.subplots(figsize=(8,8))
 
     # Make scatterplot and label axes, title
-    sc = ax.scatter(x,y,s=100,alpha=0.7,c=c,edgecolors='none')
+    sc = ax.scatter(x,y,s=100,alpha=0.7, c=color, edgecolors='none')
     plt.title("TSNE")
 
     # Create the mpld3 HTML tooltip plugin
@@ -108,7 +114,7 @@ def tsne_plot(X, images, num_clusters=30, perplexity=5, serve_port=8104, html_ou
     mpld3.show(port=serve_port, open_browser=False)
 
 data_buffer.reset_unique()
-batch = data_buffer.get_unique_minibatch(500)
+batch = data_buffer.get_unique_minibatch(300)
 batch_idxs =  batch[-1]
 npimgs = batch[3][:,-1]
 states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
@@ -118,6 +124,6 @@ with torch.no_grad():
     yhat_batch, u_q, s_q = vae_model(data)
     code_book = u_q.cpu().numpy()
 
-tsne_plot(X=code_book, images=npimgs)
+tsne_plot(X=code_book, images=npimgs, color=batch_idxs)
 
 
