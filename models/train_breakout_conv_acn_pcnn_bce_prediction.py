@@ -99,36 +99,33 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
     assert load_buffer.count > 10
     return load_buffer
 
-def prepare_next_state(st, DEVICE, NORM_BY):
-    # states come in at uint8
-    # Can use BCE if we convert to be between 0 and one - but this means we miss
-    # color detail
-    output = (torch.FloatTensor(st)/255.0).to(DEVICE)
-    output[output>0] = 1.0
-    #return o
-    #
-    # should be converted to float between -1 and 1
-    #output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
-    #assert output.max() < 1.01
-    #assert output.min() > -1.01
-    # should be converted to float between 0 and 1
-    #output = (torch.FloatTensor(st)/NORM_BY).to(DEVICE)
-    assert output.max() < 1.01
-    assert output.min() > -.01
-    return output
+#def prepare_next_state(st, DEVICE, NORM_BY):
+#    # states come in at uint8
+#    # Can use BCE if we convert to be between 0 and one - but this means we miss
+#    # color detail
+#    output = (torch.FloatTensor(st)/255.0).to(DEVICE)
+#    output[output>0] = 1.0
+#    #return o
+#    #
+#    # should be converted to float between -1 and 1
+#    #output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
+#    #assert output.max() < 1.01
+#    #assert output.min() > -1.01
+#    # should be converted to float between 0 and 1
+#    #output = (torch.FloatTensor(st)/NORM_BY).to(DEVICE)
+#    assert output.max() < 1.01
+#    assert output.min() > -.01
+#    return output
 
 def prepare_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between -1 and 1
     # st.shape is bs,4,40,40
-
-    # convert to 0 and 1
-    #output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
-    #assert output.max() < 1.01
-    #assert output.min() > -1.01
+#    output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
+#    assert output.max() < 1.01
+#    assert output.min() > -1.01
+#    # convert to 0 and 1
     output = (torch.FloatTensor(st)/255.0).to(DEVICE)
     output[output>0] = 1.0
-    assert output.max() < 1.01
-    assert output.min() > -.01
     return output
 
 def make_state(batch, DEVICE, NORM_BY):
@@ -138,7 +135,8 @@ def make_state(batch, DEVICE, NORM_BY):
     # rewards are    [r0,  r1,  r2,  a3]
     states, actions, rewards, next_states, terminal_flags, masks = batch
     states = prepare_state(states, DEVICE, NORM_BY)
-    next_state = prepare_next_state(next_states[:,-1:], DEVICE, NORM_BY)
+    # only predict the unseen (most recent) state
+    next_states = prepare_state(next_states[:,-1:], DEVICE, NORM_BY)
     # next state is the corresponding action
     actions = torch.LongTensor(actions).to(DEVICE)
     rewards = torch.LongTensor(rewards).to(DEVICE)
@@ -151,7 +149,7 @@ def make_state(batch, DEVICE, NORM_BY):
         rc[i]*=rewards[i]
     states = torch.cat((states,ac,rc), dim=1)
     bs, _, h, w = states.shape
-    return states, actions, rewards, next_state
+    return states, actions, rewards, next_states
 
 def save_model(info, model_dict):
     train_cnt = info['model_train_cnts'][-1]
@@ -184,7 +182,7 @@ def add_losses(info, train_cnt, phase, kl_loss, rec_loss):
 
 # ConvVAE was also imported - not sure which one was used
 class ConvVAE(nn.Module):
-    def __init__(self, code_len, input_size=1, num_output_channels=30, encode_output_size=10):
+    def __init__(self, code_len, input_size=1, num_output_channels=30):
         super(ConvVAE, self).__init__()
         self.code_len = code_len
         self.encoder = nn.Sequential(
@@ -210,7 +208,7 @@ class ConvVAE(nn.Module):
         # found via experimentation - 3 for mnist
         # input_image == 28 -> eo=7
         # for 36x36 input shape -> eo=9, raveled is 3240
-        self.eo=eo=encode_output_size
+        self.eo=eo=encode_output_size = 10
         self.fc21 = nn.Linear(code_len*2*eo*eo, code_len)
         self.fc22 = nn.Linear(code_len*2*eo*eo, code_len)
         self.fc3 = nn.Linear(code_len, code_len*2*eo*eo)
@@ -246,16 +244,6 @@ class ConvVAE(nn.Module):
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
         return self.fc21(ol), self.fc22(ol)
 
-    def decode(self, mu, logvar):
-        c = self.reparameterize(mu,logvar)
-        co = F.relu(self.fc3(c))
-        col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
-        # c is 128x20, co 128x4000, col 128x10x10
-        # no sigmoid - we want output bt -1 and 1 for dis mix log
-        do = torch.sigmoid(self.decoder(col))
-        #do = self.decoder(col)
-        return do
-
     def reparameterize(self, mu, logvar):
         if self.training:
             std = torch.exp(0.5*logvar)
@@ -267,8 +255,8 @@ class ConvVAE(nn.Module):
 
     def forward(self, x):
         mu, logvar = self.encode(x)
-        #z = self.reparameterize(mu, logvar)
-        return self.decode(mu, logvar), mu, logvar
+        c = self.reparameterize(mu,logvar)
+        return c, mu, logvar
 
 def acn_loss_function_binary(y_hat, y, u_q, s_q, u_p, s_p):
     ''' reconstruction loss + coding cost
@@ -393,6 +381,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         state = {
                  'vae_state_dict':vae_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
+                 'pcnn_state_dict':pcnn_decoder.state_dict(),
                  'optimizer':opt.state_dict(),
                  'info':info,
                  }
@@ -424,15 +413,16 @@ def train_acn(train_cnt):
         states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
         bs = states.shape[0]
         opt.zero_grad()
-        yhat_batch, u_q, s_q = vae_model(states)
+        z, u_q, s_q = vae_model(states)
         # add the predicted codes to the input
         prior_model.codes[batch_idx] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
         kl = kl_loss_function(u_q, s_q, u_p, s_p)
-        # predict one image
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
         rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='sum')
-        #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
+        # input should be scaled bt -1 and 1 for dml
+        #rec_loss = discretized_mix_logistic_loss(yhat_batch, next_state, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
         loss = kl+rec_loss
         loss.backward()
@@ -445,6 +435,40 @@ def train_acn(train_cnt):
         train_cnt+=bs
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
+
+def tsne_plot(vae_model, train_cnt, data_buffer, num_clusters=30):
+    from sklearn.manifold import TSNE
+    from sklearn.cluster import KMeans
+    vae_model.eval()
+    pcnn_deocder.eval()
+    test_loss = 0
+    print('starting tsne', train_cnt)
+    with torch.no_grad():
+        data_buffer.reset_unique()
+        batch = data_buffer.get_unique_minibatch(500)
+        batch_idxs = batch[-1]
+        states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
+        data = next_states[:,-1:]
+        # yhat_batch is bt 0-1
+        yhat_batch, u_q, s_q = vae_model(data)
+        X = u_q.cpu().numpy()
+        Xtsne = TSNE(n_components=2, perplexity=5).fit_transform(X)
+        Xclust = KMeans(n_clusters=num_clusters).fit_predict(Xtsne)
+        plt.figure(); plt.scatter(Xtsne[:,0], Xtsne[:,1], c=Xclust); plt.savefig('tsne.png'); plt.close()
+        npdata = data.cpu().numpy()[:,0]
+        for c in range(num_clusters):
+            inds = np.where(Xclust==c)[0]
+            n = len(inds)
+            sq = min([int(np.sqrt(n))+1, 5])
+            f,ax = plt.subplots(sq-1, sq, sharex=True, sharey=True)
+            cnt = 0
+            for h in range(sq-1):
+                for w in range(sq):
+                    if cnt < n:
+                        ax[h,w].imshow(npdata[inds[cnt]])
+                        ax[h,w].set_title('%d'%batch_idxs[inds[cnt]])
+                    cnt+=1
+            plt.savefig('train%010d_cluster_%03d.png'%(train_cnt, c)); plt.close()
 
 def test_acn(train_cnt, do_plot):
     vae_model.eval()
@@ -459,13 +483,14 @@ def test_acn(train_cnt, do_plot):
             if valid_buffer.unique_available:
                 batch = valid_buffer.get_unique_minibatch(args.batch_size)
                 batch_idx = batch[-1]
-                states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
-                bs,_,h,w = next_states.shape
+                states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
+                bs = states.shape[0]
                 # yhat_batch is bt 0-1
-                yhat_batch, u_q, s_q = vae_model(states)
+                z, u_q, s_q = vae_model(states)
                 u_p, s_p = prior_model(u_q)
                 kl = kl_loss_function(u_q, s_q, u_p, s_p)
-                rec_loss = F.binary_cross_entropy(yhat_batch, next_states, reduction='sum')
+                yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
+                rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='sum')
                 #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
                 loss = kl+rec_loss
                 test_loss+= loss.item()
@@ -473,31 +498,14 @@ def test_acn(train_cnt, do_plot):
                 if i == 0:
                     if do_plot:
                          print('writing img')
-                         n = min(next_states.size(0), 8)
-                         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
+                         n = min(bs, 8)
                          # sampled yhat_batch is bt 0-1
-                         yimg = yhat_batch
-                         #yimg = ((yhat+1.0)/2.0)
-                         # yimg is bt 0.78 and 0.57 -
-                         print('data', next_states.max(), next_states.min())
-                         ## gold is bt 0 and .57
-                         #gold = (data+1)/2.0
-                         next_state = next_states
-                         # channels in states are t=0,1,2,3,act,rew
                          last_state = states[:,3:4]
-                         print('bef', yhat_batch.max(), yhat_batch.min())
-                         #print('sam', yhat.max(), yhat.min())
-                         print('yimg', yimg.max(), yimg.min())
                          # data should be between 0 and 1 to be plotted with
-                         # save_image
-                         assert (yimg.min() >= 0)
-                         assert (yimg.max() <= 1)
-                         assert (next_states.min() >= 0)
-                         assert (next_states.max() <= 1)
                          comparison = torch.cat([
-                                                last_state[:n],
-                                                next_state[:n],
-                                                yimg[:n]])
+                                                 last_state[:n],
+                                                 next_state[:n],
+                                                 yhat_batch[:n]])
                          img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
                          save_image(comparison.cpu(), img_name, nrow=n)
                          print('finished writing img', img_name)
@@ -506,22 +514,6 @@ def test_acn(train_cnt, do_plot):
     print('====> Test set loss: {:.4f}'.format(test_loss))
     print('finished test', time.time()-st)
     return test_loss
-
-class IndexedDataset(Dataset):
-    def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
-        """ class to provide indexes into the data
-        """
-        self.indexed_dataset = dataset_function(path,
-                             download=download,
-                             train=train,
-                             transform=transform)
-
-    def __getitem__(self, index):
-        data, target = self.indexed_dataset[index]
-        return data, target, index
-
-    def __len__(self):
-        return len(self.indexed_dataset)
 
 def save_checkpoint(state, filename='model.pkl'):
     print("starting save of model %s" %filename)
@@ -876,7 +868,6 @@ def init_train():
     if args.sample:
         sample_acn(info, model_dict, data_buffers, num_samples=args.num_samples, teacher_force=args.teacher_force)
     else:
-        test_acn(train_cnt, do_plot=True)
         train_acn(info, model_dict, data_buffers)
 
 #if __name__ == '__main__':
@@ -943,7 +934,7 @@ if __name__ == '__main__':
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=200000, type=int)
     parser.add_argument('-le', '--log_every', default=200000, type=int)
-    parser.add_argument('-bs', '--batch_size', default=128, type=int)
+    parser.add_argument('-bs', '--batch_size', default=256, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=40, type=int)
@@ -965,24 +956,16 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn_breakout_binary_predict')
+    vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred')
 
     train_data_path = args.train_buffer
     valid_data_path = args.valid_buffer
     train_buffer = make_subset_buffer(train_data_path, max_examples=60000)
     valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(60000*.1))
 
-
-    #train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-    #                            train=True, download=True,
-    #                            transform=transforms.ToTensor())
-    #train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    #test_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
-    #                           train=False, download=True,
-    #                           transform=transforms.ToTensor())
-    #test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
-
-
+    num_actions = len(set(train_buffer.actions))
+    hsize = train_buffer.frames.shape[1]
+    wsize = train_buffer.frames.shape[2]
     info = {'train_cnts':[],
             'train_losses':[],
             'test_cnts':[],
@@ -991,16 +974,30 @@ if __name__ == '__main__':
             'args':[args],
             'last_save':0,
             'last_plot':0,
+            'NUM_PCNN_FILTERS':1,
+            'NUM_PCNN_LAYERS':12,
+            'num_actions':num_actions,
+            'hsize':hsize,
+            'wsize':wsize,
+            'last_layer_bias':0.5
              }
 
     size_training_set = train_buffer.count
 
     train_cnt = 0
-    #vae_model = ConvVAE(args.code_length, input_size=1, num_output_channels=1).to(DEVICE)
     vae_model = ConvVAE(args.code_length, input_size=6, num_output_channels=1).to(DEVICE)
     #vae_model = ConvVAE(args.code_length, input_size=nmix, num_output_channels=1).to(DEVICE)
 
     prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
+    pcnn_decoder = GatedPixelCNN(input_dim=1,
+                                 dim=info['NUM_PCNN_FILTERS'],
+                                 n_layers=info['NUM_PCNN_LAYERS'],
+                                 n_classes=info['num_actions'],
+                                 float_condition_size=args.code_length,
+                                 last_layer_bias=info['last_layer_bias'],
+                                 hsize=info['hsize'], wsize=info['wsize']).to(DEVICE)
+
+
     if args.model_loadpath !='':
         _dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
         vae_model.load_state_dict(_dict['vae_state_dict'])
@@ -1015,7 +1012,8 @@ if __name__ == '__main__':
     if args.tsne:
         tsne_plot(vae_model, train_cnt, valid_buffer, num_clusters=30)
     else:
-        parameters = list(vae_model.parameters()) + list(prior_model.parameters())
+        #parameters = list(vae_model.parameters()) + list(prior_model.parameters())
+        parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
         opt = optim.Adam(parameters, lr=args.learning_rate)
         test_acn(train_cnt, do_plot=True)
         if args.model_loadpath !='':
