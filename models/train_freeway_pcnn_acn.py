@@ -99,6 +99,7 @@ def train_acn(train_cnt):
         prior_model.codes[data_index-args.number_condition] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
+        # how was bce working here?
         loss = acn_loss_function(yhat_batch, label, u_q, s_q, u_p, s_p)
         loss.backward()
         train_loss+= loss.item()

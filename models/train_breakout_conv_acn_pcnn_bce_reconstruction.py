@@ -410,7 +410,8 @@ def train_acn(train_cnt):
         kl = kl_loss_function(u_q, s_q, u_p, s_p)
         yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
         rec_loss = F.binary_cross_entropy(yhat_batch, data, reduction='sum')
-        #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
+        # input should be scaled bt -1 and 1 for dml
+        rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
         loss = kl+rec_loss
         loss.backward()
