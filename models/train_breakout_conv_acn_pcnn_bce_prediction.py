@@ -34,6 +34,7 @@ torch.set_num_threads(4)
 from imageio import imsave
 from ae_utils import save_checkpoint, handle_plot_ckpt, reshape_input
 from ae_utils import discretized_mix_logistic_loss, sample_from_discretized_mix_logistic
+from make_tsne_plot import tsne_plot
 from pixel_cnn import GatedPixelCNN
 #from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 sys.path.append('../agents')
@@ -436,43 +437,31 @@ def train_acn(train_cnt):
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
 
-def tsne_plot(vae_model, train_cnt, data_buffer, num_clusters=30):
-    from sklearn.manifold import TSNE
-    from sklearn.cluster import KMeans
+def call_tsne_plot():
     vae_model.eval()
-    pcnn_deocder.eval()
-    test_loss = 0
-    print('starting tsne', train_cnt)
+    prior_model.eval()
+    pcnn_decoder.eval()
     with torch.no_grad():
-        data_buffer.reset_unique()
-        batch = data_buffer.get_unique_minibatch(500)
-        batch_idxs = batch[-1]
-        states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
-        data = next_states[:,-1:]
+        valid_buffer.reset_unique()
+        batch = valid_buffer.get_unique_minibatch(args.num_tsne)
+        batch_idx = batch[-1]
+        states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
         # yhat_batch is bt 0-1
-        yhat_batch, u_q, s_q = vae_model(data)
+        z, u_q, s_q = vae_model(states)
+        u_p, s_p = prior_model(u_q)
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
+        end = args.model_loadpath.split('.')[-1]
+        html_path = args.model_loadpath.replace(end, 'html')
         X = u_q.cpu().numpy()
-        Xtsne = TSNE(n_components=2, perplexity=5).fit_transform(X)
-        Xclust = KMeans(n_clusters=num_clusters).fit_predict(Xtsne)
-        plt.figure(); plt.scatter(Xtsne[:,0], Xtsne[:,1], c=Xclust); plt.savefig('tsne.png'); plt.close()
-        npdata = data.cpu().numpy()[:,0]
-        for c in range(num_clusters):
-            inds = np.where(Xclust==c)[0]
-            n = len(inds)
-            sq = min([int(np.sqrt(n))+1, 5])
-            f,ax = plt.subplots(sq-1, sq, sharex=True, sharey=True)
-            cnt = 0
-            for h in range(sq-1):
-                for w in range(sq):
-                    if cnt < n:
-                        ax[h,w].imshow(npdata[inds[cnt]])
-                        ax[h,w].set_title('%d'%batch_idxs[inds[cnt]])
-                    cnt+=1
-            plt.savefig('train%010d_cluster_%03d.png'%(train_cnt, c)); plt.close()
+        images = np.round(yhat_batch.cpu().numpy()[:,0], 0).astype(np.int16)
+        #images = next_state[:,0].cpu().numpy()
+        tsne_plot(X=X, images=images, color=batch_idx, perplexity=args.perplexity,
+                  html_out_path=html_path)
 
 def test_acn(train_cnt, do_plot):
     vae_model.eval()
     prior_model.eval()
+    pcnn_decoder.eval()
     test_loss = 0
     print('starting test', train_cnt)
     st = time.time()
@@ -734,142 +723,142 @@ def save_checkpoint(state, filename='model.pkl'):
 #        #img_name = model_base_filepath + "_%010d_valid_reconstructionMINE.png"%train_cnt
 #        #save_image(ocomparison, img_name, nrow=n)
 #        print('finished writing img', img_name)
-
-def init_train():
-    """ use args to setup inplace training """
-    train_data_path = args.train_buffer
-    valid_data_path = args.valid_buffer
-
-    data_dir = os.path.split(train_data_path)[0]
-
-    # we are starting from scratch training this model
-    if args.model_loadpath == "":
-        run_num = 0
-        model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-        while os.path.exists(model_base_filedir):
-            run_num +=1
-            model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-        os.makedirs(model_base_filedir)
-        model_base_filepath = os.path.join(model_base_filedir, args.savename)
-        print("MODEL BASE FILEPATH", model_base_filepath)
-
-        info = {'model_train_cnts':[],
-                'model_train_losses':{},
-                'model_valid_cnts':[],
-                'model_valid_losses':{},
-                'model_save_times':[],
-                'model_last_save':0,
-                'model_last_plot':0,
-                'NORM_BY':255.0,
-                'MODEL_BASE_FILEDIR':model_base_filedir,
-                'model_base_filepath':model_base_filepath,
-                'model_train_data_file':train_data_path,
-                'model_valid_data_file':valid_data_path,
-                'NUM_TRAINING_EXAMPLES':args.num_training_examples,
-                'NUM_K':args.num_k,
-                'NR_LOGISTIC_MIX':args.nr_logistic_mix,
-                'NUM_PCNN_FILTERS':args.num_pcnn_filters,
-                'NUM_PCNN_LAYERS':args.num_pcnn_layers,
-                'ALPHA_REC':args.alpha_rec,
-                'ALPHA_ACT':args.alpha_act,
-                'ALPHA_REW':args.alpha_rew,
-                'MODEL_BATCH_SIZE':args.batch_size,
-                'NUMBER_CONDITION':args.num_condition,
-                'CODE_LENGTH':args.code_length,
-                'NUM_MIXTURES':args.num_mixtures,
-                'REQUIRE_UNIQUE_CODES':args.require_unique_codes,
-                 }
-
-        ## size of latents flattened - dependent on architecture
-        #info['float_condition_size'] = 100*args.num_z
-        ## 3x logistic needed for loss
-        ## TODO - change loss
-    else:
-        print('loading model from: %s' %args.model_loadpath)
-        model_dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
-        info =  model_dict['model_info']
-        model_base_filedir = os.path.split(args.model_loadpath)[0]
-        model_base_filepath = os.path.join(model_base_filedir, args.savename)
-        info['loaded_from'] = args.model_loadpath
-        info['MODEL_BATCH_SIZE'] = args.batch_size
-    info['DEVICE'] = DEVICE
-    info['MODEL_SAVE_EVERY'] = args.save_every
-    info['MODEL_LOG_EVERY_BATCHES'] = args.log_every_batches
-    info['model_loadpath'] = args.model_loadpath
-    info['MODEL_SAVENAME'] = args.savename
-    info['MODEL_LEARNING_RATE'] = args.learning_rate
-    # create replay buffer
-    train_buffer = make_subset_buffer(train_data_path, max_examples=info['NUM_TRAINING_EXAMPLES'])
-    valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(info['NUM_TRAINING_EXAMPLES']*.1))
-    valid_buffer = ReplayMemory(load_file=valid_data_path)
-    # if train buffer is too large - make random subset
-    # 27588 places in 1e6 buffer where reward is nonzero
-
-    info['num_actions'] = train_buffer.num_actions()
-    info['size_training_set'] = train_buffer.num_examples()
-    info['hsize'] = train_buffer.frame_height
-    info['wsize'] = train_buffer.frame_width
-    info['num_rewards'] = train_buffer.num_rewards()
-    info['HISTORY_SIZE'] = 4
-
-
-    rewards_weight = 1-np.array(train_buffer.percentages_rewards())
-    actions_weight = 1-np.array(train_buffer.percentages_actions())
-    actions_weight = torch.FloatTensor(actions_weight).to(DEVICE)
-    rewards_weight = torch.FloatTensor(rewards_weight).to(DEVICE)
-    info['actions_weight'] = actions_weight
-    info['rewards_weight'] = rewards_weight
-
-
-    # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
-    # decorelated channel
-    info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['HISTORY_SIZE']
-    nmix = int(info['num_output_mixtures']/info['HISTORY_SIZE'])
-    info['nmix'] = nmix
-    #encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
-    #                        encoder_output_size=args.encoder_output_size,
-    #                        num_output_channels=nmix,
-    #                         ).to(DEVICE)
-    encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
-                            encoder_output_size=args.encoder_output_size,
-                            num_output_channels=1
-                             ).to(DEVICE)
-    prior_model = PriorNetwork(size_training_set=info['NUM_TRAINING_EXAMPLES'],
-                               code_length=info['CODE_LENGTH'],
-                               n_mixtures=info['NUM_MIXTURES'],
-                               k=info['NUM_K'],
-                               require_unique_codes=info['REQUIRE_UNIQUE_CODES'],
-                               ).to(DEVICE)
-    pcnn_decoder = GatedPixelCNN(input_dim=1,
-                                 dim=info['NUM_PCNN_FILTERS'],
-                                 n_layers=info['NUM_PCNN_LAYERS'],
-                                 n_classes=info['num_actions'],
-                                 float_condition_size=info['CODE_LENGTH'],
-                                 last_layer_bias=0.5,
-                                 hsize=info['hsize'], wsize=info['wsize']).to(DEVICE)
-
-    parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
-    parameters = list(encoder_model.parameters()) + list(prior_model.parameters())
-    opt = optim.Adam(parameters, lr=info['MODEL_LEARNING_RATE'])
-
-    if args.model_loadpath != '':
-        print("loading weights from:%s" %args.model_loadpath)
-        encoder_model.load_state_dict(model_dict['encoder_model_state_dict'])
-        prior_model.load_state_dict(model_dict['prior_model_state_dict'])
-        pcnn_decoder.load_state_dict(model_dict['pcnn_decoder_state_dict'])
-        #encoder_model.embedding = model_dict['model_embedding']
-        opt.load_state_dict(model_dict['opt_state_dict'])
-
-    model_dict = {'encoder_model':encoder_model,
-                  'prior_model':prior_model,
-                  'pcnn_decoder':pcnn_decoder,
-                  'opt':opt}
-    data_buffers = {'train':train_buffer, 'valid':valid_buffer}
-    if args.sample:
-        sample_acn(info, model_dict, data_buffers, num_samples=args.num_samples, teacher_force=args.teacher_force)
-    else:
-        train_acn(info, model_dict, data_buffers)
-
+#
+#def init_train():
+#    """ use args to setup inplace training """
+#    train_data_path = args.train_buffer
+#    valid_data_path = args.valid_buffer
+#
+#    data_dir = os.path.split(train_data_path)[0]
+#
+#    # we are starting from scratch training this model
+#    if args.model_loadpath == "":
+#        run_num = 0
+#        model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+#        while os.path.exists(model_base_filedir):
+#            run_num +=1
+#            model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+#        os.makedirs(model_base_filedir)
+#        model_base_filepath = os.path.join(model_base_filedir, args.savename)
+#        print("MODEL BASE FILEPATH", model_base_filepath)
+#
+#        info = {'model_train_cnts':[],
+#                'model_train_losses':{},
+#                'model_valid_cnts':[],
+#                'model_valid_losses':{},
+#                'model_save_times':[],
+#                'model_last_save':0,
+#                'model_last_plot':0,
+#                'NORM_BY':255.0,
+#                'MODEL_BASE_FILEDIR':model_base_filedir,
+#                'model_base_filepath':model_base_filepath,
+#                'model_train_data_file':train_data_path,
+#                'model_valid_data_file':valid_data_path,
+#                'NUM_TRAINING_EXAMPLES':args.num_training_examples,
+#                'NUM_K':args.num_k,
+#                'NR_LOGISTIC_MIX':args.nr_logistic_mix,
+#                'NUM_PCNN_FILTERS':args.num_pcnn_filters,
+#                'NUM_PCNN_LAYERS':args.num_pcnn_layers,
+#                'ALPHA_REC':args.alpha_rec,
+#                'ALPHA_ACT':args.alpha_act,
+#                'ALPHA_REW':args.alpha_rew,
+#                'MODEL_BATCH_SIZE':args.batch_size,
+#                'NUMBER_CONDITION':args.num_condition,
+#                'CODE_LENGTH':args.code_length,
+#                'NUM_MIXTURES':args.num_mixtures,
+#                'REQUIRE_UNIQUE_CODES':args.require_unique_codes,
+#                 }
+#
+#        ## size of latents flattened - dependent on architecture
+#        #info['float_condition_size'] = 100*args.num_z
+#        ## 3x logistic needed for loss
+#        ## TODO - change loss
+#    else:
+#        print('loading model from: %s' %args.model_loadpath)
+#        model_dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
+#        info =  model_dict['model_info']
+#        model_base_filedir = os.path.split(args.model_loadpath)[0]
+#        model_base_filepath = os.path.join(model_base_filedir, args.savename)
+#        info['loaded_from'] = args.model_loadpath
+#        info['MODEL_BATCH_SIZE'] = args.batch_size
+#    info['DEVICE'] = DEVICE
+#    info['MODEL_SAVE_EVERY'] = args.save_every
+#    info['MODEL_LOG_EVERY_BATCHES'] = args.log_every_batches
+#    info['model_loadpath'] = args.model_loadpath
+#    info['MODEL_SAVENAME'] = args.savename
+#    info['MODEL_LEARNING_RATE'] = args.learning_rate
+#    # create replay buffer
+#    train_buffer = make_subset_buffer(train_data_path, max_examples=info['NUM_TRAINING_EXAMPLES'])
+#    valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(info['NUM_TRAINING_EXAMPLES']*.1))
+#    valid_buffer = ReplayMemory(load_file=valid_data_path)
+#    # if train buffer is too large - make random subset
+#    # 27588 places in 1e6 buffer where reward is nonzero
+#
+#    info['num_actions'] = train_buffer.num_actions()
+#    info['size_training_set'] = train_buffer.num_examples()
+#    info['hsize'] = train_buffer.frame_height
+#    info['wsize'] = train_buffer.frame_width
+#    info['num_rewards'] = train_buffer.num_rewards()
+#    info['HISTORY_SIZE'] = 4
+#
+#
+#    rewards_weight = 1-np.array(train_buffer.percentages_rewards())
+#    actions_weight = 1-np.array(train_buffer.percentages_actions())
+#    actions_weight = torch.FloatTensor(actions_weight).to(DEVICE)
+#    rewards_weight = torch.FloatTensor(rewards_weight).to(DEVICE)
+#    info['actions_weight'] = actions_weight
+#    info['rewards_weight'] = rewards_weight
+#
+#
+#    # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
+#    # decorelated channel
+#    info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['HISTORY_SIZE']
+#    nmix = int(info['num_output_mixtures']/info['HISTORY_SIZE'])
+#    info['nmix'] = nmix
+#    #encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
+#    #                        encoder_output_size=args.encoder_output_size,
+#    #                        num_output_channels=nmix,
+#    #                         ).to(DEVICE)
+#    encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
+#                            encoder_output_size=args.encoder_output_size,
+#                            num_output_channels=1
+#                             ).to(DEVICE)
+#    prior_model = PriorNetwork(size_training_set=info['NUM_TRAINING_EXAMPLES'],
+#                               code_length=info['CODE_LENGTH'],
+#                               n_mixtures=info['NUM_MIXTURES'],
+#                               k=info['NUM_K'],
+#                               require_unique_codes=info['REQUIRE_UNIQUE_CODES'],
+#                               ).to(DEVICE)
+#    pcnn_decoder = GatedPixelCNN(input_dim=1,
+#                                 dim=info['NUM_PCNN_FILTERS'],
+#                                 n_layers=info['NUM_PCNN_LAYERS'],
+#                                 n_classes=info['num_actions'],
+#                                 float_condition_size=info['CODE_LENGTH'],
+#                                 last_layer_bias=0.5,
+#                                 hsize=info['hsize'], wsize=info['wsize']).to(DEVICE)
+#
+#    parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+#    parameters = list(encoder_model.parameters()) + list(prior_model.parameters())
+#    opt = optim.Adam(parameters, lr=info['MODEL_LEARNING_RATE'])
+#
+#    if args.model_loadpath != '':
+#        print("loading weights from:%s" %args.model_loadpath)
+#        encoder_model.load_state_dict(model_dict['encoder_model_state_dict'])
+#        prior_model.load_state_dict(model_dict['prior_model_state_dict'])
+#        pcnn_decoder.load_state_dict(model_dict['pcnn_decoder_state_dict'])
+#        #encoder_model.embedding = model_dict['model_embedding']
+#        opt.load_state_dict(model_dict['opt_state_dict'])
+#
+#    model_dict = {'encoder_model':encoder_model,
+#                  'prior_model':prior_model,
+#                  'pcnn_decoder':pcnn_decoder,
+#                  'opt':opt}
+#    data_buffers = {'train':train_buffer, 'valid':valid_buffer}
+#    if args.sample:
+#        sample_acn(info, model_dict, data_buffers, num_samples=args.num_samples, teacher_force=args.teacher_force)
+#    else:
+#        train_acn(info, model_dict, data_buffers)
+#
 #if __name__ == '__main__':
 #    from argparse import ArgumentParser
 
@@ -930,7 +919,9 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('-t', '--tsne', action='store_true', default=False)
+    parser.add_argument('-nt', '--num_tsne', default=300, type=int)
     parser.add_argument('-l', '--model_loadpath', default='')
+    parser.add_argument('-p', '--perplexity', default=3)
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=200000, type=int)
     parser.add_argument('-le', '--log_every', default=200000, type=int)
@@ -999,18 +990,23 @@ if __name__ == '__main__':
 
 
     if args.model_loadpath !='':
-        _dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
+        tmlp =  args.model_loadpath+'.tmp'
+        os.system('cp %s %s'%(args.model_loadpath, tmlp))
+        _dict = torch.load(tmlp, map_location=lambda storage, loc:storage)
         vae_model.load_state_dict(_dict['vae_state_dict'])
         prior_model.load_state_dict(_dict['prior_state_dict'])
+        pcnn_decoder.load_state_dict(_dict['pcnn_state_dict'])
+
         info = _dict['info']
         train_cnt = info['train_cnts'][-1]
+
     vae_model.to(DEVICE)
     prior_model.to(DEVICE)
     # TODO write model loader and args.sample
     if args.sample:
         test_acn(train_cnt, True)
     if args.tsne:
-        tsne_plot(vae_model, train_cnt, valid_buffer, num_clusters=30)
+        call_tsne_plot()
     else:
         #parameters = list(vae_model.parameters()) + list(prior_model.parameters())
         parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
