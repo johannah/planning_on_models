@@ -162,7 +162,7 @@ class FeatureExtractor():
     def run_module(self, model, x, outputs, register=[]):
         for name, module in model._modules.items():
             x = module(x)
-            print(name, x.shape)
+            #print(name, x.shape)
             #if name in self.target_layers:
             if name in register:
                 x.register_hook(self.save_gradient)
@@ -246,8 +246,9 @@ class GradCam:
                 cam+=w*target[i,:,:]
             cam = np.maximum(cam, 0)
             cam = cv2.resize(cam, (dsh, dsw))
-            cam -=np.min(cam)
-            cam /= np.max(cam)
+            #print(cam.min(), cam.max())
+            #cam -=np.min(cam)
+            #cam /= np.max(cam)
             cams[idx] = cam
         return cams
 
@@ -427,6 +428,58 @@ def test_act(train_cnt, do_plot):
     print('finished test', time.time()-st)
     return test_loss
 
+def load_avg_grad_cam(act_model_loadpath, data_buffer, data_buffer_loadpath, DEVICE='cpu'):
+    '''
+    '''
+    from skvideo.io import vwrite
+    outpath = data_buffer_loadpath.replace('.npz', '') + '_' + os.path.split(act_model_loadpath)[1].split('.')[0]
+    npy_outpath = outpath+'.npz'
+    print("looking for ", npy_outpath)
+    if os.path.exists(npy_outpath):
+        print("loading", npy_outpath)
+        return np.load(npy_outpath)['action_grad']
+    else:
+        num_actions = data_buffer.num_actions()
+        act_model = ConvAct(input_size=4, num_output_options=num_actions).to(DEVICE)
+        _dict = torch.load(act_model_loadpath, map_location=lambda storage, loc:storage)
+        act_model.load_state_dict(_dict['act_model_state_dict'])
+
+        bs = 1
+        grad_cam = GradCam(model=act_model, target_layer_names=['4'], grad_on_forward_index=None)
+        #for phase, data_buffer in {'train':train_buffer, 'valid':valid_buffer}.items():
+        data_buffer.reset_unique()
+        all_masks = np.zeros((data_buffer.unique_indexes.shape[0],
+                             data_buffer.frame_height, data_buffer.frame_width),
+                             np.float32)
+
+        while data_buffer.unique_available:
+            batch = data_buffer.get_unique_minibatch(bs)
+            batch_idx = batch[-1]
+            states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
+            masks = grad_cam(next_states)
+            all_masks[batch_idx] = masks
+
+        #outpath = args.model_loadpath.replace(end, phase+'%s_gradcam.mp4'%phase)
+        #npz_avgrm_outpath = args.model_loadpath.replace(end, '%s_avg_rm_gradcam'%phase)
+        #avgrm_outpath = args.model_loadpath.replace(end, '%s_avg_rm_gradcam.mp4'%phase)
+
+        pmean = np.mean(all_masks, axis=0)
+        print('mean', pmean.shape)
+        all_masks = all_masks-pmean
+        all_masks = (all_masks-all_masks.min())/(all_masks.max()-all_masks.min())
+        # otherwise use train mean for valid mask
+        np.savez_compressed(outpath, action_grad=all_masks)
+
+        uall_masks=all_masks*255.0
+        uall_masks+=20
+        uall_masks[uall_masks>255]=255
+        uall_masks=uall_masks.astype(np.uint8)
+
+        #vwrite(outpath, all_masks)
+        vwrite(outpath+'.mp4', uall_masks)
+        print('writing film %s'%(outpath+'.mp4'))
+        return all_masks
+
 def run_grad_cam():
     bs = 12
     grad_cam = GradCam(model=act_model, target_layer_names=['4'], grad_on_forward_index=None)
@@ -466,7 +519,9 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('-gc', '--grad_cam', action='store_true', default=True)
+    parser.add_argument('-agc', '--avg_grad_cam', action='store_true', default=True)
     parser.add_argument('-l', '--model_loadpath', default='')
+    parser.add_argument('-md', '--model_savedir', default='../../model_savedir/')
     parser.add_argument('-se', '--save_every', default=100000*50, type=int)
     parser.add_argument('-pe', '--plot_every', default=100000*50, type=int)
     parser.add_argument('-le', '--log_every', default=100000*50, type=int)
@@ -475,32 +530,26 @@ if __name__ == '__main__':
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=20, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
-    parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=100000*1000, type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-5)
+    parser.add_argument('-ne', '--max_training_examples', default=200000)
 
-    parser.add_argument('--train_buffer', default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
-    parser.add_argument('--valid_buffer', default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
+    parser.add_argument('--train_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
+    parser.add_argument('--valid_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
     args = parser.parse_args()
-
-    nr_logistic_mix = 10
-    num_output_channels = 1
-    nmix = (2*nr_logistic_mix+nr_logistic_mix)*num_output_channels
+    nexamples = args.max_training_examples
 
     if args.cuda:
         DEVICE = 'cuda'
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn_breakout_action')
-
-    train_data_path = args.train_buffer
-    valid_data_path = args.valid_buffer
-    nexamples = 200000
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_action')
+    train_data_path = os.path.join(args.model_savedir, args.train_buffer)
+    valid_data_path = os.path.join(args.model_savedir, args.valid_buffer)
     train_buffer = make_subset_buffer(train_data_path, max_examples=nexamples)
     valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(nexamples*.15))
     num_actions = train_buffer.num_actions()
-
     info = {'train_cnts':[],
             'train_losses':[],
             'test_cnts':[],
@@ -512,7 +561,6 @@ if __name__ == '__main__':
              }
 
     size_training_set = train_buffer.count
-
     train_cnt = 0
     # given four frames, predict the action that was taken to get from [1,2,3,4]
     # frame 3 to 4
@@ -526,6 +574,9 @@ if __name__ == '__main__':
         test_act(train_cnt, True)
     if args.grad_cam:
         run_grad_cam()
+    if args.avg_grad_cam:
+        avg_grad_cam(args.model_loadpath, valid_buffer, small_valid_path)
+        avg_grad_cam()
     else:
         parameters = list(act_model.parameters())
         opt = optim.Adam(parameters, lr=args.learning_rate)
