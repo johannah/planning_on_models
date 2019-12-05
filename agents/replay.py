@@ -22,7 +22,7 @@ class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
     def __init__(self, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
-                 bernoulli_probability=1.0, load_file='', sample_only=False, seed=393):
+                 bernoulli_probability=1.0, load_file='', sample_only=False, seed=393, use_pred_frames=False):
                 # bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', sample_only=False, seed=393):
         """
         Args:
@@ -53,10 +53,13 @@ class ReplayMemory:
             # Pre-allocate memory
             self.actions = np.empty(self.size, dtype=np.int32)
             self.rewards = np.empty(self.size, dtype=np.float32)
+            # store actual frames in true frames
             self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
-            #self.latent_frame_height = latent_frame_height
-            #self.latent_frame_width = latent_frame_width
-            #self.latent_frames = np.empty((self.size, self.latent_frame_height, self.latent_frame_width), dtype=np.int16)
+            self.use_pred_frames = use_pred_frames
+            if self.use_pred_frames:
+                self.pred_frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
+            else:
+                self.pred_frames = self.frames
             self.terminal_flags = np.empty(self.size, dtype=np.bool)
             self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
 
@@ -68,6 +71,11 @@ class ReplayMemory:
                                 self.frame_height, self.frame_width), dtype=np.uint8)
         self.new_states = np.empty((batch_size, self.agent_history_length,
                                     self.frame_height, self.frame_width), dtype=np.uint8)
+        self.pred_states = np.empty((batch_size, self.agent_history_length,
+                                self.frame_height, self.frame_width), dtype=np.uint8)
+        self.pred_new_states = np.empty((batch_size, self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
+
         self.indices = np.empty(batch_size, dtype=np.int32)
         self.random_state = np.random.RandomState(seed)
 
@@ -90,7 +98,8 @@ class ReplayMemory:
         st = time.time()
         print("starting save of buffer to %s"%filepath, st)
         np.savez(filepath,
-                 frames=self.frames, actions=self.actions, rewards=self.rewards,
+                 frames=self.frames, pred_frames=self.pred_frames,
+                 actions=self.actions, rewards=self.rewards,
                  terminal_flags=self.terminal_flags, masks=self.masks,
                  count=self.count, current=self.current, sizze=self.size,
                  agent_history_length=self.agent_history_length,
@@ -104,6 +113,11 @@ class ReplayMemory:
         print("starting load of buffer from %s"%filepath, st)
         npfile = np.load(filepath)
         self.frames = npfile['frames']
+        if 'pred_frames' in npfile.keys():
+            self.pred_frames = npfile['pred_frames']
+        else:
+            self.pred_frames = self.frames
+
         self.actions = npfile['actions']
         self.rewards = npfile['rewards']
         self.terminal_flags = npfile['terminal_flags']
@@ -130,7 +144,7 @@ class ReplayMemory:
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 
-    def add_experience(self, action, frame, reward, terminal):#, latent_frame=''):
+    def add_experience(self, action, frame, reward, terminal, pred_frame=None):#, latent_frame=''):
         """
         Args:
             action: An integer between 0 and env.action_space.n - 1
@@ -143,8 +157,8 @@ class ReplayMemory:
             raise ValueError('Dimension of frame is wrong!')
         self.actions[self.current] = action
         self.frames[self.current, ...] = frame
-        #if type(latent_frame) is not str:
-        #    self.latent_frames[self.current, ...] = latent_frame
+        if self.use_pred_frames:
+            self.pred_frames[self.current, ...] = pred_frame
         self.rewards[self.current] = reward
         self.terminal_flags[self.current] = terminal
         mask = self.random_state.binomial(1, self.bernoulli_probability, self.num_heads)
@@ -157,7 +171,10 @@ class ReplayMemory:
             raise ValueError("The replay memory is empty!")
         if index < self.agent_history_length - 1:
             raise ValueError("Index must be min 3")
-        return self.frames[index-self.agent_history_length+1:index+1, ...]
+        frames = self.frames[index-self.agent_history_length+1:index+1, ...]
+        # if not use_pred_states, this will be a copy of frames
+        pframes =  self.pred_frames[index-self.agent_history_length+1:index+1, ...]
+        return frames, pframes
 
     def _get_valid_indices(self, batch_size):
         if batch_size != self.indices.shape[0]:
@@ -186,6 +203,11 @@ class ReplayMemory:
                                     self.frame_height, self.frame_width), dtype=np.uint8)
             self.new_states = np.empty((batch_size, self.agent_history_length,
                                         self.frame_height, self.frame_width), dtype=np.uint8)
+            self.pred_states = np.empty((batch_size, self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
+            self.pred_new_states = np.empty((batch_size, self.agent_history_length,
+                                        self.frame_height, self.frame_width), dtype=np.uint8)
+
 
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
@@ -196,9 +218,9 @@ class ReplayMemory:
             # This seems correct to me
             # when adding experience - every input frame is the "next frame",
             # the action that got us to this frame, and the reward received
-            self.states[i] = self._get_state(idx - 1)
-            self.new_states[i] = self._get_state(idx)
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]#, self.latent_states, self.latent_new_states
+            self.states[i], self.pred_states[i] = self._get_state(idx - 1)
+            self.new_states[i], self.pred_new_states[i] = self._get_state(idx)
+        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.pred_states, self.pred_new_states
 
     def reset_unique(self):
         self.unique_indexes = np.arange(self.count)
@@ -246,12 +268,18 @@ class ReplayMemory:
                                     self.frame_height, self.frame_width), dtype=np.uint8)
             self.new_states = np.empty((batch_size, self.agent_history_length,
                                         self.frame_height, self.frame_width), dtype=np.uint8)
+            self.pred_states = np.empty((batch_size, self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
+            self.pred_new_states = np.empty((batch_size, self.agent_history_length,
+                                        self.frame_height, self.frame_width), dtype=np.uint8)
+
+
         for i, idx in enumerate(unique_indices):
             # This seems correct to me
             # when adding experience - every input frame is the "next frame",
             # the action that got us to this frame, and the reward received
-            self.states[i] = self._get_state(idx - 1)
-            self.new_states[i] = self._get_state(idx)
+            self.states[i], self.pred_states[i] = self._get_state(idx - 1)
+            self.new_states[i], self.pred_new_states[i] = self._get_state(idx)
         return self.states, self.actions[unique_indices], self.rewards[unique_indices], self.new_states, self.terminal_flags[unique_indices], self.masks[unique_indices], unique_indices
 
 def test_replay_values():

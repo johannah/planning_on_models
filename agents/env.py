@@ -12,10 +12,10 @@ from IPython import embed
 #def preprocess_frame(observ, output_size):
 #    return resize(rgb2gray(observ),(output_size, output_size)).astype(np.float32, copy=False)
 
-def cv_preprocess_frame(observ, output_size):
+def cv_preprocess_frame(observ, obs_height, obs_width):
     gray = cv2.cvtColor(observ, cv2.COLOR_RGB2GRAY)
     #output = cv2.resize(gray[34:,-16], (output_size, output_size))
-    output_linear = cv2.resize(gray, (output_size, output_size), interpolation=cv2.INTER_LINEAR)
+    output_linear = cv2.resize(gray, (obs_height, obs_width), interpolation=cv2.INTER_LINEAR)
     # TODO - TODO - need to change from NEAREST TO LINEAR - balls in Breakout
     # vanish at times with NEAREST but only become lighter shades with LINEAR
     #output_nearest = cv2.resize(gray, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
@@ -27,12 +27,14 @@ class Environment(object):
                  rom_file,
                  frame_skip=4,
                  num_frames=4,
-                 frame_size=84,
                  no_op_start=30,
                  seed=393,
                  dead_as_end=True,
                  max_episode_steps=18000,
-                 autofire=False):
+                 autofire=False,
+                 obs_height=84,
+                 obs_width=84,
+                 ):
         self.max_episode_steps = max_episode_steps
         self.random_state = np.random.RandomState(seed+15)
         print('loading game from:%s'%rom_file)
@@ -46,7 +48,8 @@ class Environment(object):
 
         self.frame_skip = frame_skip
         self.num_frames = num_frames
-        self.frame_size = frame_size
+        self.obs_width = obs_width
+        self.obs_height = obs_height
         self.no_op_start = no_op_start
         self.dead_as_end = dead_as_end
 
@@ -75,8 +78,7 @@ class Environment(object):
         # global glb_counter
         screen = self.ale.getScreenRGB()
         max_screen = np.maximum(self.prev_screen, screen)
-        frame = cv_preprocess_frame(max_screen, self.frame_size)
-        #frame = preprocess_frame(max_screen, self.frame_size)
+        frame = cv_preprocess_frame(max_screen, self.obs_width, self.obs_height)
         return frame
 
     def reset(self):
@@ -86,7 +88,7 @@ class Environment(object):
         self.gray_plot_frames = []
         for _ in range(self.num_frames - 1):
             self.frame_queue.append(
-                np.zeros((self.frame_size, self.frame_size), dtype=np.uint8))
+                np.zeros((self.obs_height, self.obs_width), dtype=np.uint8))
 
         # steps are in steps the agent sees
         self.ale.reset_game()

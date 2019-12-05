@@ -13,13 +13,15 @@ from env import Environment
 from replay import ReplayMemory
 
 from IPython import embed
+import torch
+
 """
 TODO - create error checking for all of the variables in config
 copy code to working directory
 plot entire episode observed frames - could do this in a sep script
 """
 
-def collect_random_experience(seed, env, memory_buffer, num_random_steps):
+def collect_random_experience(seed, env, memory_buffer, num_random_steps, pred_next_state_function=None):
     # note that since we are making the env different here
     # we should always use a different env for the random portion vs the
     # learning agent
@@ -45,13 +47,28 @@ def collect_random_experience(seed, env, memory_buffer, num_random_steps):
             next_state, reward, life_lost, terminal = env.step(action)
             # TODO - dead as end? should be from ini file or is it handled
             # in env?
-            # Store transition in the replay memory
-            memory_buffer.add_experience(action=action,
-                                         frame=next_state[-1],
-                                         #reward=1+np.sign(reward), # add one so that rewards are <=0
-                                         reward=np.sign(reward), # add one so that rewards are <=0
-                                         terminal=life_lost,
-                                         )
+            if pred_next_state_function == None:
+                # Store transition in the replay memory
+                memory_buffer.add_experience(action=action,
+                                             frame=next_state[-1],
+                                             #reward=1+np.sign(reward), # add one so that rewards are <=0
+                                             reward=np.sign(reward), # add one so that rewards are <=0
+                                             terminal=life_lost,
+                                             )
+                state = next_state
+            else:
+                batch = (state[None], np.array([action]), np.array([reward]), next_state[None], np.array([life_lost]), 1)
+                pred_next_state = pred_next_state_function(batch)[0,0].cpu().numpy()
+                pred_next_state = (pred_next_state*255).astype(np.uint8)
+                memory_buffer.add_experience(action=action,
+                                             frame=next_state[-1],
+                                             pred_frame=pred_next_state,
+                                             #reward=1+np.sign(reward), # add one so that rewards are <=0
+                                             reward=np.sign(reward), # add one so that rewards are <=0
+                                             terminal=life_lost,
+                                             )
+                state = np.vstack((state[:-1], next_state[-1:]))
+
             step_number += 1
             epoch_frame += 1
             episode_reward_sum += reward
@@ -64,12 +81,15 @@ class ConfigHandler():
     """
     class to wrap configs and setup the housekeeping materials needed to run an experiment
     """
-    def __init__(self, config_file, device, restart_last_run=False, restart_run=''):
+    def __init__(self, config_file, device,
+                       restart_last_run=False, restart_run='',
+                       pred_next_state_function=None):
 
         self.device = device
         self.output_base = '../../'
         self.model_savedir = 'model_savedir'
         self.random_buffer_dir = os.path.join(self.output_base, self.model_savedir, 'random_buffers')
+        self.pred_next_state_function = pred_next_state_function
         self.start_time = time.time()
 
         self._load_config(config_file)
@@ -170,6 +190,8 @@ class ConfigHandler():
                    num_frames=self.cfg['ENV']['history_size'],
                    no_op_start=self.cfg['ENV']['max_no_op_frames'],
                    seed=seed,
+                   obs_height=self.cfg['ENV']['obs_height'],
+                   obs_width=self.cfg['ENV']['obs_width'],
                    dead_as_end=self.cfg['ENV']['dead_as_end'],
                    max_episode_steps=self.cfg['ENV']['max_episode_steps'])
 
@@ -189,6 +211,7 @@ class ConfigHandler():
                                num_heads=self.cfg['DQN']['n_ensemble'],
                                bernoulli_probability=self.cfg['DQN']['bernoulli_probability'],
                                seed=seed,
+                               use_pred_frames=self.cfg['DQN']['use_pred_frames']
                                        )
 
     def load_memory_buffer(self, phase, load_previously_saved=True):
@@ -224,10 +247,11 @@ class ConfigHandler():
             print('did not find saved replay buffers')
             print('cannot find a suitable random replay buffers... creating one - this will take some time')
             # did not find any checkpoints - load random buffer
-            random_memory_buffer = self.create_empty_memory_buffer(seed, buffer_size)
+            random_memory_buffer = self.create_empty_memory_buffer(seed,
+                                                                   buffer_size)
 
             env = self.create_environment(seed)
-            random_memory_buffer = collect_random_experience(seed, env, random_memory_buffer, num_random_steps)
+            random_memory_buffer = collect_random_experience(seed, env, random_memory_buffer, num_random_steps, pred_next_state_function=self.pred_next_state_function)
             # save the random buffer
             random_memory_buffer.save_buffer(random_buffer_path)
             return random_memory_buffer
@@ -434,6 +458,25 @@ class StateManager():
                 self.plot_current_episode(plot_basepath)
             if not self.episode_number % self.ch.cfg['PLOT']['plot_every_%s_episodes'%self.phase]:
                 self.plot_progress(plot_basepath)
+
+
+    def step_pred_next_state(self, action, pred_next_state_function):
+        next_state, reward, self.life_lost, self.terminal = self.env.step(action)
+        pred_next_state = pred_next_state_function(self.state, action, reward, next_state)
+        embed()
+        self.memory_buffer.add_experience(action=action,
+                                            #frame=next_state[-1],
+                                            frame=next_state[-1],
+                                            pred_frame=pred_next_state,
+                                            #reward=1+np.sign(reward),
+                                            reward=np.sign(reward),
+                                            terminal=self.life_lost,
+                                            )
+        self.episode_actions.append(action)
+        self.episode_rewards.append(reward)
+        self.step_number+=1
+        self.state = pred_next_state
+        self.last_state = self.state
 
     def step(self, action):
         next_state, reward, self.life_lost, self.terminal = self.env.step(action)
