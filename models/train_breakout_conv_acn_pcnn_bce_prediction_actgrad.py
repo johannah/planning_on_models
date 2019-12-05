@@ -24,16 +24,12 @@ import cv2
 from torch import nn, optim
 import torch
 from torch.nn import functional as F
-from torchvision import datasets, transforms
-from torch.utils.data import Dataset, DataLoader
 from torchvision.utils import save_image
-import config
 from lstm_utils import plot_losses
 torch.manual_seed(394)
 torch.set_num_threads(4)
 from imageio import imsave
-from ae_utils import save_checkpoint, handle_plot_ckpt, reshape_input
-from ae_utils import discretized_mix_logistic_loss, sample_from_discretized_mix_logistic
+from ae_utils import save_checkpoint, handle_plot_ckpt
 from train_breakout_conv_action_model import load_avg_grad_cam
 from make_tsne_plot import tsne_plot
 from pixel_cnn import GatedPixelCNN
@@ -119,15 +115,17 @@ def prepare_state(st, DEVICE, NORM_BY):
 #    assert output.max() < 1.01
 #    assert output.min() > -1.01
 #    # convert to 0 and 1
-    output = (torch.FloatTensor(st)/255.0).to(DEVICE)
+    output = (torch.FloatTensor(st)/NORM_BY).to(DEVICE)
     output[output>0] = 1.0
     return output
 
 def make_state(batch, DEVICE, NORM_BY):
-    # states are [ts0, ts1, ts2, ts3]
-    # actions are   [a0,  a1,  a2,  a3]
-    # next_states     [ts1, ts2, ts3, ts4]
-    # rewards are    [r0,  r1,  r2,  a3]
+    '''  batch is composed of
+     states are [ts0, ts1, ts2, ts3] uint8
+     actions are                  [a3] int
+     next_states     [ts1, ts2, ts3, ts4] uint8
+     rewards are                  [r3] int
+    '''
     states, actions, rewards, next_states, terminal_flags, masks = batch
     states = prepare_state(states, DEVICE, NORM_BY)
     # only predict the unseen (most recent) state
@@ -143,7 +141,6 @@ def make_state(batch, DEVICE, NORM_BY):
         ac[i]*=actions[i]
         rc[i]*=rewards[i]
     states = torch.cat((states,ac,rc), dim=1)
-    bs, _, h, w = states.shape
     return states, actions, rewards, next_states
 
 def save_model(info, model_dict):
@@ -346,7 +343,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
+        filename = vae_base_filepath + "_%010dex.pt"%train_cnt
         state = {
                  'vae_state_dict':vae_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
@@ -388,7 +385,8 @@ def train_acn(train_cnt):
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
         kl = kl_loss_function(u_q, s_q, u_p, s_p)
-        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
+        drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=True, inplace=False)
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
         rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
         rec_loss = (rec_loss[:,0]*train_grad[batch_idx]).mean()
         # input should be scaled bt -1 and 1 for dml
@@ -447,7 +445,8 @@ def test_acn(train_cnt, do_plot):
                 z, u_q, s_q = vae_model(states)
                 u_p, s_p = prior_model(u_q)
                 kl = kl_loss_function(u_q, s_q, u_p, s_p)
-                yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
+                drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=True, inplace=False)
+                yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
                 rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
                 rec_loss = (rec_loss[:,0]*valid_grad[batch_idx]).mean()
                 #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
@@ -474,361 +473,202 @@ def test_acn(train_cnt, do_plot):
     print('finished test', time.time()-st)
     return test_loss
 
-def save_checkpoint(state, filename='model.pkl'):
-    print("starting save of model %s" %filename)
-    torch.save(state, filename)
-    print("finished save of model %s" %filename)
+def sample():
+    from skvideo.io import vwrite
+    vae_model.eval()
+    pcnn_decoder.eval()
+    print('starting sample', train_cnt)
+    basedir = args.model_loadpath.replace('.pt', '')
+    if not os.path.exists(basedir):
+        os.makedirs(basedir)
+    with torch.no_grad():
+        valid_buffer.reset_unique()
+        for i in range(10):
+            if valid_buffer.unique_available:
+                batch = valid_buffer.get_unique_minibatch(args.batch_size)
+                np_next_states = batch[3]
+                batch_idx = batch[-1]
+                states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
+                z, u_q, s_q = vae_model(states)
+                # yhat_batch is bt 0-1
+                canvas = 0.0*next_state
+                np_canvas = np.zeros_like(np_next_states)
+                #for bi in range(canvas.shape[0]):
+                # sample one at a time due to memory constraints
+                st = time.time()
+                for bi, true_idx in enumerate(batch_idx):
+                    building_canvas = []
+                    print('sampling image', bi)
+                    for i in range(canvas.shape[1]):
+                        for j in range(canvas.shape[2]):
+                            for k in range(canvas.shape[3]):
+                                output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1], float_condition=z[bi:bi+1]))
+                                canvas[bi,i,j,k] = torch.round(output[0,i,j,k].detach())
+                                building_canvas.append((canvas[bi,0].detach().numpy()*255).astype(np.uint8))
+                    building_canvas = np.array(building_canvas)
+                    iname = os.path.join(basedir, '%010d.png'%(true_idx))
+                    print('writing building movie')
+                    mname = os.path.join(basedir, '%010d.mp4'%(true_idx))
+                    vwrite(mname, building_canvas)
 
-#def train_acn(info, model_dict, data_buffers, phase='train'):
-#    encoder_model = model_dict['encoder_model']
-#    prior_model = model_dict['prior_model']
-#    pcnn_decoder = model_dict['pcnn_decoder']
-#    opt = model_dict['opt']
+                    #np_bi = (canvas[bi,0].detach().numpy()*255).astype(np.uint8)
+                    np_bi = canvas[bi,0].detach().numpy()
+                    et = time.time()
+                    print(et-st)
+                    f,ax = plt.subplots(1,2)
+                    ax[0].imshow(np_next_states[bi,0])
+                    ax[0].set_title('true')
+                    ax[1].imshow(np_bi)
+                    ax[1].set_title('est')
+                    plt.savefig(iname)
+                    print('saving', iname)
+                    embed()
+    #    print("starting img")
+
+#def save_checkpoint(state, filename='model.pt'):
+#    print("starting save of model %s" %filename)
+#    torch.save(state, filename)
+#    print("finished save of model %s" %filename)
 #
-#    # add one to the rewards so that they are all positive
-#    # use next_states because that is the t-1 action
-#
-#    if len(info['model_train_cnts']):
-#        train_cnt = info['model_train_cnts'][-1]
-#    else: train_cnt = 0
-#
-#    num_batches = data_buffers['train'].count//info['MODEL_BATCH_SIZE']
-#    while train_cnt < 10000000:
-#        if phase == 'valid':
-#            encoder_model.eval()
-#            prior_model.eval()
-#            pcnn_decoder.eval()
-#        else:
-#            encoder_model.train()
-#            prior_model.train()
-#            pcnn_decoder.train()
-#
-#        batch_num = 0
-#        data_buffers[phase].reset_unique()
-#        print('-------------new epoch %s------------------'%phase)
-#        print('num batches', num_batches)
-#        while data_buffers[phase].unique_available:
-#            opt.zero_grad()
-#            batch = data_buffers[phase].get_unique_minibatch(info['MODEL_BATCH_SIZE'])
-#            relative_indices = batch[-1]
-#            states, actions, rewards, next_states = make_state(batch[:-1], info['DEVICE'], info['NORM_BY'])
-#            next_state = next_states[:,-1:]
-#            bs = states.shape[0]
-#            #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
-#            z, u_q = encoder_model(states)
-#
-#            # add the predicted codes to the input
-#            #yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state,
-#            #                                        class_condition=actions,
-#            #                                        float_condition=z))
-#            yhat_batch = encoder_model.decode(z)
-#            prior_model.codes[relative_indices] = u_q.detach().cpu().numpy()
-#
-#            mix, u_ps, s_ps = prior_model(u_q)
-#
-#            # track losses
-#            kl_loss, rec_loss = acn_gmp_loss_function(yhat_batch, next_state, u_q, mix, u_ps, s_ps)
-#            loss = kl_loss + rec_loss
-#            # aatch size because it hasn't been added to train cnt yet
-#
-#
-#            if not phase == 'valid':
-#                loss.backward()
-#                #parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
-#                parameters = list(encoder_model.parameters()) + list(prior_model.parameters())
-#                clip_grad_value_(parameters, 10)
-#                opt.step()
-#                train_cnt += bs
-#
-#            if not batch_num%info['MODEL_LOG_EVERY_BATCHES']:
-#                print(phase, train_cnt, batch_num, kl_loss.item(), rec_loss.item())
-#                info = add_losses(info, train_cnt, phase, kl_loss.item(), rec_loss.item())
-#            batch_num+=1
-#
-#        if (((train_cnt-info['model_last_save'])>=info['MODEL_SAVE_EVERY'])):
-#            info = add_losses(info, train_cnt, phase, kl_loss.item(), rec_loss.item())
-#            if phase == 'train':
-#                # run as valid phase and get back to here
-#                phase = 'valid'
-#            else:
-#                model_dict = {'encoder_model':encoder_model,
-#                              'prior_model':prior_model,
-#                              'pcnn_decoder':pcnn_decoder,
-#                              'opt':opt}
-#                info = save_model(info, model_dict)
-#                phase = 'train'
-#
-#
-#
-#    model_dict = {'encoder_model':encoder_model,
-#                 'prior_model':prior_model,
-#                 'pcnn_decoder':pcnn_decoder,
-#                 'opt':opt}
-#
-#    info = save_model(info, model_dict)
-#
-#def sample_acn(info, model_dict, data_buffers, num_samples=4, teacher_force=False):
-#    print("sampling model")
-#
-#    encoder_model = model_dict['encoder_model']
-#    prior_model = model_dict['prior_model']
-#    pcnn_decoder = model_dict['pcnn_decoder']
-#
-#    for phase in ['train', 'valid']:
-#        if len(info['model_train_cnts']):
-#            train_cnt = info['model_train_cnts'][-1]
-#        else:
-#            train_cnt = 0
-#
-#        data_buffers[phase].reset_unique()
-#        encoder_model.eval()
-#        prior_model.eval()
-#        #pcnn_decoder.eval()
-#        print('-------------sample epoch %s------------------'%phase)
-#
-#        batch = data_buffers[phase].get_unique_minibatch(num_samples)
-#        relative_indices = batch[-1]
-#        states, actions, rewards, next_states = make_state(batch[:-1], info['DEVICE'], info['NORM_BY'])
-#        next_state = next_states[:,-1:]
-#        z, u_q = encoder_model(states)
-#        basedir = info['loaded_from'].replace('.pt', '_%s'%phase)
-#        basepath = os.path.join(basedir, '_')
-#        if not os.path.exists(basedir):
-#            os.makedirs(basedir)
-#
-#        npstates = states.cpu().numpy()
-#        npnextstate = deepcopy(next_state.cpu().numpy())
-#        npactions = actions.cpu().numpy()
-#
-#        if not args.use_pcnn:
-#            npnextstate_pred = encoder_model.decode(z).detach().cpu().numpy()
-#            f,ax = plt.subplots(num_samples, 6, sharey=True, sharex=True, figsize=(6,num_samples))
-#            for bi in range(npstates.shape[0]):
-#                for ns in range(4):
-#                    ax[bi,ns].imshow(npstates[bi,ns], vmin=-1, vmax=1)
-#                    if bi == 0:
-#                        ax[bi,ns].set_title('%s'%(ns))
-#                ax[bi,4].imshow(npnextstate[bi,0])
-#                # this is bt 0 and a tiny num - prob need to stretch
-#                ax[bi,5].imshow(npnextstate_pred[bi,0])
-#                if bi == 0:
-#                    ax[bi,4].set_title('T%s'%(5))
-#                    ax[bi,5].set_title('P%s'%(5))
-#            fname = basepath+'batch.png'
-#            print('plotting %s'%fname)
-#            plt.savefig(fname)
-#
-#
-#        else:
-#            if teacher_force:
-#                print("teacher forcing")
-#                canvas = next_state
-#                basepath+='pcnn_tf'
-#            else:
-#                canvas = 0.0*next_state
-#                basepath+='pcnn'
-#
-#            npcanvas = np.zeros_like(canvas.detach().cpu().numpy())
-#            for bi in range(npstates.shape[0]): #states, actions, rewards, next_states, terminals, is_new_epoch, relative_indexes = train_data_loader.get_unique_minibatch()
-#                print('sampling %s'%bi)
-#                for i in range(canvas.shape[1]):
-#                    for j in range(canvas.shape[2]):
-#                        for k in range(canvas.shape[3]):
-#                            output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1].detach(),
-#                                                                float_condition=z[bi:bi+1].detach(),
-#                                                                class_condition=actions[bi:bi+1].detach()))
-#                            #  use dummy output
-#                            #npcanvas[bi,i,j,k] = npnextstate[bi,i,j,k]
-#                            npcanvas[bi,i,j,k] = output[0,0,j,k].detach().numpy()
-#                            if teacher_force:
-#                                canvas[bi,i,j,k] = output[0,0,j,k]
-#                # npcanvas is 0 to 1, make it -1 to 1
-#                norm_pred = ((npcanvas[bi,0]/npcanvas[bi,0].max())*2)-1
-#                #norm_pred = npcanvas[bi,0]
-#                f,ax = plt.subplots(1,6, sharey=True, figsize=(8,2))
-#                for ns in range(4):
-#                    ax[ns].imshow(npstates[bi,ns], vmin=-1, vmax=1)
-#                    ax[ns].set_title('%s'%(ns))
-#                ax[4].imshow(npnextstate[bi,0], vmin=-1, vmax=1)
-#                ax[4].set_title('T%s'%(5))
-#                # this is bt 0 and a tiny num - prob need to stretch
-#                ax[5].imshow(norm_pred, vmin=-1, vmax=1)
-#                ax[5].set_title('P%s'%(5))
-#                print(norm_pred.min(), norm_pred.max())
-#                print(npnextstate.min(), npnextstate.max())
-#                fname = basepath+'%02d.png'%bi
-#                print('plotting %s'%fname)
-#                plt.savefig(fname)
-#
-#
-#
-       # add the predicted codes to the input
-#        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state,
-#                                                class_condition=actions,
-#                                                float_condition=z))
-#        prior_model.codes[relative_indices] = u_q.detach().cpu().numpy()
-#
-#
-#
-#        mix, u_ps, s_ps = prior_model(u_q)
-#        canvas = 0.0*next_state
+
+def init_train(model_load_path, train_data_path, valid_data_path):
+    """ use args to setup inplace training """
+
+    #init_train(
+    #    model_load_path=args.model_loadpath
+    #    train_data_path=args.train_buffer
+    #valid_data_path=args.valid_buffer
+
+    data_dir = os.path.split(train_data_path)[0]
+
+    # we are starting from scratch training this model
+    if model_loadpath == "":
+        run_num = 0
+        model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+        while os.path.exists(model_base_filedir):
+            run_num +=1
+            model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
+        os.makedirs(model_base_filedir)
+        model_base_filepath = os.path.join(model_base_filedir, args.savename)
+        print("MODEL BASE FILEPATH", model_base_filepath)
+
+        info = {'model_train_cnts':[],
+                'model_train_losses':{},
+                'model_valid_cnts':[],
+                'model_valid_losses':{},
+                'model_save_times':[],
+                'model_last_save':0,
+                'model_last_plot':0,
+                'NORM_BY':255.0,
+                'MODEL_BASE_FILEDIR':model_base_filedir,
+                'model_base_filepath':model_base_filepath,
+                'model_train_data_file':train_data_path,
+                'model_valid_data_file':valid_data_path,
+                'NUM_TRAINING_EXAMPLES':args.num_training_examples,
+                'NUM_K':args.num_k,
+                'NR_LOGISTIC_MIX':args.nr_logistic_mix,
+                'NUM_PCNN_FILTERS':args.num_pcnn_filters,
+                'NUM_PCNN_LAYERS':args.num_pcnn_layers,
+                'ALPHA_REC':args.alpha_rec,
+                'ALPHA_ACT':args.alpha_act,
+                'ALPHA_REW':args.alpha_rew,
+                'MODEL_BATCH_SIZE':args.batch_size,
+                'NUMBER_CONDITION':args.num_condition,
+                'CODE_LENGTH':args.code_length,
+                'NUM_MIXTURES':args.num_mixtures,
+                'REQUIRE_UNIQUE_CODES':args.require_unique_codes,
+                 }
+
+        ## size of latents flattened - dependent on architecture
+        #info['float_condition_size'] = 100*args.num_z
+        ## 3x logistic needed for loss
+        ## TODO - change loss
+    else:
+        print('loading model from: %s' %args.model_loadpath)
+        model_dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
+        info =  model_dict['model_info']
+        model_base_filedir = os.path.split(args.model_loadpath)[0]
+        model_base_filepath = os.path.join(model_base_filedir, args.savename)
+        info['loaded_from'] = args.model_loadpath
+        info['MODEL_BATCH_SIZE'] = args.batch_size
+    info['DEVICE'] = DEVICE
+    info['MODEL_SAVE_EVERY'] = args.save_every
+    info['MODEL_LOG_EVERY_BATCHES'] = args.log_every_batches
+    info['model_loadpath'] = args.model_loadpath
+    info['MODEL_SAVENAME'] = args.savename
+    info['MODEL_LEARNING_RATE'] = args.learning_rate
+    # create replay buffer
+    train_buffer = make_subset_buffer(train_data_path, max_examples=info['NUM_TRAINING_EXAMPLES'])
+    valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(info['NUM_TRAINING_EXAMPLES']*.1))
+    valid_buffer = ReplayMemory(load_file=valid_data_path)
+    # if train buffer is too large - make random subset
+    # 27588 places in 1e6 buffer where reward is nonzero
+
+    info['num_actions'] = train_buffer.num_actions()
+    info['size_training_set'] = train_buffer.num_examples()
+    info['hsize'] = train_buffer.frame_height
+    info['wsize'] = train_buffer.frame_width
+    info['num_rewards'] = train_buffer.num_rewards()
+    info['HISTORY_SIZE'] = 4
 
 
-#        print('writing img')
-#        n_imgs = 8
-#        n = min(states.shape[0], n_imgs)
-#        #onext_states = torch.Tensor(next_states[:n].data.cpu().numpy()+train_data_loader.frames_mean)#*train_data_loader.frames_diff) + train_data_loader.frames_min)
-#        #oyhat_batch =  torch.Tensor( yhat_batch[:n].data.cpu().numpy()+train_data_loader.frames_mean)#*train_data_loader.frames_diff) + train_data_loader.frames_min)
-#        #onext_states = torch.Tensor(((next_states[:n].data.cpu().numpy()*train_data_loader.frames_diff)+train_data_loader.frames_min) + train_data_loader.frames_mean)/255.
-#        #oyhat_batch =  torch.Tensor((( yhat_batch[:n].data.cpu().numpy()*train_data_loader.frames_diff)+train_data_loader.frames_min) + train_data_loader.frames_mean)/255.
-#        bs = args.batch_size
-#        h = train_data_loader.data_h
-#        w = train_data_loader.data_w
-#        comparison = torch.cat([next_states.view(bs,1,h,w)[:n],
-#                                yhat_batch.view(bs,1,h,w)[:n]])
-#        img_name = model_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
-#        save_image(comparison, img_name, nrow=n)
-#        #ocomparison = torch.cat([onext_states,
-#        #                        oyhat_batch])
-#        #img_name = model_base_filepath + "_%010d_valid_reconstructionMINE.png"%train_cnt
-#        #save_image(ocomparison, img_name, nrow=n)
-#        print('finished writing img', img_name)
-#
-#def init_train():
-#    """ use args to setup inplace training """
-#    train_data_path = args.train_buffer
-#    valid_data_path = args.valid_buffer
-#
-#    data_dir = os.path.split(train_data_path)[0]
-#
-#    # we are starting from scratch training this model
-#    if args.model_loadpath == "":
-#        run_num = 0
-#        model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-#        while os.path.exists(model_base_filedir):
-#            run_num +=1
-#            model_base_filedir = os.path.join(data_dir, args.savename + '%02d'%run_num)
-#        os.makedirs(model_base_filedir)
-#        model_base_filepath = os.path.join(model_base_filedir, args.savename)
-#        print("MODEL BASE FILEPATH", model_base_filepath)
-#
-#        info = {'model_train_cnts':[],
-#                'model_train_losses':{},
-#                'model_valid_cnts':[],
-#                'model_valid_losses':{},
-#                'model_save_times':[],
-#                'model_last_save':0,
-#                'model_last_plot':0,
-#                'NORM_BY':255.0,
-#                'MODEL_BASE_FILEDIR':model_base_filedir,
-#                'model_base_filepath':model_base_filepath,
-#                'model_train_data_file':train_data_path,
-#                'model_valid_data_file':valid_data_path,
-#                'NUM_TRAINING_EXAMPLES':args.num_training_examples,
-#                'NUM_K':args.num_k,
-#                'NR_LOGISTIC_MIX':args.nr_logistic_mix,
-#                'NUM_PCNN_FILTERS':args.num_pcnn_filters,
-#                'NUM_PCNN_LAYERS':args.num_pcnn_layers,
-#                'ALPHA_REC':args.alpha_rec,
-#                'ALPHA_ACT':args.alpha_act,
-#                'ALPHA_REW':args.alpha_rew,
-#                'MODEL_BATCH_SIZE':args.batch_size,
-#                'NUMBER_CONDITION':args.num_condition,
-#                'CODE_LENGTH':args.code_length,
-#                'NUM_MIXTURES':args.num_mixtures,
-#                'REQUIRE_UNIQUE_CODES':args.require_unique_codes,
-#                 }
-#
-#        ## size of latents flattened - dependent on architecture
-#        #info['float_condition_size'] = 100*args.num_z
-#        ## 3x logistic needed for loss
-#        ## TODO - change loss
-#    else:
-#        print('loading model from: %s' %args.model_loadpath)
-#        model_dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
-#        info =  model_dict['model_info']
-#        model_base_filedir = os.path.split(args.model_loadpath)[0]
-#        model_base_filepath = os.path.join(model_base_filedir, args.savename)
-#        info['loaded_from'] = args.model_loadpath
-#        info['MODEL_BATCH_SIZE'] = args.batch_size
-#    info['DEVICE'] = DEVICE
-#    info['MODEL_SAVE_EVERY'] = args.save_every
-#    info['MODEL_LOG_EVERY_BATCHES'] = args.log_every_batches
-#    info['model_loadpath'] = args.model_loadpath
-#    info['MODEL_SAVENAME'] = args.savename
-#    info['MODEL_LEARNING_RATE'] = args.learning_rate
-#    # create replay buffer
-#    train_buffer = make_subset_buffer(train_data_path, max_examples=info['NUM_TRAINING_EXAMPLES'])
-#    valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(info['NUM_TRAINING_EXAMPLES']*.1))
-#    valid_buffer = ReplayMemory(load_file=valid_data_path)
-#    # if train buffer is too large - make random subset
-#    # 27588 places in 1e6 buffer where reward is nonzero
-#
-#    info['num_actions'] = train_buffer.num_actions()
-#    info['size_training_set'] = train_buffer.num_examples()
-#    info['hsize'] = train_buffer.frame_height
-#    info['wsize'] = train_buffer.frame_width
-#    info['num_rewards'] = train_buffer.num_rewards()
-#    info['HISTORY_SIZE'] = 4
-#
-#
-#    rewards_weight = 1-np.array(train_buffer.percentages_rewards())
-#    actions_weight = 1-np.array(train_buffer.percentages_actions())
-#    actions_weight = torch.FloatTensor(actions_weight).to(DEVICE)
-#    rewards_weight = torch.FloatTensor(rewards_weight).to(DEVICE)
-#    info['actions_weight'] = actions_weight
-#    info['rewards_weight'] = rewards_weight
-#
-#
-#    # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
-#    # decorelated channel
-#    info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['HISTORY_SIZE']
-#    nmix = int(info['num_output_mixtures']/info['HISTORY_SIZE'])
-#    info['nmix'] = nmix
-#    #encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
-#    #                        encoder_output_size=args.encoder_output_size,
-#    #                        num_output_channels=nmix,
-#    #                         ).to(DEVICE)
-#    encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
-#                            encoder_output_size=args.encoder_output_size,
-#                            num_output_channels=1
-#                             ).to(DEVICE)
-#    prior_model = PriorNetwork(size_training_set=info['NUM_TRAINING_EXAMPLES'],
-#                               code_length=info['CODE_LENGTH'],
-#                               n_mixtures=info['NUM_MIXTURES'],
-#                               k=info['NUM_K'],
-#                               require_unique_codes=info['REQUIRE_UNIQUE_CODES'],
-#                               ).to(DEVICE)
-#    pcnn_decoder = GatedPixelCNN(input_dim=1,
-#                                 dim=info['NUM_PCNN_FILTERS'],
-#                                 n_layers=info['NUM_PCNN_LAYERS'],
-#                                 n_classes=info['num_actions'],
-#                                 float_condition_size=info['CODE_LENGTH'],
-#                                 last_layer_bias=0.5,
-#                                 hsize=info['hsize'], wsize=info['wsize']).to(DEVICE)
-#
-#    parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
-#    parameters = list(encoder_model.parameters()) + list(prior_model.parameters())
-#    opt = optim.Adam(parameters, lr=info['MODEL_LEARNING_RATE'])
-#
-#    if args.model_loadpath != '':
-#        print("loading weights from:%s" %args.model_loadpath)
-#        encoder_model.load_state_dict(model_dict['encoder_model_state_dict'])
-#        prior_model.load_state_dict(model_dict['prior_model_state_dict'])
-#        pcnn_decoder.load_state_dict(model_dict['pcnn_decoder_state_dict'])
-#        #encoder_model.embedding = model_dict['model_embedding']
-#        opt.load_state_dict(model_dict['opt_state_dict'])
-#
-#    model_dict = {'encoder_model':encoder_model,
-#                  'prior_model':prior_model,
-#                  'pcnn_decoder':pcnn_decoder,
-#                  'opt':opt}
-#    data_buffers = {'train':train_buffer, 'valid':valid_buffer}
-#    if args.sample:
-#        sample_acn(info, model_dict, data_buffers, num_samples=args.num_samples, teacher_force=args.teacher_force)
-#    else:
-#        train_acn(info, model_dict, data_buffers)
-#
+    rewards_weight = 1-np.array(train_buffer.percentages_rewards())
+    actions_weight = 1-np.array(train_buffer.percentages_actions())
+    actions_weight = torch.FloatTensor(actions_weight).to(DEVICE)
+    rewards_weight = torch.FloatTensor(rewards_weight).to(DEVICE)
+    info['actions_weight'] = actions_weight
+    info['rewards_weight'] = rewards_weight
+
+
+    # output mixtures should be 2*nr_logistic_mix + nr_logistic mix for each
+    # decorelated channel
+    info['num_output_mixtures']= (2*args.nr_logistic_mix+args.nr_logistic_mix)*info['HISTORY_SIZE']
+    nmix = int(info['num_output_mixtures']/info['HISTORY_SIZE'])
+    info['nmix'] = nmix
+    #encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
+    #                        encoder_output_size=args.encoder_output_size,
+    #                        num_output_channels=nmix,
+    #                         ).to(DEVICE)
+    encoder_model = ConvVAE(info['CODE_LENGTH'], input_size=args.num_condition,
+                            encoder_output_size=args.encoder_output_size,
+                            num_output_channels=1
+                             ).to(DEVICE)
+    prior_model = PriorNetwork(size_training_set=info['NUM_TRAINING_EXAMPLES'],
+                               code_length=info['CODE_LENGTH'],
+                               n_mixtures=info['NUM_MIXTURES'],
+                               k=info['NUM_K'],
+                               require_unique_codes=info['REQUIRE_UNIQUE_CODES'],
+                               ).to(DEVICE)
+    pcnn_decoder = GatedPixelCNN(input_dim=1,
+                                 dim=info['NUM_PCNN_FILTERS'],
+                                 n_layers=info['NUM_PCNN_LAYERS'],
+                                 n_classes=info['num_actions'],
+                                 float_condition_size=info['CODE_LENGTH'],
+                                 last_layer_bias=0.5,
+                                 hsize=info['hsize'], wsize=info['wsize']).to(DEVICE)
+
+    parameters = list(encoder_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
+    parameters = list(encoder_model.parameters()) + list(prior_model.parameters())
+    opt = optim.Adam(parameters, lr=info['MODEL_LEARNING_RATE'])
+
+    if args.model_loadpath != '':
+        print("loading weights from:%s" %args.model_loadpath)
+        encoder_model.load_state_dict(model_dict['encoder_model_state_dict'])
+        prior_model.load_state_dict(model_dict['prior_model_state_dict'])
+        pcnn_decoder.load_state_dict(model_dict['pcnn_decoder_state_dict'])
+        #encoder_model.embedding = model_dict['model_embedding']
+        opt.load_state_dict(model_dict['opt_state_dict'])
+
+    model_dict = {'encoder_model':encoder_model,
+                  'prior_model':prior_model,
+                  'pcnn_decoder':pcnn_decoder,
+                  'opt':opt}
+    data_buffers = {'train':train_buffer, 'valid':valid_buffer}
+    if args.sample:
+        sample_acn(info, model_dict, data_buffers, num_samples=args.num_samples, teacher_force=args.teacher_force)
+    else:
+        train_acn(info, model_dict, data_buffers)
+
 #if __name__ == '__main__':
 #    from argparse import ArgumentParser
 
@@ -888,6 +728,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('-t', '--tsne', action='store_true', default=False)
     parser.add_argument('-nt', '--num_tsne', default=300, type=int)
+    parser.add_argument('-dp', '--dropout_prob', default=0.8, type=float)
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-p', '--perplexity', default=3)
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
@@ -907,7 +748,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
     parser.add_argument('--valid_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
 
-    parser.add_argument('-aml', '--action_model_loadpath', default='results_train_breakout_action/sigcacn_breakout_action_0075002880ex.pkl')
+    parser.add_argument('-aml', '--action_model_loadpath', default='results_train_breakout_action/sigcacn_breakout_action_0075002880ex.pt')
 
     args = parser.parse_args()
 
@@ -920,7 +761,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad')
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout')
     action_model_loadpath = os.path.join(args.model_savedir, args.action_model_loadpath)
 
     train_data_path = os.path.join(args.model_savedir, args.train_buffer)
@@ -949,16 +790,18 @@ if __name__ == '__main__':
             'num_actions':num_actions,
             'hsize':hsize,
             'wsize':wsize,
-            'last_layer_bias':0.5
+            'last_layer_bias':0.5,
+            'size_training_set':train_buffer.count,
              }
 
-    size_training_set = train_buffer.count
 
+    print(info['size_training_set'])
     train_cnt = 0
     vae_model = ConvVAE(args.code_length, input_size=6, num_output_channels=1).to(DEVICE)
     #vae_model = ConvVAE(args.code_length, input_size=nmix, num_output_channels=1).to(DEVICE)
 
-    prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
+    prior_model = PriorNetwork(size_training_set=info['size_training_set'],
+                               code_length=args.code_length, k=args.num_k).to(DEVICE)
     pcnn_decoder = GatedPixelCNN(input_dim=1,
                                  dim=info['NUM_PCNN_FILTERS'],
                                  n_layers=info['NUM_PCNN_LAYERS'],
@@ -983,7 +826,8 @@ if __name__ == '__main__':
     prior_model.to(DEVICE)
     # TODO write model loader and args.sample
     if args.sample:
-        test_acn(train_cnt, True)
+        #test_acn(train_cnt, True)
+        sample()
     if args.tsne:
         call_tsne_plot()
     else:

@@ -51,6 +51,7 @@ def sample_batch(data, label, batch_idx, name):
             for j in range(canvas.shape[2]):
                 for k in range(canvas.shape[3]):
                     output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1], float_condition=z[bi:bi+1]))
+                    # why are we not updating canvas here?
                     np_canvas[bi,i,j,k] = output[0,i,j,k].detach().numpy()
         print("starting img")
         f,ax = plt.subplots(1,2)
