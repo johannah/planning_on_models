@@ -385,7 +385,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
+        filename = vae_base_filepath + "_%010dex.pt"%train_cnt
         state = {
                  'vae_state_dict':vae_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
@@ -428,7 +428,7 @@ def train_acn(train_cnt):
         kl = kl_loss_function(u_q, s_q, u_p, s_p)
         # predict one image
         rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
-        rec_loss = (rec_loss[:,0]*train_grad[batch_idx]).mean()
+        rec_loss = (rec_loss[:,0]*train_grad[batch_idx] + rec_loss*.5).sum()
         loss = kl+rec_loss
         loss.backward()
         train_loss+= loss.item()
@@ -461,7 +461,7 @@ def test_acn(train_cnt, do_plot):
                 u_p, s_p = prior_model(u_q)
                 kl = kl_loss_function(u_q, s_q, u_p, s_p)
                 rec_loss = F.binary_cross_entropy(yhat_batch, next_states, reduction='none')
-                rec_loss = (rec_loss[:,0]*valid_grad[batch_idx]).mean()
+                rec_loss = (rec_loss[:,0]*valid_grad[batch_idx] + rec_loss*.5).sum()
                 loss = kl+rec_loss
                 test_loss+= loss.item()
                 seen += bs
@@ -941,7 +941,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pred_actgrad')
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pred_actgrad_half')
     action_model_loadpath = os.path.join(args.model_savedir, args.action_model_loadpath)
 
     train_data_path = args.train_buffer

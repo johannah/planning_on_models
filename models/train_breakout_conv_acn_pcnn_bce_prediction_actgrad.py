@@ -388,7 +388,7 @@ def train_acn(train_cnt):
         drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=True, inplace=False)
         yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
         rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
-        rec_loss = (rec_loss[:,0]*train_grad[batch_idx]).mean()
+        rec_loss = (rec_loss[:,0]*train_grad[batch_idx] + rec_loss*.5).sum()
         # input should be scaled bt -1 and 1 for dml
         #rec_loss = discretized_mix_logistic_loss(yhat_batch, next_state, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
@@ -445,10 +445,10 @@ def test_acn(train_cnt, do_plot):
                 z, u_q, s_q = vae_model(states)
                 u_p, s_p = prior_model(u_q)
                 kl = kl_loss_function(u_q, s_q, u_p, s_p)
-                drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=True, inplace=False)
+                drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=False, inplace=False)
                 yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
                 rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
-                rec_loss = (rec_loss[:,0]*valid_grad[batch_idx]).mean()
+                rec_loss = (rec_loss[:,0]*valid_grad[batch_idx] + rec_loss*.5).sum()
                 #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
                 loss = kl+rec_loss
                 test_loss+= loss.item()
@@ -462,6 +462,7 @@ def test_acn(train_cnt, do_plot):
                          # data should be between 0 and 1 to be plotted with
                          comparison = torch.cat([
                                                  last_state[:n],
+                                                 drop_next_state[:n],
                                                  next_state[:n],
                                                  yhat_batch[:n]])
                          img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
@@ -491,37 +492,71 @@ def sample():
                 states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
                 z, u_q, s_q = vae_model(states)
                 # yhat_batch is bt 0-1
-                canvas = 0.0*next_state
-                np_canvas = np.zeros_like(np_next_states)
+                canvas = next_state
+                output_canvas = 0.0*next_state
                 #for bi in range(canvas.shape[0]):
                 # sample one at a time due to memory constraints
                 st = time.time()
-                for bi, true_idx in enumerate(batch_idx):
+                #if args.teacher_force:
+                #    canvas = next_state
+
+                #drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=False, inplace=False)
+                #yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
+                yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
+                np_yhat_batch = yhat_batch.detach().cpu().numpy()
+                if args.teacher_force:
+                    canvas = next_state
+                else:
+                    canvas = torch.zeros_like(next_state)
+                output_canvas = torch.zeros_like(next_state)
+                name = ''
+                if 1:
                     building_canvas = []
-                    print('sampling image', bi)
+                    #print('sampling image', bi)
                     for i in range(canvas.shape[1]):
                         for j in range(canvas.shape[2]):
                             for k in range(canvas.shape[3]):
-                                output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1], float_condition=z[bi:bi+1]))
-                                canvas[bi,i,j,k] = torch.round(output[0,i,j,k].detach())
-                                building_canvas.append((canvas[bi,0].detach().numpy()*255).astype(np.uint8))
-                    building_canvas = np.array(building_canvas)
-                    iname = os.path.join(basedir, '%010d.png'%(true_idx))
+                                if not k%2 or not j%2:
+                                    canvas[:,i,j,k] = next_state[:,i,j,k]
+                                #output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1] float_condition=z[bi:bi+1]))
+                                output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                                if  args.teacher_force:
+                                    output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+                                else:
+                                    #canvas[:,i,j,k] = torch.round(output[:,i,j,k].detach())
+                                    output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+                                    #output_canvas = canvas
+                            building_canvas.append(output_canvas[0].detach().cpu().numpy())
+                    print(yhat_batch[:,0,0,0])
+                    print(output[:,0,0,0])
+                    print(next_state[:,0,0,0])
+                    print('-------1')
+                    print(yhat_batch[:,0,0,1])
+                    print(output[:,0,0,1])
+                    print(next_state[:,0,0,1])
+                    building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
                     print('writing building movie')
-                    mname = os.path.join(basedir, '%010d.mp4'%(true_idx))
+                    if args.teacher_force:
+                        name +='tf'
+                    mname = os.path.join(basedir, '%010d%s.mp4'%(batch_idx[0],name))
                     vwrite(mname, building_canvas)
-
-                    #np_bi = (canvas[bi,0].detach().numpy()*255).astype(np.uint8)
-                    np_bi = canvas[bi,0].detach().numpy()
                     et = time.time()
                     print(et-st)
-                    f,ax = plt.subplots(1,2)
-                    ax[0].imshow(np_next_states[bi,0])
-                    ax[0].set_title('true')
-                    ax[1].imshow(np_bi)
-                    ax[1].set_title('est')
-                    plt.savefig(iname)
-                    print('saving', iname)
+                    np_bi = output_canvas.detach().cpu().numpy()
+                    print(np_bi.min(), np_bi.max())
+                    for bi, true_idx in enumerate(batch_idx):
+                        iname = os.path.join(basedir, '%010d%s.png'%(true_idx,name))
+                        #np_bi = output_canvas[bi,0].detach().cpu().numpy()
+                        f,ax = plt.subplots(1,3)
+                        ax[0].imshow(np_next_states[bi,0])
+                        ax[0].set_title('true')
+                        ax[1].imshow(np_bi[bi,0])
+                        ax[1].set_title('est')
+                        ax[2].imshow(np_yhat_batch[bi,0])
+                        ax[2].set_title('est')
+                        plt.savefig(iname)
+                        print('saving', iname)
+                        plt.close()
                     embed()
     #    print("starting img")
 
@@ -725,8 +760,10 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
+    parser.add_argument('--test', action='store_true', default=False)
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('-t', '--tsne', action='store_true', default=False)
+    parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-nt', '--num_tsne', default=300, type=int)
     parser.add_argument('-dp', '--dropout_prob', default=0.8, type=float)
     parser.add_argument('-l', '--model_loadpath', default='')
@@ -761,7 +798,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout')
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout_half')
     action_model_loadpath = os.path.join(args.model_savedir, args.action_model_loadpath)
 
     train_data_path = os.path.join(args.model_savedir, args.train_buffer)
@@ -825,8 +862,9 @@ if __name__ == '__main__':
     vae_model.to(DEVICE)
     prior_model.to(DEVICE)
     # TODO write model loader and args.sample
+    if args.test:
+        test_acn(train_cnt, True)
     if args.sample:
-        #test_acn(train_cnt, True)
         sample()
     if args.tsne:
         call_tsne_plot()
