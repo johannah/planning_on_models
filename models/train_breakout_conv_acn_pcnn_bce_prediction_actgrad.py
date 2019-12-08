@@ -388,7 +388,8 @@ def train_acn(train_cnt):
         drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=True, inplace=False)
         yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
         rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
-        rec_loss = (rec_loss[:,0]*train_grad[batch_idx] + rec_loss*.5).sum()
+        #rec_loss = (rec_loss[:,0]*train_grad[batch_idx] + rec_loss*.5).sum()
+        rec_loss = (rec_loss[:,0]*train_grad[batch_idx]).sum()
         # input should be scaled bt -1 and 1 for dml
         #rec_loss = discretized_mix_logistic_loss(yhat_batch, next_state, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
@@ -448,7 +449,8 @@ def test_acn(train_cnt, do_plot):
                 drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=False, inplace=False)
                 yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
                 rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
-                rec_loss = (rec_loss[:,0]*valid_grad[batch_idx] + rec_loss*.5).sum()
+                #rec_loss = (rec_loss[:,0]*valid_grad[batch_idx] + rec_loss*.5).sum()
+                rec_loss = (rec_loss[:,0]*valid_grad[batch_idx]).sum()
                 #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
                 loss = kl+rec_loss
                 test_loss+= loss.item()
@@ -475,18 +477,28 @@ def test_acn(train_cnt, do_plot):
     return test_loss
 
 def sample():
+    print('starting sample', train_cnt)
     from skvideo.io import vwrite
     vae_model.eval()
     pcnn_decoder.eval()
-    print('starting sample', train_cnt)
     basedir = args.model_loadpath.replace('.pt', '')
+    if args.use_training_set:
+        data_buffer = train_buffer
+        print('using training data')
+        name = 'tr'
+    else:
+        print('using valid data')
+        name = 'va'
+        data_buffer = valid_buffer
+
     if not os.path.exists(basedir):
         os.makedirs(basedir)
+    print('writing to: %s'%basedir)
     with torch.no_grad():
-        valid_buffer.reset_unique()
+        data_buffer.reset_unique()
         for i in range(10):
-            if valid_buffer.unique_available:
-                batch = valid_buffer.get_unique_minibatch(args.batch_size)
+            if data_buffer.unique_available:
+                batch = data_buffer.get_unique_minibatch(args.batch_size)
                 np_next_states = batch[3]
                 batch_idx = batch[-1]
                 states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
@@ -509,55 +521,53 @@ def sample():
                 else:
                     canvas = torch.zeros_like(next_state)
                 output_canvas = torch.zeros_like(next_state)
-                name = ''
-                if 1:
-                    building_canvas = []
-                    #print('sampling image', bi)
-                    for i in range(canvas.shape[1]):
-                        for j in range(canvas.shape[2]):
-                            for k in range(canvas.shape[3]):
-                                if not k%2 or not j%2:
-                                    canvas[:,i,j,k] = next_state[:,i,j,k]
-                                #output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1] float_condition=z[bi:bi+1]))
-                                output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
-                                if  args.teacher_force:
-                                    output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
-                                else:
-                                    #canvas[:,i,j,k] = torch.round(output[:,i,j,k].detach())
-                                    output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
-                                    #output_canvas = canvas
+                building_canvas = []
+                #print('sampling image', bi)
+                for i in range(canvas.shape[1]):
+                    for j in range(canvas.shape[2]):
+                        print('j', j)
+                        for k in range(canvas.shape[3]):
+                            #output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1] float_condition=z[bi:bi+1]))
+                            output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                            if  args.teacher_force:
+                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+                            else:
+                                #canvas[:,i,j,k] = torch.round(output[:,i,j,k].detach())
+                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+                                #output_canvas = canvas
                             building_canvas.append(output_canvas[0].detach().cpu().numpy())
-                    print(yhat_batch[:,0,0,0])
-                    print(output[:,0,0,0])
-                    print(next_state[:,0,0,0])
-                    print('-------1')
-                    print(yhat_batch[:,0,0,1])
-                    print(output[:,0,0,1])
-                    print(next_state[:,0,0,1])
-                    building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
-                    print('writing building movie')
-                    if args.teacher_force:
-                        name +='tf'
-                    mname = os.path.join(basedir, '%010d%s.mp4'%(batch_idx[0],name))
-                    vwrite(mname, building_canvas)
-                    et = time.time()
-                    print(et-st)
-                    np_bi = output_canvas.detach().cpu().numpy()
-                    print(np_bi.min(), np_bi.max())
-                    for bi, true_idx in enumerate(batch_idx):
-                        iname = os.path.join(basedir, '%010d%s.png'%(true_idx,name))
-                        #np_bi = output_canvas[bi,0].detach().cpu().numpy()
-                        f,ax = plt.subplots(1,3)
-                        ax[0].imshow(np_next_states[bi,0])
-                        ax[0].set_title('true')
-                        ax[1].imshow(np_bi[bi,0])
-                        ax[1].set_title('est')
-                        ax[2].imshow(np_yhat_batch[bi,0])
-                        ax[2].set_title('est')
-                        plt.savefig(iname)
-                        print('saving', iname)
-                        plt.close()
-                    embed()
+                print(yhat_batch[:,0,0,0])
+                print(output[:,0,0,0])
+                print(next_state[:,0,0,0])
+                print('-------1')
+                print(yhat_batch[:,0,0,1])
+                print(output[:,0,0,1])
+                print(next_state[:,0,0,1])
+                building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
+                print('writing building movie')
+                if args.teacher_force:
+                    name +='tf'
+                mname = os.path.join(basedir, '%010d%s.mp4'%(batch_idx[0],name))
+                vwrite(mname, building_canvas)
+                et = time.time()
+                print(et-st)
+                np_bi = output_canvas.detach().cpu().numpy()
+                print(np_bi.min(), np_bi.max())
+                for bi, true_idx in enumerate(batch_idx):
+                    iname = os.path.join(basedir, '%010d%s.png'%(true_idx,name))
+                    #np_bi = output_canvas[bi,0].detach().cpu().numpy()
+                    f,ax = plt.subplots(1,3)
+                    ax[0].imshow(np_next_states[bi,0])
+                    ax[0].set_title('true')
+                    ax[1].imshow(np_bi[bi,0])
+                    ax[1].set_title('est')
+                    ax[2].imshow(np_yhat_batch[bi,0])
+                    ax[2].set_title('est')
+                    plt.savefig(iname)
+                    print('saving', iname)
+                    plt.close()
+                embed()
+    sys.exit()
     #    print("starting img")
 
 #def save_checkpoint(state, filename='model.pt'):
@@ -762,6 +772,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('--test', action='store_true', default=False)
     parser.add_argument('-s', '--sample', action='store_true', default=False)
+    parser.add_argument('--use_training_set', action='store_true', default=False)
     parser.add_argument('-t', '--tsne', action='store_true', default=False)
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-nt', '--num_tsne', default=300, type=int)
@@ -798,7 +809,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout_half')
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout_p0')
     action_model_loadpath = os.path.join(args.model_savedir, args.action_model_loadpath)
 
     train_data_path = os.path.join(args.model_savedir, args.train_buffer)
