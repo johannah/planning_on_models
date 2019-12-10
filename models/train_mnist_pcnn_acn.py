@@ -11,9 +11,13 @@ https://github.com/pytorch/examples/blob/master/vae/main.py
 # TODO conv
 # TODO load function
 # daydream function
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import os
 import time
 import numpy as np
+from copy import deepcopy
 from sklearn.neighbors import KNeighborsClassifier
 from torch import nn, optim
 import torch
@@ -21,10 +25,10 @@ from torch.nn import functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
 #from acn import ConvVAE, PriorNetwork
-import config
 from torchvision.utils import save_image
 from IPython import embed
 from lstm_utils import plot_losses
+from make_tsne_plot import tsne_plot
 from pixel_cnn import GatedPixelCNN
 torch.manual_seed(394)
 
@@ -65,45 +69,11 @@ class ConvVAE(nn.Module):
         self.eo = eo = encoder_output_size
         self.fc21 = nn.Linear(eo, code_len)
         self.fc22 = nn.Linear(eo, code_len)
-        self.fc3 = nn.Linear(code_len, eo)
-
-        out_layer = nn.ConvTranspose2d(in_channels=16,
-                        out_channels=input_size,
-                        kernel_size=4,
-                        stride=2, padding=1)
-
-        # set bias to 0.5 for sigmoid
-        out_layer.bias.data.fill_(0.5)
-
-        #self.decoder = nn.Sequential(
-        #       nn.ConvTranspose2d(in_channels=code_len*2,
-        #              out_channels=32,
-        #              kernel_size=1,
-        #              stride=1, padding=0),
-        #        nn.BatchNorm2d(32),
-        #        nn.ReLU(True),
-        #        nn.ConvTranspose2d(in_channels=32,
-        #              out_channels=16,
-        #              kernel_size=4,
-        #              stride=2, padding=1),
-        #        nn.BatchNorm2d(16),
-        #        nn.ReLU(True),
-        #        out_layer
-        #             )
 
     def encode(self, x):
         o = self.encoder(x)
         ol = o.view(o.shape[0], o.shape[1]*o.shape[2]*o.shape[3])
         return self.fc21(ol), self.fc22(ol)
-
-    #def decode(self, mu, logvar, y):
-    #    c = self.reparameterize(mu,logvar)
-    #    co = F.relu(self.fc3(c))
-    #    #col = co.view(co.shape[0], self.code_len*2, self.eo, self.eo)
-    #    #embed()
-    #    #do = self.pcnn_decoder(y, float_condition=co)
-    #    #do = torch.sigmoid(do)
-    #    return co
 
     def reparameterize(self, mu, logvar):
         if self.training:
@@ -117,8 +87,7 @@ class ConvVAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        co = F.relu(self.fc3(z))
-        return  co, mu, logvar
+        return z, mu, logvar
 
 def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
     ''' reconstruction loss + coding cost
@@ -223,7 +192,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
+        filename = vae_base_filepath + "_%010dex.pt"%train_cnt
         state = {
                  'vae_state_dict':vae_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
@@ -279,9 +248,9 @@ def test_acn(train_cnt, do_plot):
     test_loss = 0
     print('starting test', train_cnt)
     st = time.time()
-    print(len(test_loader))
+    print(len(valid_loader))
     with torch.no_grad():
-        for i, (data, label, data_index) in enumerate(test_loader):
+        for i, (data, label, data_index) in enumerate(valid_loader):
             lst = time.time()
             data = data.to(DEVICE)
             z, u_q, s_q = vae_model(data)
@@ -302,10 +271,88 @@ def test_acn(train_cnt, do_plot):
                 print('finished writing img', img_name)
             #print('loop test', i, time.time()-lst)
 
-    test_loss /= len(test_loader.dataset)
+    test_loss /= len(valid_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
     print('finished test', time.time()-st)
     return test_loss
+
+
+def call_tsne_plot():
+    vae_model.eval()
+    prior_model.eval()
+    pcnn_decoder.eval()
+    with torch.no_grad():
+        valid_buffer.reset_unique()
+        batch = valid_buffer.get_unique_minibatch(args.num_tsne)
+        batch_idx = batch[-1]
+        states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
+        # yhat_batch is bt 0-1
+        z, u_q, s_q = vae_model(states)
+        u_p, s_p = prior_model(u_q)
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
+        end = args.model_loadpath.split('.')[-1]
+        html_path = args.model_loadpath.replace(end, 'html')
+        X = u_q.cpu().numpy()
+        images = np.round(yhat_batch.cpu().numpy()[:,0], 0).astype(np.int16)
+        #images = next_state[:,0].cpu().numpy()
+        tsne_plot(X=X, images=images, color=batch_idx, perplexity=args.perplexity,
+                  html_out_path=html_path)
+
+
+def sample():
+    print('starting sample', train_cnt)
+    from skvideo.io import vwrite
+    vae_model.eval()
+    pcnn_decoder.eval()
+    output_savepath = args.model_loadpath.replace('.pt', '')
+    with torch.no_grad():
+        for phase in ['train', 'valid']:
+            data_loader = data_dict[phase]
+            with torch.no_grad():
+                for batch_idx, (data, label, data_index) in enumerate(data_loader):
+                    data = data.to(DEVICE)
+                    bs = data.shape[0]
+                    z, u_q, s_q = vae_model(data)
+                    # teacher forced version
+                    yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
+                    u_p, s_p = prior_model(u_q)
+                    canvas = torch.zeros_like(data)
+                    building_canvas = []
+                    for i in range(canvas.shape[1]):
+                        for j in range(canvas.shape[2]):
+                            print('sampling row: %s'%j)
+                            for k in range(canvas.shape[3]):
+                                output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                                canvas[:,i,j,k] = output[:,i,j,k].detach()
+                                if not k%2:
+                                    building_canvas.append(deepcopy(canvas[0].detach().cpu().numpy()))
+                    f,ax = plt.subplots(bs, 3, sharex=True, sharey=True, figsize=(2,2*bs))
+                    npdata = data.detach().cpu().numpy()
+                    npoutput = output.detach().cpu().numpy()
+                    npyhat = yhat_batch.detach().cpu().numpy()
+                    for idx in range(bs):
+                        ax[idx,0].imshow(npdata[idx,0], cmap=plt.cm.gray)
+                        ax[idx,0].set_title('true')
+                        ax[idx,1].imshow(npyhat[idx,0], cmap=plt.cm.gray)
+                        ax[idx,1].set_title('tf')
+                        ax[idx,2].imshow(npoutput[idx,0], cmap=plt.cm.gray)
+                        ax[idx,2].set_title('sam')
+                        ax[idx,0].axis('off')
+                        ax[idx,1].axis('off')
+                        ax[idx,2].axis('off')
+                    iname = output_savepath + '_sample_%s.png'%phase
+                    print('plotting %s'%iname)
+                    plt.savefig(iname)
+                    plt.close()
+
+                    building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
+                    print('writing building movie')
+                    mname = output_savepath + '_build_%s.mp4'%phase
+                    vwrite(mname, building_canvas)
+                    print('finished %s'%mname)
+                    break
+        sys.exit()
+
 
 class IndexedDataset(Dataset):
     def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
@@ -323,7 +370,7 @@ class IndexedDataset(Dataset):
     def __len__(self):
         return len(self.indexed_dataset)
 
-def save_checkpoint(state, filename='model.pkl'):
+def save_checkpoint(state, filename='model.pt'):
     print("starting save of model %s" %filename)
     torch.save(state, filename)
     print("finished save of model %s" %filename)
@@ -331,13 +378,13 @@ def save_checkpoint(state, filename='model.pkl'):
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
-    parser = ArgumentParser(description='train vq-vae for freeway')
+    parser = ArgumentParser(description='train acn')
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('-l', '--model_loadname', default=None)
+    parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=20000, type=int)
-    parser.add_argument('-le', '--log_every', default=10000, type=int)
-    parser.add_argument('-bs', '--batch_size', default=128, type=int)
+    parser.add_argument('-pe', '--plot_every', default=60000*10, type=int)
+    parser.add_argument('--log_every', default=60000*10, type=int)
+    parser.add_argument('-bs', '--batch_size', default=256, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=20, type=int)
@@ -349,6 +396,15 @@ if __name__ == '__main__':
     parser.add_argument('-nc', '--num_classes', default=10)
     parser.add_argument('-eos', '--encoder_output_size', default=1960)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
+    parser.add_argument( '--model_savedir', default='../../model_savedir', help='save checkpoints here')
+    parser.add_argument( '--base_datadir', default='../../dataset/', help='save datasets here')
+    # sampling info
+    parser.add_argument('-s', '--sample', action='store_true', default=False)
+    parser.add_argument('-t', '--tsne', action='store_true', default=False)
+    parser.add_argument('-p', '--perplexity', default=3)
+    parser.add_argument('--use_training_set', action='store_true', default=False)
+    parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
+    parser.add_argument('-nt', '--num_tsne', default=300, type=int)
 
     args = parser.parse_args()
     if args.cuda:
@@ -356,17 +412,18 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(config.model_savedir, 'pcnn_acn')
-    train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
+    vae_base_filepath = os.path.join(args.model_savedir, 'pcnn_acn_mnist')
+    train_data = IndexedDataset(datasets.MNIST, path=args.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    test_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
+    valid_data = IndexedDataset(datasets.MNIST, path=args.base_datadir,
                                train=False, download=True,
                                transform=transforms.ToTensor())
-    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
+    valid_loader = DataLoader(valid_data, batch_size=args.batch_size, shuffle=True)
+    data_dict = {'train':train_loader, 'valid':valid_loader}
 
-    nchans,hsize,wsize = test_loader.dataset[0][0].shape
+    nchans,hsize,wsize = train_loader.dataset[0][0].shape
 
     info = {'train_cnts':[],
             'train_losses':[],
@@ -380,7 +437,7 @@ if __name__ == '__main__':
 
     args.size_training_set = len(train_data)
 
-    vae_model = ConvVAE(args.code_length, input_size=1).to(DEVICE)
+    vae_model = ConvVAE(args.code_length, input_size=1, encoder_output_size=args.encoder_output_size).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=args.size_training_set,
                                code_length=args.code_length, k=args.num_k).to(DEVICE)
 
@@ -388,12 +445,32 @@ if __name__ == '__main__':
                                       dim=args.possible_values,
                                       n_layers=args.num_pcnn_layers,
                                       n_classes=args.num_classes,
-                                      float_condition_size=1960,
+                                      float_condition_size=args.code_length,
                                       last_layer_bias=0.5).to(DEVICE)
 
     parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
     opt = optim.Adam(parameters, lr=args.learning_rate)
     train_cnt = 0
+
+    if args.model_loadpath !='':
+        tmlp =  args.model_loadpath+'.tmp'
+        os.system('cp %s %s'%(args.model_loadpath, tmlp))
+        _dict = torch.load(tmlp, map_location=lambda storage, loc:storage)
+        vae_model.load_state_dict(_dict['vae_state_dict'])
+        prior_model.load_state_dict(_dict['prior_state_dict'])
+        pcnn_decoder.load_state_dict(_dict['pcnn_state_dict'])
+
+        info = _dict['info']
+        train_cnt = info['train_cnts'][-1]
+
+
+
+    if args.sample:
+        sample()
+    if args.tsne:
+        call_tsne_plot()
+
+
     while train_cnt < args.num_examples_to_train:
         train_cnt = train_acn(train_cnt)
 

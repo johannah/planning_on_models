@@ -263,9 +263,9 @@ def show_cam_on_image(img, mask):
     cv2.imwrite("cam.jpg", np.uint8(255 * combine))
 
 # ConvVAE was also imported - not sure which one was used
-class ConvAct(nn.Module):
+class ConvRew(nn.Module):
     def __init__(self, input_size=1, num_output_options=3):
-        super(ConvAct, self).__init__()
+        super(ConvRew, self).__init__()
         self.conv_network = nn.Sequential(
             nn.Conv2d(in_channels=input_size,
                       out_channels=8,
@@ -325,7 +325,7 @@ def handle_checkpointing(train_cnt, avg_train_loss, force_save=False):
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
         filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
         state = {
-                 'act_model_state_dict':act_model.state_dict(),
+                 'rew_model_state_dict':rew_model.state_dict(),
                  'optimizer':opt.state_dict(),
                  'info':info,
                  }
@@ -342,7 +342,7 @@ def handle_checkpointing(train_cnt, avg_train_loss, force_save=False):
             handle_plot_ckpt(False, train_cnt, avg_train_loss)
 
 def train_act(train_cnt):
-    act_model.train()
+    rew_model.train()
     train_loss = 0
     init_cnt = train_cnt
     st = time.time()
@@ -354,9 +354,9 @@ def train_act(train_cnt):
         # given states [1,2,3,4], predict action taken bt 3 and 4
         data = next_states
         opt.zero_grad()
-        pred_actions = act_model(data)
+        pred_rewards = rew_model(data)
         # add the predicted codes to the input
-        action_loss = F.nll_loss(pred_actions, actions, reduction='sum') # TODO - could also weight actions here
+        action_loss = F.nll_loss(pred_rewards, rewards, reduction='sum') # TODO - could also weight actions here
         loss = action_loss
         loss.backward()
         train_loss+= loss.item()
@@ -370,7 +370,7 @@ def train_act(train_cnt):
     return train_cnt, avg_train_loss
 
 def test_act(train_cnt, do_plot):
-    act_model.eval()
+    rew_model.eval()
     test_loss = 0
     print('starting test', train_cnt)
     st = time.time()
@@ -386,9 +386,9 @@ def test_act(train_cnt, do_plot):
             data = next_states
             # yhat_batch is bt 0-1
 
-            pred_actions = act_model(data)
-            action_loss = F.nll_loss(pred_actions, actions, reduction='sum') # TODO - could also weight actions here
-            loss = action_loss
+            pred_rewards = rew_model(data)
+            reward_loss = F.nll_loss(pred_rewards, rewards, reduction='sum') # TODO - could also weight actions here
+            loss = reward_loss
             test_loss+= loss.item()
             seen += data.shape[0]
             if not plotted:
@@ -404,21 +404,21 @@ def test_act(train_cnt, do_plot):
                      # save_image
                      f,ax = plt.subplots(4,5, sharex=True, sharey=True, squeeze=True)
                      npdata = data.cpu().numpy()
-                     npactions = actions.cpu().numpy()
-                     nppactions = np.argmax(pred_actions.cpu().numpy(), 1)
+                     nprewards = rewards.cpu().numpy()
+                     npprewards = np.argmax(pred_rewards.cpu().numpy(), 1)
                      cnt = 0
                      for cnt, idx in enumerate(np.random.choice(np.arange(data.shape[0]), 5)):
                          for xx in range(4):
                              ax[xx,cnt].imshow(npdata[idx,xx])
-                         ax[xx,cnt].set_title('T%s P%s'%(npactions[idx], nppactions[idx]))
+                         ax[xx,cnt].set_title('T%s P%s'%(nprewards[idx], npprewards[idx]))
                          #ax[0,cnt].set_title('%s'%(nppactions))
-                     img_name = vae_base_filepath + "_%010d_valid_action.png"%train_cnt
+                     img_name = vae_base_filepath + "_%010d_valid_reward.png"%train_cnt
                      plt.savefig(img_name)
                      plt.close()
                      print('finished writing img', img_name)
 
-                     acc = accuracy_score(npactions, nppactions)
-                     conf = confusion_matrix(npactions, nppactions)
+                     acc = accuracy_score(nprewards, npprewards)
+                     conf = confusion_matrix(nprewards, npprewards)
                      print('--------accuracy-------')
                      print(acc)
                      print(conf)
@@ -428,11 +428,11 @@ def test_act(train_cnt, do_plot):
     print('finished test', time.time()-st)
     return test_loss
 
-def load_avg_grad_cam(act_model_loadpath, data_buffer, data_buffer_loadpath, DEVICE='cpu'):
+def load_avg_grad_cam(rew_model_loadpath, data_buffer, data_buffer_loadpath, DEVICE='cpu'):
     '''
     '''
     from skvideo.io import vwrite
-    outpath = data_buffer_loadpath.replace('.npz', '') + '_' + os.path.split(act_model_loadpath)[1].split('.')[0]
+    outpath = data_buffer_loadpath.replace('.npz', '') + '_' + os.path.split(rew_model_loadpath)[1].split('.')[0]
     npy_outpath = outpath+'.npz'
     print("looking for ", npy_outpath)
     if os.path.exists(npy_outpath):
@@ -440,13 +440,13 @@ def load_avg_grad_cam(act_model_loadpath, data_buffer, data_buffer_loadpath, DEV
         return np.load(npy_outpath)['action_grad']
     else:
         print('calculating action grad', DEVICE)
-        num_actions = data_buffer.num_actions()
-        act_model = ConvAct(input_size=4, num_output_options=num_actions).to(DEVICE)
-        _dict = torch.load(act_model_loadpath, map_location=lambda storage, loc:storage)
-        act_model.load_state_dict(_dict['act_model_state_dict'])
+        num_rewards = data_buffer.num_rewards()
+        rew_model = ConvRew(input_size=4, num_output_options=num_rewards).to(DEVICE)
+        _dict = torch.load(rew_model_loadpath, map_location=lambda storage, loc:storage)
+        rew_model.load_state_dict(_dict['rew_model_state_dict'])
 
         bs = 1
-        grad_cam = GradCam(model=act_model, target_layer_names=['4'], grad_on_forward_index=None)
+        grad_cam = GradCam(model=rew_model, target_layer_names=['4'], grad_on_forward_index=None)
         #for phase, data_buffer in {'train':train_buffer, 'valid':valid_buffer}.items():
         data_buffer.reset_unique()
         all_masks = np.zeros((data_buffer.unique_indexes.shape[0],
@@ -486,7 +486,7 @@ def load_avg_grad_cam(act_model_loadpath, data_buffer, data_buffer_loadpath, DEV
 
 def run_grad_cam():
     bs = 12
-    grad_cam = GradCam(model=act_model, target_layer_names=['4'], grad_on_forward_index=None)
+    grad_cam = GradCam(model=rew_model, target_layer_names=['4'], grad_on_forward_index=None)
     valid_buffer.reset_unique()
     batch = valid_buffer.get_unique_minibatch(bs)
     batch_idx = batch[-1]
@@ -495,15 +495,15 @@ def run_grad_cam():
     masks = grad_cam(next_states)
     et = time.time()
     print(et-st)
-    pred_actions = act_model(next_states)
+    pred_rewards = rew_model(next_states)
     # norm bt 0 and 1
     prev_imgs = (next_states[:,-2].cpu().numpy()+1)/2.0
     next_imgs = (next_states[:,-1].cpu().numpy()+1)/2.0
-    np_pred_actions = torch.argmax(pred_actions, 1).detach().cpu().numpy()
-    np_actions = actions.detach().cpu().numpy()
+    np_pred_rewards = torch.argmax(pred_rewards, 1).detach().cpu().numpy()
+    np_rewards = rewards.detach().cpu().numpy()
     f,ax = plt.subplots(3, bs, sharex=True, sharey=True, figsize=(3*bs,3))
     for cnt in range(bs):
-        ax[0, cnt].set_title('BI%s T%s P%s'%(cnt, np_actions[cnt], np_pred_actions[cnt]))
+        ax[0, cnt].set_title('BI%s T%s P%s'%(cnt, np_rewards[cnt], np_pred_rewards[cnt]))
         ax[0, cnt].imshow(prev_imgs[cnt], cmap='gray')
         ax[1, cnt].imshow(next_imgs[cnt], cmap='gray')
         #ax[2, cnt].imshow(next_imgs[cnt], cmap='gray')
@@ -553,7 +553,7 @@ if __name__ == '__main__':
     valid_data_path = os.path.join(args.model_savedir, args.valid_buffer)
     train_buffer = make_subset_buffer(train_data_path, max_examples=nexamples)
     valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(nexamples*.15))
-    num_actions = train_buffer.num_actions()
+    num_rewards = train_buffer.num_rewards()
     info = {'train_cnts':[],
             'train_losses':[],
             'test_cnts':[],
@@ -568,26 +568,25 @@ if __name__ == '__main__':
     train_cnt = 0
     # given four frames, predict the action that was taken to get from [1,2,3,4]
     # frame 3 to 4
-    act_model = ConvAct(input_size=4, num_output_options=num_actions).to(DEVICE)
+    rew_model = ConvRew(input_size=4, num_output_options=num_rewards).to(DEVICE)
     if args.model_loadpath !='':
         _dict = torch.load(args.model_loadpath, map_location=lambda storage, loc:storage)
-        act_model.load_state_dict(_dict['act_model_state_dict'])
+        rew_model.load_state_dict(_dict['rew_model_state_dict'])
         info = _dict['info']
         train_cnt = info['train_cnts'][-1]
+
     if args.sample:
         test_act(train_cnt, True)
-    elif args.grad_cam:
+    if args.grad_cam:
         run_grad_cam()
-    #elif args.avg_grad_cam:
-    #    avg_grad_cam(args.model_loadpath, valid_buffer, small_valid_path)
-    #    avg_grad_cam()
-    else:
-        parameters = list(act_model.parameters())
-        opt = optim.Adam(parameters, lr=args.learning_rate)
-        if args.model_loadpath !='':
-            opt.load_state_dict(_dict['optimizer'])
-        # test plotting first
-        test_act(train_cnt, True)
-        while train_cnt < args.num_examples_to_train:
-            train_cnt, avg_train_loss = train_act(train_cnt)
-        handle_checkpointing(train_cnt, avg_train_loss)
+
+    print('starting training')
+    parameters = list(rew_model.parameters())
+    opt = optim.Adam(parameters, lr=args.learning_rate)
+    if args.model_loadpath !='':
+        opt.load_state_dict(_dict['optimizer'])
+    # test plotting first
+    test_act(train_cnt, True)
+    while train_cnt < args.num_examples_to_train:
+        train_cnt, avg_train_loss = train_act(train_cnt)
+    handle_checkpointing(train_cnt, avg_train_loss)

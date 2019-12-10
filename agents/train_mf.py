@@ -49,7 +49,7 @@ def vote_action_function(vals):
 
 def get_frame_prepared_minibatch(ch, minibatch):
     #states, actions, rewards, next_states, terminal_flags, masks = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
-    states, actions, rewards, next_states, terminal_flags, masks = minibatch
+    states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states = minibatch
     states = prepare_state(ch, states)
     next_states = prepare_state(ch, next_states)
     # move states between 0 and 1 - they are stored as uint8
@@ -64,9 +64,8 @@ def get_frame_prepared_minibatch(ch, minibatch):
     actions = torch.LongTensor(actions).to(ch.device)
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(ch.device)
     masks = torch.FloatTensor(masks.astype(np.int)).to(ch.device)
-    minibatch = states, actions, rewards, next_states, terminal_flags, masks
+    minibatch = states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states
     return  minibatch
-
 
 def dqn_learn(sm, model_dict):
     s_loss = 0
@@ -74,7 +73,7 @@ def dqn_learn(sm, model_dict):
         if not sm.step_number%sm.ch.cfg['DQN']['learn_every_steps']:
             minibatch = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
             prepared_minibatch = get_frame_prepared_minibatch(sm.ch, minibatch)
-            states, actions, rewards, next_states, terminal_flags, masks = prepared_minibatch
+            states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states = prepared_minibatch
             # min history to learn is 200,000 frames in dqn - 50000 steps
             losses = [0.0 for _ in range(sm.ch.cfg['DQN']['n_ensemble'])]
             model_dict['opt'].zero_grad()

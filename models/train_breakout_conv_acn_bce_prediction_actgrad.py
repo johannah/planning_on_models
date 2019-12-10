@@ -493,6 +493,7 @@ def test_acn(train_cnt, do_plot):
                          comparison = torch.cat([
                                                 last_state[:n],
                                                 next_state[:n],
+                                                valid_grad[batch_idx][:n][:,None],
                                                 yimg[:n]])
                          img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
                          save_image(comparison.cpu(), img_name, nrow=n)
@@ -943,7 +944,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pred_actgrad_p0')
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pred_actgrad_p0rescaled')
     action_model_loadpath = os.path.join(args.model_savedir, args.action_model_loadpath)
 
     train_data_path = args.train_buffer
@@ -951,8 +952,8 @@ if __name__ == '__main__':
     train_buffer, train_small_path = make_subset_buffer(train_data_path, max_examples=args.max_examples)
     valid_buffer, valid_small_path = make_subset_buffer(valid_data_path, max_examples=int(args.max_examples*.1))
 
-    valid_grad = load_avg_grad_cam(action_model_loadpath, valid_buffer, valid_small_path)
-    train_grad = load_avg_grad_cam(action_model_loadpath, train_buffer, train_small_path)
+    valid_grad = load_avg_grad_cam(action_model_loadpath, valid_buffer, valid_small_path, DEVICE=DEVICE)
+    train_grad = load_avg_grad_cam(action_model_loadpath, train_buffer, train_small_path, DEVICE=DEVICE)
     valid_grad = torch.Tensor(valid_grad).to(DEVICE)
     train_grad = torch.Tensor(train_grad).to(DEVICE)
 

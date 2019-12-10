@@ -56,18 +56,18 @@ def collect_random_experience(seed, env, memory_buffer, num_random_steps, pred_n
                                              terminal=life_lost,
                                              )
                 state = next_state
-            else:
-                batch = (state[None], np.array([action]), np.array([reward]), next_state[None], np.array([life_lost]), 1)
-                pred_next_state = pred_next_state_function(batch)[0,0].cpu().numpy()
-                pred_next_state = (pred_next_state*255).astype(np.uint8)
-                memory_buffer.add_experience(action=action,
-                                             frame=next_state[-1],
-                                             pred_frame=pred_next_state,
-                                             #reward=1+np.sign(reward), # add one so that rewards are <=0
-                                             reward=np.sign(reward), # add one so that rewards are <=0
-                                             terminal=life_lost,
-                                             )
-                state = np.vstack((state[:-1], next_state[-1:]))
+            #else:
+            #    batch = (state[None], np.array([action]), np.array([reward]), next_state[None], np.array([life_lost]), 1)
+            #    pred_next_state = pred_next_state_function(batch)[0,0].cpu().numpy()
+            #    pred_next_state = (pred_next_state*255).astype(np.uint8)
+            #    memory_buffer.add_experience(action=action,
+            #                                 frame=next_state[-1],
+            #                                 pred_frame=pred_next_state,
+            #                                 #reward=1+np.sign(reward), # add one so that rewards are <=0
+            #                                 reward=np.sign(reward), # add one so that rewards are <=0
+            #                                 terminal=life_lost,
+            #                                 )
+            #    state = np.vstack((state[:-1], next_state[-1:]))
 
             step_number += 1
             epoch_frame += 1
@@ -460,23 +460,24 @@ class StateManager():
                 self.plot_progress(plot_basepath)
 
 
-    def step_pred_next_state(self, action, pred_next_state_function):
-        next_state, reward, self.life_lost, self.terminal = self.env.step(action)
-        pred_next_state = pred_next_state_function(self.state, action, reward, next_state)
-        embed()
-        self.memory_buffer.add_experience(action=action,
-                                            #frame=next_state[-1],
-                                            frame=next_state[-1],
-                                            pred_frame=pred_next_state,
-                                            #reward=1+np.sign(reward),
-                                            reward=np.sign(reward),
-                                            terminal=self.life_lost,
-                                            )
-        self.episode_actions.append(action)
-        self.episode_rewards.append(reward)
-        self.step_number+=1
-        self.state = pred_next_state
-        self.last_state = self.state
+    #def step_pred_next_state(self, action, pred_next_state_function):
+    #    next_state, reward, self.life_lost, self.terminal = self.env.step(action)
+    #    #pred_next_state = pred_next_state_function(self.state, action, reward, next_state)
+    #    #embed()
+    #    self.memory_buffer.add_experience(action=action,
+    #                                        #frame=next_state[-1],
+    #                                        frame=next_state[-1],
+    #    #                                    pred_frame=pred_next_state,
+    #                                        #reward=1+np.sign(reward),
+    #                                        reward=np.sign(reward),
+    #                                        terminal=self.life_lost,
+    #                                        )
+    #    self.episode_actions.append(action)
+    #    self.episode_rewards.append(reward)
+    #    self.step_number+=1
+    #    #self.state = pred_next_state
+    #    self.state = next_state
+    #    self.last_state = self.state
 
     def step(self, action):
         next_state, reward, self.life_lost, self.terminal = self.env.step(action)

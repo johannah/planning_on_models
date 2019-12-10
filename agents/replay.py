@@ -38,6 +38,7 @@ class ReplayMemory:
         """
         self.sample_only = sample_only
         self.unique_available = False
+        self.use_pred_frames = use_pred_frames
         if load_file != '':
             self.load_buffer(load_file)
         else:
@@ -55,7 +56,6 @@ class ReplayMemory:
             self.rewards = np.empty(self.size, dtype=np.float32)
             # store actual frames in true frames
             self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
-            self.use_pred_frames = use_pred_frames
             if self.use_pred_frames:
                 self.pred_frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
             else:

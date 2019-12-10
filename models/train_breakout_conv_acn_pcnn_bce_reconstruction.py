@@ -35,6 +35,7 @@ from imageio import imsave
 from ae_utils import save_checkpoint, handle_plot_ckpt, reshape_input
 from ae_utils import discretized_mix_logistic_loss, sample_from_discretized_mix_logistic
 from pixel_cnn import GatedPixelCNN
+from make_tsne_plot import tsne_plot
 #from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 sys.path.append('../agents')
 from replay import ReplayMemory
@@ -366,7 +367,7 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
         handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
+        filename = vae_base_filepath + "_%010dex.pt"%train_cnt
         state = {
                  'vae_state_dict':vae_model.state_dict(),
                  'prior_state_dict':prior_model.state_dict(),
@@ -425,46 +426,10 @@ def train_acn(train_cnt):
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
 
-def tsne_plot(vae_model, train_cnt, data_buffer, num_clusters=30):
-    from sklearn.manifold import TSNE
-    from sklearn.cluster import KMeans
-    vae_model.eval()
-    test_loss = 0
-    print('starting tsne', train_cnt)
-    with torch.no_grad():
-        data_buffer.reset_unique()
-        batch = data_buffer.get_unique_minibatch(500)
-        batch_idxs = batch[-1]
-        states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
-        data = next_states[:,-1:]
-        # yhat_batch is bt 0-1
-        yhat_batch, u_q, s_q = vae_model(data)
-        X = u_q.cpu().numpy()
-        Xtsne = TSNE(n_components=2, perplexity=5).fit_transform(X)
-        Xclust = KMeans(n_clusters=num_clusters).fit_predict(Xtsne)
-        plt.figure(); plt.scatter(Xtsne[:,0], Xtsne[:,1], c=Xclust); plt.savefig('tsne.png'); plt.close()
-        npdata = data.cpu().numpy()[:,0]
-        for c in range(num_clusters):
-            inds = np.where(Xclust==c)[0]
-            n = len(inds)
-            sq = min([int(np.sqrt(n))+1, 5])
-            f,ax = plt.subplots(sq-1, sq, sharex=True, sharey=True)
-            cnt = 0
-            for h in range(sq-1):
-                for w in range(sq):
-                    if cnt < n:
-                        ax[h,w].imshow(npdata[inds[cnt]])
-                        ax[h,w].set_title('%d'%batch_idxs[inds[cnt]])
-                    cnt+=1
-            plt.savefig('train%010d_cluster_%03d.png'%(train_cnt, c)); plt.close()
-
-
-
-
-
 def test_acn(train_cnt, do_plot):
     vae_model.eval()
     prior_model.eval()
+    pcnn_decoder.eval()
     test_loss = 0
     print('starting test', train_cnt)
     st = time.time()
@@ -521,26 +486,113 @@ def test_acn(train_cnt, do_plot):
     print('finished test', time.time()-st)
     return test_loss
 
-class IndexedDataset(Dataset):
-    def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
-        """ class to provide indexes into the data
-        """
-        self.indexed_dataset = dataset_function(path,
-                             download=download,
-                             train=train,
-                             transform=transform)
+def call_tsne_plot():
+    vae_model.eval()
+    pcnn_decoder.eval()
+    with torch.no_grad():
+        valid_buffer.reset_unique()
+        batch = valid_buffer.get_unique_minibatch(args.num_tsne)
+        batch_idx = batch[-1]
+        states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
+        data = next_states[:,-1:]
+        # yhat_batch is bt 0-1
+        z, u_q, s_q = vae_model(data)
+        yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
+        end = args.model_loadpath.split('.')[-1]
+        html_path = args.model_loadpath.replace(end, 'html')
+        X = u_q.cpu().numpy()
+        images = yhat_batch[:,0].cpu().numpy()
+        #images = data[:,0].cpu().numpy()
+        print(images.min(), images.max())
+        tsne_plot(X=X, images=images, color=batch_idx, perplexity=args.perplexity,
+                  html_out_path=html_path)
 
-    def __getitem__(self, index):
-        data, target = self.indexed_dataset[index]
-        return data, target, index
+def sample():
+    print('starting sample', train_cnt)
+    from skvideo.io import vwrite
+    vae_model.eval()
+    pcnn_decoder.eval()
+    if '.pt' in args.model_loadpath:
+        end = '.pt'
+    if '.pkl' in args.model_loadpath:
+        end = '.pkl'
+    basedir = args.model_loadpath.replace(end, '')
+    if not os.path.exists(basedir):
+        os.makedirs(basedir)
+    print('writing to: %s'%basedir)
 
-    def __len__(self):
-        return len(self.indexed_dataset)
+    if args.use_training_set:
+        data_buffer = train_buffer
+        print('using training data')
+        name = 'tr'
+    else:
+        print('using valid data')
+        name = 'va'
+        data_buffer = valid_buffer
 
-def save_checkpoint(state, filename='model.pkl'):
-    print("starting save of model %s" %filename)
-    torch.save(state, filename)
-    print("finished save of model %s" %filename)
+    with torch.no_grad():
+        data_buffer.reset_unique()
+        for i in range(10):
+            if data_buffer.unique_available:
+                batch = data_buffer.get_unique_minibatch(args.batch_size)
+                # next state
+                np_data = batch[3][:,-1:]
+                batch_idx = batch[-1]
+                states, actions, rewards, next_states = make_state(batch[:-1], DEVICE, 255.)
+                data = next_states[:,-1:]
+                z, u_q, s_q = vae_model(data)
+                # yhat_batch is bt 0-1
+                st = time.time()
+                yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
+                np_yhat_batch = yhat_batch.detach().cpu().numpy()
+                if args.teacher_force:
+                    canvas = data
+                else:
+                    canvas = torch.zeros_like(data)
+                output_canvas = torch.zeros_like(data)
+                building_canvas = []
+                #print('sampling image', bi)
+                for i in range(canvas.shape[1]):
+                    for j in range(canvas.shape[2]):
+                        print('j', j)
+                        for k in range(canvas.shape[3]):
+                            #output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1] float_condition=z[bi:bi+1]))
+                            output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                            if  args.teacher_force:
+                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+                            else:
+                                #canvas[:,i,j,k] = torch.round(output[:,i,j,k].detach())
+                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+                                #output_canvas = canvas
+                            building_canvas.append(output_canvas[0].detach().cpu().numpy())
+                building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
+                print('writing building movie')
+                if args.teacher_force:
+                    name +='tf'
+                mname = os.path.join(basedir, '%010d%s.mp4'%(batch_idx[0],name))
+                vwrite(mname, building_canvas)
+                et = time.time()
+                print(et-st)
+                np_bi = output_canvas.detach().cpu().numpy()
+                print(np_bi.min(), np_bi.max())
+                for bi, true_idx in enumerate(batch_idx):
+                    iname = os.path.join(basedir, '%010d%s.png'%(true_idx,name))
+                    #np_bi = output_canvas[bi,0].detach().cpu().numpy()
+                    f,ax = plt.subplots(1,3)
+                    ax[0].imshow(np_data[bi,0])
+                    ax[0].set_title('true')
+                    ax[1].imshow(np_bi[bi,0])
+                    ax[1].set_title('est')
+                    ax[2].imshow(np_yhat_batch[bi,0])
+                    ax[2].set_title('est')
+                    plt.savefig(iname)
+                    print('saving', iname)
+                    plt.close()
+                embed()
+    sys.exit()
+    #    print("starting img")
+
+
 
 #def train_acn(info, model_dict, data_buffers, phase='train'):
 #    encoder_model = model_dict['encoder_model']
@@ -952,11 +1004,15 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('-t', '--tsne', action='store_true', default=False)
+    parser.add_argument( '--use_training_set', action='store_true', default=False, help='use training set for sampling')
+    parser.add_argument( '-tf', '--teacher_force', action='store_true', default=False, help='use teacher force in sampling')
     parser.add_argument('-l', '--model_loadpath', default='')
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=200000, type=int)
     parser.add_argument('-le', '--log_every', default=200000, type=int)
     parser.add_argument('-bs', '--batch_size', default=256, type=int)
+    parser.add_argument('--num_tsne', default=256, type=int)
+    parser.add_argument('--perplexity', default=3, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=40, type=int)
@@ -1019,7 +1075,6 @@ if __name__ == '__main__':
 
     train_cnt = 0
     vae_model = ConvVAE(args.code_length, input_size=1, num_output_channels=1).to(DEVICE)
-    #vae_model = ConvVAE(args.code_length, input_size=nmix, num_output_channels=1).to(DEVICE)
 
     prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
     pcnn_decoder = GatedPixelCNN(input_dim=1,
@@ -1041,9 +1096,9 @@ if __name__ == '__main__':
     prior_model.to(DEVICE)
     # TODO write model loader and args.sample
     if args.sample:
-        test_acn(train_cnt, True)
+        sample()
     if args.tsne:
-        tsne_plot(vae_model, train_cnt, valid_buffer, num_clusters=30)
+        call_tsne_plot()
     else:
         #parameters = list(vae_model.parameters()) + list(prior_model.parameters())
         parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())

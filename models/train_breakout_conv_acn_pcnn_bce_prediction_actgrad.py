@@ -20,7 +20,7 @@ import time
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 import cv2
-
+from copy import deepcopy
 from torch import nn, optim
 import torch
 from torch.nn import functional as F
@@ -32,7 +32,7 @@ from imageio import imsave
 from ae_utils import save_checkpoint, handle_plot_ckpt
 from train_breakout_conv_action_model import load_avg_grad_cam
 from make_tsne_plot import tsne_plot
-from pixel_cnn import GatedPixelCNN
+from bad_pixel_cnn import GatedPixelCNN
 #from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 sys.path.append('../agents')
 from replay import ReplayMemory
@@ -89,24 +89,6 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
         load_buffer = sbuffer
     assert load_buffer.count > 10
     return load_buffer, small_path
-
-#def prepare_next_state(st, DEVICE, NORM_BY):
-#    # states come in at uint8
-#    # Can use BCE if we convert to be between 0 and one - but this means we miss
-#    # color detail
-#    output = (torch.FloatTensor(st)/255.0).to(DEVICE)
-#    output[output>0] = 1.0
-#    #return o
-#    #
-#    # should be converted to float between -1 and 1
-#    #output = (2*torch.FloatTensor(st)/NORM_BY-1).to(DEVICE)
-#    #assert output.max() < 1.01
-#    #assert output.min() > -1.01
-#    # should be converted to float between 0 and 1
-#    #output = (torch.FloatTensor(st)/NORM_BY).to(DEVICE)
-#    assert output.max() < 1.01
-#    assert output.min() > -.01
-#    return output
 
 def prepare_state(st, DEVICE, NORM_BY):
     # states come in at uint8 - should be converted to float between -1 and 1
@@ -386,10 +368,14 @@ def train_acn(train_cnt):
         u_p, s_p = prior_model(u_q)
         kl = kl_loss_function(u_q, s_q, u_p, s_p)
         drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=True, inplace=False)
+        #zero_out = torch.Tensor(random_state.randint(0,2,bs))
+        #for zo in range(bs): drop_next_state[zo] *= zero_out[zo]
         yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
         rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
         #rec_loss = (rec_loss[:,0]*train_grad[batch_idx] + rec_loss*.5).sum()
-        rec_loss = (rec_loss[:,0]*train_grad[batch_idx]).sum()
+        #grad_scale = train_grad[min(batch_idx-1, 0)]train_grad[batch_idx]+train_grad[min([batch_idx+1, len(train_grad)))
+        grad_scale = train_grad[batch_idx]
+        rec_loss = (rec_loss[:,0]*grad_scale + rec_loss*.1).sum()
         # input should be scaled bt -1 and 1 for dml
         #rec_loss = discretized_mix_logistic_loss(yhat_batch, next_state, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
@@ -404,6 +390,61 @@ def train_acn(train_cnt):
         train_cnt+=bs
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
+
+def test_acn(train_cnt, do_plot):
+    vae_model.eval()
+    prior_model.eval()
+    pcnn_decoder.eval()
+    test_loss = 0
+    print('starting test', train_cnt)
+    st = time.time()
+    seen = 0
+    with torch.no_grad():
+        valid_buffer.reset_unique()
+        for i in range(10):
+            if valid_buffer.unique_available:
+                batch = valid_buffer.get_unique_minibatch(args.batch_size)
+                batch_idx = batch[-1]
+                states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
+                bs = states.shape[0]
+                # yhat_batch is bt 0-1
+                z, u_q, s_q = vae_model(states)
+                u_p, s_p = prior_model(u_q)
+                kl = kl_loss_function(u_q, s_q, u_p, s_p)
+                drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=True, inplace=False)
+                #zero_out = torch.Tensor(random_state.randint(0,2,bs))
+                #for zo in range(bs): drop_next_state[zo] *= zero_out[zo]
+
+                yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
+                rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
+                #rec_loss = (rec_loss[:,0]*valid_grad[batch_idx] + rec_loss*.5).sum()
+                grad_scale = valid_grad[batch_idx]
+                rec_loss = (rec_loss[:,0]*grad_scale + rec_loss*.1).sum()
+                #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
+                loss = kl+rec_loss
+                test_loss+= loss.item()
+                seen += bs
+                if i == 0:
+                    if do_plot:
+                         print('writing img')
+                         n = min(bs, 8)
+                         # sampled yhat_batch is bt 0-1
+                         last_state = states[:,3:4]
+                         # data should be between 0 and 1 to be plotted with
+                         comparison = torch.cat([
+                                                 last_state[:n],
+                                                 drop_next_state[:n],
+                                                 next_state[:n],
+                                                 valid_grad[batch_idx][:n][:,None],
+                                                 yhat_batch[:n]])
+                         img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
+                         save_image(comparison.cpu(), img_name, nrow=n)
+                         print('finished writing img', img_name)
+
+    test_loss /= seen
+    print('====> Test set loss: {:.4f}'.format(test_loss))
+    print('finished test', time.time()-st)
+    return test_loss
 
 def call_tsne_plot():
     vae_model.eval()
@@ -426,150 +467,159 @@ def call_tsne_plot():
         tsne_plot(X=X, images=images, color=batch_idx, perplexity=args.perplexity,
                   html_out_path=html_path)
 
-def test_acn(train_cnt, do_plot):
-    vae_model.eval()
-    prior_model.eval()
-    pcnn_decoder.eval()
-    test_loss = 0
-    print('starting test', train_cnt)
-    st = time.time()
-    seen = 0
-    with torch.no_grad():
-        valid_buffer.reset_unique()
-        for i in range(10):
-            if valid_buffer.unique_available:
-                batch = valid_buffer.get_unique_minibatch(args.batch_size)
-                batch_idx = batch[-1]
-                states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
-                bs = states.shape[0]
-                # yhat_batch is bt 0-1
-                z, u_q, s_q = vae_model(states)
-                u_p, s_p = prior_model(u_q)
-                kl = kl_loss_function(u_q, s_q, u_p, s_p)
-                drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=False, inplace=False)
-                yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
-                rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
-                #rec_loss = (rec_loss[:,0]*valid_grad[batch_idx] + rec_loss*.5).sum()
-                rec_loss = (rec_loss[:,0]*valid_grad[batch_idx]).sum()
-                #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
-                loss = kl+rec_loss
-                test_loss+= loss.item()
-                seen += bs
-                if i == 0:
-                    if do_plot:
-                         print('writing img')
-                         n = min(bs, 8)
-                         # sampled yhat_batch is bt 0-1
-                         last_state = states[:,3:4]
-                         # data should be between 0 and 1 to be plotted with
-                         comparison = torch.cat([
-                                                 last_state[:n],
-                                                 drop_next_state[:n],
-                                                 next_state[:n],
-                                                 yhat_batch[:n]])
-                         img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
-                         save_image(comparison.cpu(), img_name, nrow=n)
-                         print('finished writing img', img_name)
-
-    test_loss /= seen
-    print('====> Test set loss: {:.4f}'.format(test_loss))
-    print('finished test', time.time()-st)
-    return test_loss
-
 def sample():
     print('starting sample', train_cnt)
     from skvideo.io import vwrite
     vae_model.eval()
     pcnn_decoder.eval()
-    basedir = args.model_loadpath.replace('.pt', '')
-    if args.use_training_set:
-        data_buffer = train_buffer
-        print('using training data')
-        name = 'tr'
-    else:
-        print('using valid data')
-        name = 'va'
-        data_buffer = valid_buffer
-
-    if not os.path.exists(basedir):
-        os.makedirs(basedir)
-    print('writing to: %s'%basedir)
+    output_savepath = args.model_loadpath.replace('.pt', '')
+    data_dict = {'train':train_buffer, 'valid':valid_buffer}
     with torch.no_grad():
-        data_buffer.reset_unique()
-        for i in range(10):
-            if data_buffer.unique_available:
-                batch = data_buffer.get_unique_minibatch(args.batch_size)
-                np_next_states = batch[3]
-                batch_idx = batch[-1]
-                states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
-                z, u_q, s_q = vae_model(states)
-                # yhat_batch is bt 0-1
-                canvas = next_state
-                output_canvas = 0.0*next_state
-                #for bi in range(canvas.shape[0]):
-                # sample one at a time due to memory constraints
-                st = time.time()
-                #if args.teacher_force:
-                #    canvas = next_state
+        for phase in ['train', 'valid']:
+            data_buffer = data_dict[phase]
+            data_buffer.reset_unique()
+            batch = data_buffer.get_unique_minibatch(args.batch_size)
+            batch_idx = batch[-1]
+            states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
+            data = states
+            target = next_state
+            bs = data.shape[0]
+            z, u_q, s_q = vae_model(data)
+            # teacher forced version
+            yhat_batch = torch.sigmoid(pcnn_decoder(x=target, float_condition=z))
+            u_p, s_p = prior_model(u_q)
+            canvas = torch.zeros_like(target)
+            building_canvas = []
+            for i in range(canvas.shape[1]):
+                for j in range(canvas.shape[2]):
+                    print('sampling row: %s'%j)
+                    for k in range(canvas.shape[3]):
+                        output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                        canvas[:,i,j,k] = output[:,i,j,k].detach()
+                    #if not k%5:
+                    building_canvas.append(deepcopy(canvas[0].detach().cpu().numpy()))
+            f,ax = plt.subplots(bs, 3, sharex=True, sharey=True, figsize=(2,2*bs))
+            npdata = target.detach().cpu().numpy()
+            npoutput = output.detach().cpu().numpy()
+            npyhat = yhat_batch.detach().cpu().numpy()
+            for idx in range(bs):
+                ax[idx,0].imshow(npdata[idx,0], cmap=plt.cm.gray)
+                ax[idx,0].set_title('true')
+                ax[idx,1].imshow(npyhat[idx,0], cmap=plt.cm.gray)
+                ax[idx,1].set_title('tf')
+                ax[idx,2].imshow(npoutput[idx,0], cmap=plt.cm.gray)
+                ax[idx,2].set_title('sam')
+                ax[idx,0].axis('off')
+                ax[idx,1].axis('off')
+                ax[idx,2].axis('off')
+            iname = output_savepath + '_sample_%s.png'%phase
+            print('plotting %s'%iname)
+            plt.savefig(iname)
+            plt.close()
 
-                #drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=False, inplace=False)
-                #yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
-                yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
-                np_yhat_batch = yhat_batch.detach().cpu().numpy()
-                if args.teacher_force:
-                    canvas = next_state
-                else:
-                    canvas = torch.zeros_like(next_state)
-                output_canvas = torch.zeros_like(next_state)
-                building_canvas = []
-                #print('sampling image', bi)
-                for i in range(canvas.shape[1]):
-                    for j in range(canvas.shape[2]):
-                        print('j', j)
-                        for k in range(canvas.shape[3]):
-                            #output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1] float_condition=z[bi:bi+1]))
-                            output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
-                            if  args.teacher_force:
-                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
-                            else:
-                                #canvas[:,i,j,k] = torch.round(output[:,i,j,k].detach())
-                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
-                                #output_canvas = canvas
-                            building_canvas.append(output_canvas[0].detach().cpu().numpy())
-                print(yhat_batch[:,0,0,0])
-                print(output[:,0,0,0])
-                print(next_state[:,0,0,0])
-                print('-------1')
-                print(yhat_batch[:,0,0,1])
-                print(output[:,0,0,1])
-                print(next_state[:,0,0,1])
-                building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
-                print('writing building movie')
-                if args.teacher_force:
-                    name +='tf'
-                mname = os.path.join(basedir, '%010d%s.mp4'%(batch_idx[0],name))
-                vwrite(mname, building_canvas)
-                et = time.time()
-                print(et-st)
-                np_bi = output_canvas.detach().cpu().numpy()
-                print(np_bi.min(), np_bi.max())
-                for bi, true_idx in enumerate(batch_idx):
-                    iname = os.path.join(basedir, '%010d%s.png'%(true_idx,name))
-                    #np_bi = output_canvas[bi,0].detach().cpu().numpy()
-                    f,ax = plt.subplots(1,3)
-                    ax[0].imshow(np_next_states[bi,0])
-                    ax[0].set_title('true')
-                    ax[1].imshow(np_bi[bi,0])
-                    ax[1].set_title('est')
-                    ax[2].imshow(np_yhat_batch[bi,0])
-                    ax[2].set_title('est')
-                    plt.savefig(iname)
-                    print('saving', iname)
-                    plt.close()
-                embed()
-    sys.exit()
-    #    print("starting img")
+            building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
+            print('writing building movie')
+            mname = output_savepath + '_build_%s.mp4'%phase
+            vwrite(mname, building_canvas)
+            print('finished %s'%mname)
+            break
+        sys.exit()
 
+
+#def sample():
+#    print('starting sample', train_cnt)
+#    from skvideo.io import vwrite
+#    vae_model.eval()
+#    pcnn_decoder.eval()
+#    basedir = args.model_loadpath.replace('.pt', '')
+#    if args.use_training_set:
+#        data_buffer = train_buffer
+#        print('using training data')
+#        name = 'tr'
+#    else:
+#        print('using valid data')
+#        name = 'va'
+#        data_buffer = valid_buffer
+#
+#    if not os.path.exists(basedir):
+#        os.makedirs(basedir)
+#    print('writing to: %s'%basedir)
+#    with torch.no_grad():
+#        data_buffer.reset_unique()
+#        for i in range(10):
+#            if data_buffer.unique_available:
+#                batch = data_buffer.get_unique_minibatch(args.batch_size)
+#                np_next_states = batch[3]
+#                batch_idx = batch[-1]
+#                states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
+#                z, u_q, s_q = vae_model(states)
+#                # yhat_batch is bt 0-1
+#                canvas = next_state
+#                output_canvas = 0.0*next_state
+#                #for bi in range(canvas.shape[0]):
+#                # sample one at a time due to memory constraints
+#                st = time.time()
+#                #if args.teacher_force:
+#                #    canvas = next_state
+#
+#                #drop_next_state = F.dropout(next_state, p=args.dropout_prob, training=False, inplace=False)
+#                #yhat_batch = torch.sigmoid(pcnn_decoder(x=drop_next_state, float_condition=z))
+#                yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
+#                np_yhat_batch = yhat_batch.detach().cpu().numpy()
+#                if args.teacher_force:
+#                    canvas = next_state
+#                else:
+#                    canvas = torch.zeros_like(next_state)
+#                output_canvas = torch.zeros_like(next_state)
+#                building_canvas = []
+#                #print('sampling image', bi)
+#                for i in range(canvas.shape[1]):
+#                    for j in range(canvas.shape[2]):
+#                        print('j', j)
+#                        for k in range(canvas.shape[3]):
+#                            #output = torch.sigmoid(pcnn_decoder(x=canvas[bi:bi+1] float_condition=z[bi:bi+1]))
+#                            output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+#                            if  args.teacher_force:
+#                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+#                            else:
+#                                #canvas[:,i,j,k] = torch.round(output[:,i,j,k].detach())
+#                                output_canvas[:,i,j,k] = output[:,i,j,k].detach() #.cpu().numpy()
+#                                #output_canvas = canvas
+#                            building_canvas.append(output_canvas[0].detach().cpu().numpy())
+#                print(yhat_batch[:,0,0,0])
+#                print(output[:,0,0,0])
+#                print(next_state[:,0,0,0])
+#                print('-------1')
+#                print(yhat_batch[:,0,0,1])
+#                print(output[:,0,0,1])
+#                print(next_state[:,0,0,1])
+#                building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
+#                print('writing building movie')
+#                if args.teacher_force:
+#                    name +='tf'
+#                mname = os.path.join(basedir, '%010d%s.mp4'%(batch_idx[0],name))
+#                vwrite(mname, building_canvas)
+#                et = time.time()
+#                print(et-st)
+#                np_bi = output_canvas.detach().cpu().numpy()
+#                print(np_bi.min(), np_bi.max())
+#                for bi, true_idx in enumerate(batch_idx):
+#                    iname = os.path.join(basedir, '%010d%s.png'%(true_idx,name))
+#                    #np_bi = output_canvas[bi,0].detach().cpu().numpy()
+#                    f,ax = plt.subplots(1,3)
+#                    ax[0].imshow(np_next_states[bi,0])
+#                    ax[0].set_title('true')
+#                    ax[1].imshow(np_bi[bi,0])
+#                    ax[1].set_title('est')
+#                    ax[2].imshow(np_yhat_batch[bi,0])
+#                    ax[2].set_title('est')
+#                    plt.savefig(iname)
+#                    print('saving', iname)
+#                    plt.close()
+#                embed()
+#    sys.exit()
+#    #    print("starting img")
+#
 #def save_checkpoint(state, filename='model.pt'):
 #    print("starting save of model %s" %filename)
 #    torch.save(state, filename)
@@ -774,27 +824,29 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('--use_training_set', action='store_true', default=False)
     parser.add_argument('-t', '--tsne', action='store_true', default=False)
+    parser.add_argument('-p', '--perplexity', default=3)
     parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
     parser.add_argument('-nt', '--num_tsne', default=300, type=int)
-    parser.add_argument('-dp', '--dropout_prob', default=0.8, type=float)
+    parser.add_argument('-dp', '--dropout_prob', default=0.2, type=float)
     parser.add_argument('-l', '--model_loadpath', default='')
-    parser.add_argument('-p', '--perplexity', default=3)
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=200000, type=int)
-    parser.add_argument('-le', '--log_every', default=200000, type=int)
+    parser.add_argument( '--log_every', default=200000, type=int)
     parser.add_argument('-me', '--max_examples', default=80000, type=int)
     parser.add_argument('-bs', '--batch_size', default=256, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
-    parser.add_argument('-cl', '--code_length', default=40, type=int)
+    parser.add_argument('-cl', '--code_length', default=128, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
     parser.add_argument('-lr', '--learning_rate', default=2e-5)
     parser.add_argument('-md', '--model_savedir', default='../../model_savedir')
+    #parser.add_argument('--train_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
+    #parser.add_argument('--valid_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
+    parser.add_argument('--train_buffer', default='BreakoutNewActionNOAnnealingPRIOR00/BreakoutNewActionNOAnnealingPRIOR_0007014244q_train_buffer.npz')
+    parser.add_argument('--valid_buffer', default='BreakoutNewActionNOAnnealingPRIOR00/BreakoutNewActionNOAnnealingPRIOR_0000500549q_train_buffer.npz')
 
-    parser.add_argument('--train_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
-    parser.add_argument('--valid_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
 
     parser.add_argument('-aml', '--action_model_loadpath', default='results_train_breakout_action/sigcacn_breakout_action_0075002880ex.pt')
 
@@ -809,18 +861,13 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout_p0')
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout_redopcnn')
     action_model_loadpath = os.path.join(args.model_savedir, args.action_model_loadpath)
 
     train_data_path = os.path.join(args.model_savedir, args.train_buffer)
     valid_data_path = os.path.join(args.model_savedir, args.valid_buffer)
     train_buffer, train_small_path = make_subset_buffer(train_data_path, max_examples=args.max_examples)
     valid_buffer, valid_small_path = make_subset_buffer(valid_data_path, max_examples=int(args.max_examples*.1))
-    valid_grad = load_avg_grad_cam(action_model_loadpath, valid_buffer, valid_small_path)
-    train_grad = load_avg_grad_cam(action_model_loadpath, train_buffer, train_small_path)
-    valid_grad = torch.Tensor(valid_grad).to(DEVICE)
-    train_grad = torch.Tensor(train_grad).to(DEVICE)
-
 
     num_actions = len(set(train_buffer.actions))
     hsize = train_buffer.frames.shape[1]
@@ -845,6 +892,16 @@ if __name__ == '__main__':
 
     print(info['size_training_set'])
     train_cnt = 0
+
+    if args.model_loadpath !='':
+        tmlp =  args.model_loadpath+'.tmp'
+        os.system('cp %s %s'%(args.model_loadpath, tmlp))
+        _dict = torch.load(tmlp, map_location=lambda storage, loc:storage)
+        info = _dict['info']
+        largs = info['args'][-1]
+        args.code_length = largs.code_length
+        args.num_k = largs.num_k
+
     vae_model = ConvVAE(args.code_length, input_size=6, num_output_channels=1).to(DEVICE)
     #vae_model = ConvVAE(args.code_length, input_size=nmix, num_output_channels=1).to(DEVICE)
 
@@ -860,9 +917,6 @@ if __name__ == '__main__':
 
 
     if args.model_loadpath !='':
-        tmlp =  args.model_loadpath+'.tmp'
-        os.system('cp %s %s'%(args.model_loadpath, tmlp))
-        _dict = torch.load(tmlp, map_location=lambda storage, loc:storage)
         vae_model.load_state_dict(_dict['vae_state_dict'])
         prior_model.load_state_dict(_dict['prior_state_dict'])
         pcnn_decoder.load_state_dict(_dict['pcnn_state_dict'])
@@ -880,7 +934,10 @@ if __name__ == '__main__':
     if args.tsne:
         call_tsne_plot()
     else:
-        #parameters = list(vae_model.parameters()) + list(prior_model.parameters())
+        valid_grad = load_avg_grad_cam(action_model_loadpath, valid_buffer, valid_small_path, DEVICE=DEVICE)
+        train_grad = load_avg_grad_cam(action_model_loadpath, train_buffer, train_small_path, DEVICE=DEVICE)
+        valid_grad = torch.Tensor(valid_grad).to(DEVICE)
+        train_grad = torch.Tensor(train_grad).to(DEVICE)
         parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
         opt = optim.Adam(parameters, lr=args.learning_rate)
         test_acn(train_cnt, do_plot=True)
