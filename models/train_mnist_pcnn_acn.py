@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
+import sys
 import time
 import numpy as np
 from copy import deepcopy
@@ -52,12 +53,18 @@ class ConvVAE(nn.Module):
             nn.BatchNorm2d(16),
             nn.ReLU(True),
             nn.Conv2d(in_channels=16,
-                      out_channels=32,
+                      out_channels=16,
                       kernel_size=4,
                       stride=2, padding=1),
-            nn.BatchNorm2d(32),
+            nn.BatchNorm2d(16),
             nn.ReLU(True),
-            nn.Conv2d(in_channels=32,
+            nn.Conv2d(in_channels=16,
+                      out_channels=16,
+                      kernel_size=2,
+                      stride=2, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels=16,
                       out_channels=code_len*2,
                       kernel_size=1,
                       stride=1, padding=0),
@@ -89,12 +96,10 @@ class ConvVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return z, mu, logvar
 
-def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
+def kl_loss_function(u_q, s_q, u_p, s_p):
     ''' reconstruction loss + coding cost
      coding cost is the KL divergence bt posterior and conditional prior
      Args:
-         y_hat: reconstruction output
-         y: target
          u_q: mean of model posterior
          s_q: log std of model posterior
          u_p: mean of conditional prior
@@ -102,9 +107,8 @@ def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
 
      Returns: loss
      '''
-    BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
     acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
-    return BCE+acn_KLD
+    return acn_KLD
 
 
 """
@@ -222,7 +226,7 @@ def train_acn(train_cnt):
         lst = time.time()
         #for xx,i in enumerate(label):
         #    label_size[xx] = i
-        data = data.to(DEVICE)
+        target =data = data.to(DEVICE)
         opt.zero_grad()
         z, u_q, s_q = vae_model(data)
         #yhat_batch = vae_model.decode(u_q, s_q, data)
@@ -231,7 +235,9 @@ def train_acn(train_cnt):
         prior_model.codes[data_index] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
-        loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+        kl = kl_loss_function(u_q, s_q, u_p, s_p)
+        rec_loss = F.binary_cross_entropy(yhat_batch, target, reduction='mean')
+        loss = kl+rec_loss
         loss.backward()
         train_loss+= loss.item()
         opt.step()
@@ -251,20 +257,21 @@ def test_acn(train_cnt, do_plot):
     print(len(valid_loader))
     with torch.no_grad():
         for i, (data, label, data_index) in enumerate(valid_loader):
-            lst = time.time()
-            data = data.to(DEVICE)
+            target = data = data.to(DEVICE)
             z, u_q, s_q = vae_model(data)
             #yhat_batch = vae_model.decode(u_q, s_q, data)
             # add the predicted codes to the input
             yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
             u_p, s_p = prior_model(u_q)
-            loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+            kl = kl_loss_function(u_q, s_q, u_p, s_p)
+            rec_loss = F.binary_cross_entropy(yhat_batch, target, reduction='mean')
+            loss = kl+rec_loss
             test_loss+= loss.item()
             if i == 0 and do_plot:
                 print('writing img')
                 n = min(data.size(0), 8)
                 bs = data.shape[0]
-                comparison = torch.cat([data.view(bs, 1, 28, 28)[:n],
+                comparison = torch.cat([target.view(bs, 1, 28, 28)[:n],
                                       yhat_batch.view(bs, 1, 28, 28)[:n]])
                 img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
                 save_image(comparison.cpu(), img_name, nrow=n)
@@ -282,22 +289,22 @@ def call_tsne_plot():
     prior_model.eval()
     pcnn_decoder.eval()
     with torch.no_grad():
-        valid_buffer.reset_unique()
-        batch = valid_buffer.get_unique_minibatch(args.num_tsne)
-        batch_idx = batch[-1]
-        states, actions, rewards, next_state = make_state(batch[:-1], DEVICE, 255.)
-        # yhat_batch is bt 0-1
-        z, u_q, s_q = vae_model(states)
-        u_p, s_p = prior_model(u_q)
-        yhat_batch = torch.sigmoid(pcnn_decoder(x=next_state, float_condition=z))
-        end = args.model_loadpath.split('.')[-1]
-        html_path = args.model_loadpath.replace(end, 'html')
-        X = u_q.cpu().numpy()
-        images = np.round(yhat_batch.cpu().numpy()[:,0], 0).astype(np.int16)
-        #images = next_state[:,0].cpu().numpy()
-        tsne_plot(X=X, images=images, color=batch_idx, perplexity=args.perplexity,
-                  html_out_path=html_path)
-
+        for phase in ['train', 'valid']:
+            data_loader = data_dict[phase]
+            with torch.no_grad():
+                for batch_idx, (data, label, data_index) in enumerate(data_loader):
+                    target = data = data.to(DEVICE)
+                    # yhat_batch is bt 0-1
+                    z, u_q, s_q = vae_model(data)
+                    u_p, s_p = prior_model(u_q)
+                    yhat_batch = torch.sigmoid(pcnn_decoder(x=target, float_condition=z))
+                    end = args.model_loadpath.split('.')[-1]
+                    html_path = args.model_loadpath.replace(end, 'html')
+                    X = u_q.cpu().numpy()
+                    images = np.round(yhat_batch.cpu().numpy()[:,0], 0).astype(np.int16)
+                    #images = next_state[:,0].cpu().numpy()
+                    tsne_plot(X=X, images=images, color=batch_idx, perplexity=args.perplexity,
+                              html_out_path=html_path)
 
 def sample():
     print('starting sample', train_cnt)
@@ -384,17 +391,17 @@ if __name__ == '__main__':
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=60000*10, type=int)
     parser.add_argument('--log_every', default=60000*10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=256, type=int)
+    parser.add_argument('-bs', '--batch_size', default=128, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
-    parser.add_argument('-cl', '--code_length', default=20, type=int)
+    parser.add_argument('-cl', '--code_length', default=64, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-lr', '--learning_rate', default=1e-5)
+    parser.add_argument('-lr', '--learning_rate', default=1e-4)
     parser.add_argument('-pv', '--possible_values', default=1)
     parser.add_argument('-nc', '--num_classes', default=10)
-    parser.add_argument('-eos', '--encoder_output_size', default=1960)
+    parser.add_argument('-eos', '--encoder_output_size', default=2048)
     parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
     parser.add_argument( '--model_savedir', default='../../model_savedir', help='save checkpoints here')
     parser.add_argument( '--base_datadir', default='../../dataset/', help='save datasets here')
@@ -412,7 +419,7 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'pcnn_acn_mnist')
+    vae_base_filepath = os.path.join(args.model_savedir, 'pcnn_acn_mnist_cl64')
     train_data = IndexedDataset(datasets.MNIST, path=args.base_datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())

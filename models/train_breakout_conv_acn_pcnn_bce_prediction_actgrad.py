@@ -32,7 +32,8 @@ from imageio import imsave
 from ae_utils import save_checkpoint, handle_plot_ckpt
 from train_breakout_conv_action_model import load_avg_grad_cam
 from make_tsne_plot import tsne_plot
-from bad_pixel_cnn import GatedPixelCNN
+#from bad_pixel_cnn import GatedPixelCNN
+from pixel_cnn import GatedPixelCNN
 #from acn_gmp import ConvVAE, PriorNetwork, acn_gmp_loss_function
 sys.path.append('../agents')
 from replay import ReplayMemory
@@ -46,7 +47,7 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
     # in breakout - can safely reduce size to be 80x80 of the given image
     # try to get an even number of each type of reward
 
-    small_path = buffer_path.replace('.npz', '_%06d.npz' %max_examples)
+    small_path = buffer_path.replace('.npz', '_subset_%06d.npz' %max_examples)
     if os.path.exists(small_path):
         print('loading small buffer path')
         print(small_path)
@@ -57,7 +58,7 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
         print(buffer_path)
 
     # TODO if frame size is wrong - we arent handling
-    if load_buffer.count > max_examples:
+    #if load_buffer.count > max_examples:
         print('creating small buffer')
         # actions for breakout:
         # ['NOOP', 'FIRE', 'RIGHT', 'LEFT']
@@ -87,6 +88,7 @@ def make_subset_buffer(buffer_path, max_examples=100000, frame_height=40, frame_
 
         sbuffer.save_buffer(small_path)
         load_buffer = sbuffer
+    print(load_buffer.count)
     assert load_buffer.count > 10
     return load_buffer, small_path
 
@@ -375,7 +377,8 @@ def train_acn(train_cnt):
         #rec_loss = (rec_loss[:,0]*train_grad[batch_idx] + rec_loss*.5).sum()
         #grad_scale = train_grad[min(batch_idx-1, 0)]train_grad[batch_idx]+train_grad[min([batch_idx+1, len(train_grad)))
         grad_scale = train_grad[batch_idx]
-        rec_loss = (rec_loss[:,0]*grad_scale + rec_loss*.1).sum()
+        #rec_loss = (rec_loss[:,0]*grad_scale + rec_loss*.1).sum()
+        rec_loss = (rec_loss[:,0]*grad_scale).sum()
         # input should be scaled bt -1 and 1 for dml
         #rec_loss = discretized_mix_logistic_loss(yhat_batch, next_state, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
         #yhat = sample_from_discretized_mix_logistic(yhat_batch, nr_logistic_mix)
@@ -419,7 +422,8 @@ def test_acn(train_cnt, do_plot):
                 rec_loss = F.binary_cross_entropy(yhat_batch, next_state, reduction='none')
                 #rec_loss = (rec_loss[:,0]*valid_grad[batch_idx] + rec_loss*.5).sum()
                 grad_scale = valid_grad[batch_idx]
-                rec_loss = (rec_loss[:,0]*grad_scale + rec_loss*.1).sum()
+                #rec_loss = (rec_loss[:,0]*grad_scale + rec_loss*.1).sum()
+                rec_loss = (rec_loss[:,0]*grad_scale).sum()
                 #rec_loss = discretized_mix_logistic_loss(yhat_batch, data, nr_mix=nr_logistic_mix, DEVICE=DEVICE)
                 loss = kl+rec_loss
                 test_loss+= loss.item()
@@ -495,12 +499,14 @@ def sample():
                     print('sampling row: %s'%j)
                     for k in range(canvas.shape[3]):
                         output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                        #print(output[0,i,j,k], torch.round(output[0,i,j,k]))
+                        #canvas[:,i,j,k] = torch.round(output[:,i,j,k].detach())
                         canvas[:,i,j,k] = output[:,i,j,k].detach()
                     #if not k%5:
                     building_canvas.append(deepcopy(canvas[0].detach().cpu().numpy()))
             f,ax = plt.subplots(bs, 3, sharex=True, sharey=True, figsize=(2,2*bs))
             npdata = target.detach().cpu().numpy()
-            npoutput = output.detach().cpu().numpy()
+            npoutput = canvas.detach().cpu().numpy()
             npyhat = yhat_batch.detach().cpu().numpy()
             for idx in range(bs):
                 ax[idx,0].imshow(npdata[idx,0], cmap=plt.cm.gray)
@@ -522,8 +528,7 @@ def sample():
             mname = output_savepath + '_build_%s.mp4'%phase
             vwrite(mname, building_canvas)
             print('finished %s'%mname)
-            break
-        sys.exit()
+    sys.exit()
 
 
 #def sample():
@@ -693,8 +698,8 @@ def init_train(model_load_path, train_data_path, valid_data_path):
     info['MODEL_SAVENAME'] = args.savename
     info['MODEL_LEARNING_RATE'] = args.learning_rate
     # create replay buffer
-    train_buffer = make_subset_buffer(train_data_path, max_examples=info['NUM_TRAINING_EXAMPLES'])
-    valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(info['NUM_TRAINING_EXAMPLES']*.1))
+    train_buffer = make_subset_buffer(train_data_path, max_examples=info['NUM_TRAINING_EXAMPLES'], frame_height=args.frame_height, frame_width=args.frame_width)
+    valid_buffer = make_subset_buffer(valid_data_path, max_examples=int(info['NUM_TRAINING_EXAMPLES']*.1), frame_height=args.frame_height, frame_width=args.frame_width)
     valid_buffer = ReplayMemory(load_file=valid_data_path)
     # if train buffer is too large - make random subset
     # 27588 places in 1e6 buffer where reward is nonzero
@@ -832,20 +837,22 @@ if __name__ == '__main__':
     parser.add_argument('-se', '--save_every', default=60000*10, type=int)
     parser.add_argument('-pe', '--plot_every', default=200000, type=int)
     parser.add_argument( '--log_every', default=200000, type=int)
-    parser.add_argument('-me', '--max_examples', default=80000, type=int)
-    parser.add_argument('-bs', '--batch_size', default=256, type=int)
+    parser.add_argument('-me', '--max_examples', default=100000, type=int)
+    parser.add_argument('-bs', '--batch_size', default=128, type=int)
     #parser.add_argument('-nc', '--number_condition', default=4, type=int)
     #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
     parser.add_argument('-cl', '--code_length', default=128, type=int)
+    parser.add_argument('--frame_height', default=40, type=int)
+    parser.add_argument('--frame_width', default=40, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
     parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
     parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
     parser.add_argument('-lr', '--learning_rate', default=2e-5)
     parser.add_argument('-md', '--model_savedir', default='../../model_savedir')
-    #parser.add_argument('--train_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005679481_train.npz')
-    #parser.add_argument('--valid_buffer', default='MFBreakout_train_anneal_14342_04/breakout_S014342_N0005880131_eval.npz')
-    parser.add_argument('--train_buffer', default='BreakoutNewActionNOAnnealingPRIOR00/BreakoutNewActionNOAnnealingPRIOR_0007014244q_train_buffer.npz')
-    parser.add_argument('--valid_buffer', default='BreakoutNewActionNOAnnealingPRIOR00/BreakoutNewActionNOAnnealingPRIOR_0000500549q_train_buffer.npz')
+    parser.add_argument('--train_buffer', default='MFBreakout_train_anneal_14342_05/breakout_S014342_N0001303598_train.npz')
+    parser.add_argument('--valid_buffer', default='MFBreakout_train_anneal_14342_05/breakout_S014342_N0000550155_train.npz')
+    #parser.add_argument('--train_buffer', default='BreakoutNewActionNOAnnealingPRIOR00/BreakoutNewActionNOAnnealingPRIOR_0007014244q_train_buffer.npz')
+    #parser.add_argument('--valid_buffer', default='BreakoutNewActionNOAnnealingPRIOR00/BreakoutNewActionNOAnnealingPRIOR_0000500549q_train_buffer.npz')
 
 
     parser.add_argument('-aml', '--action_model_loadpath', default='results_train_breakout_action/sigcacn_breakout_action_0075002880ex.pt')
@@ -861,13 +868,13 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
-    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_actgrad_dropout_redopcnn')
+    vae_base_filepath = os.path.join(args.model_savedir, 'sigcacn_breakout_binary_bce_pcnn_pred_allactgrad_dropout_redopcnn')
     action_model_loadpath = os.path.join(args.model_savedir, args.action_model_loadpath)
 
     train_data_path = os.path.join(args.model_savedir, args.train_buffer)
     valid_data_path = os.path.join(args.model_savedir, args.valid_buffer)
-    train_buffer, train_small_path = make_subset_buffer(train_data_path, max_examples=args.max_examples)
-    valid_buffer, valid_small_path = make_subset_buffer(valid_data_path, max_examples=int(args.max_examples*.1))
+    train_buffer, train_small_path = make_subset_buffer(train_data_path, max_examples=args.max_examples, frame_height=args.frame_height, frame_width=args.frame_width)
+    valid_buffer, valid_small_path = make_subset_buffer(valid_data_path, max_examples=int(args.max_examples*.1), frame_height=args.frame_height, frame_width=args.frame_width)
 
     num_actions = len(set(train_buffer.actions))
     hsize = train_buffer.frames.shape[1]
@@ -898,6 +905,8 @@ if __name__ == '__main__':
         os.system('cp %s %s'%(args.model_loadpath, tmlp))
         _dict = torch.load(tmlp, map_location=lambda storage, loc:storage)
         info = _dict['info']
+        if 'size_training_set' not in info.keys():
+            info['size_training_set'] = train_buffer.count
         largs = info['args'][-1]
         args.code_length = largs.code_length
         args.num_k = largs.num_k
@@ -929,9 +938,9 @@ if __name__ == '__main__':
     # TODO write model loader and args.sample
     if args.test:
         test_acn(train_cnt, True)
-    if args.sample:
+    elif args.sample:
         sample()
-    if args.tsne:
+    elif args.tsne:
         call_tsne_plot()
     else:
         valid_grad = load_avg_grad_cam(action_model_loadpath, valid_buffer, valid_small_path, DEVICE=DEVICE)
