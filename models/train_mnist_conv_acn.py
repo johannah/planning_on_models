@@ -130,7 +130,7 @@ def acn_loss_function(y_hat, y, u_q, s_q, u_p, s_p):
      '''
     BCE = F.binary_cross_entropy(y_hat, y, reduction='sum')
     acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
-    return BCE+acn_KLD
+    return BCE, acn_KLD
 
 
 """
@@ -190,7 +190,8 @@ class PriorNetwork(nn.Module):
         logstd = self.fc2_s(h1)
         return mu, logstd
 
-def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
+def handle_plot_ckpt(do_plot, train_cnt, train_loss_dict):
+    avg_train_loss = train_loss_dict['loss']
     info['train_losses'].append(avg_train_loss)
     info['train_cnts'].append(train_cnt)
     test_loss = test_acn(train_cnt,do_plot)
@@ -212,12 +213,12 @@ def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
                     info['test_cnts'],
                     info['test_losses'], name=plot_name, rolling_length=rolling)
 
-def handle_checkpointing(train_cnt, avg_train_loss):
+def handle_checkpointing(train_cnt, train_loss_dict):
     if ((train_cnt-info['last_save'])>=args.save_every):
         print("Saving Model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['last_save']))
         info['last_save'] = train_cnt
         info['save_times'].append(time.time())
-        handle_plot_ckpt(True, train_cnt, avg_train_loss)
+        handle_plot_ckpt(True, train_cnt, train_loss_dict)
         filename = vae_base_filepath + "_%010dex.pkl"%train_cnt
         state = {
                  'vae_state_dict':vae_model.state_dict(),
@@ -228,14 +229,14 @@ def handle_checkpointing(train_cnt, avg_train_loss):
         save_checkpoint(state, filename=filename)
     elif not len(info['train_cnts']):
         print("Logging model: %s no previous logs"%(train_cnt))
-        handle_plot_ckpt(False, train_cnt, avg_train_loss)
+        handle_plot_ckpt(False, train_cnt, train_loss_dict)
     elif (train_cnt-info['last_plot'])>=args.plot_every:
         print("Plotting Model at cnt:%s cnt since last plotted:%s"%(train_cnt, train_cnt-info['last_plot']))
-        handle_plot_ckpt(True, train_cnt, avg_train_loss)
+        handle_plot_ckpt(False, train_cnt, train_loss_dict)
     else:
         if (train_cnt-info['train_cnts'][-1])>=args.log_every:
             print("Logging Model at cnt:%s cnt since last logged:%s"%(train_cnt, train_cnt-info['train_cnts'][-1]))
-            handle_plot_ckpt(False, train_cnt, avg_train_loss)
+            handle_plot_ckpt(False, train_cnt, train_loss_dict)
 
 def train_acn(train_cnt):
     vae_model.train()
@@ -252,13 +253,18 @@ def train_acn(train_cnt):
         prior_model.codes[data_index] = u_q.detach().cpu().numpy()
         prior_model.fit_knn(prior_model.codes)
         u_p, s_p = prior_model(u_q)
-        loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+        bce, KLD = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+        loss = bce+KLD
         loss.backward()
         train_loss+= loss.item()
         opt.step()
         # add batch size because it hasn't been added to train cnt yet
-        avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
-        handle_checkpointing(train_cnt, avg_train_loss)
+        avg_kl_loss = KLD.item()/float((train_cnt+data.shape[0])-init_cnt)
+        avg_rec_loss = bce.item()/float((train_cnt+data.shape[0])-init_cnt)
+        avg_loss = loss.item()/float((train_cnt+data.shape[0])-init_cnt)
+        loss_dict = {'kl':avg_kl_loss, 'BCE':avg_rec_loss, 'loss':avg_loss}
+        print(loss_dict)
+        handle_checkpointing(train_cnt, loss_dict)
         train_cnt+=len(data)
     print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
     return train_cnt
@@ -277,7 +283,8 @@ def test_acn(train_cnt, do_plot):
             data = data.to(DEVICE)
             yhat_batch, u_q, s_q = vae_model(data)
             u_p, s_p = prior_model(u_q)
-            loss = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+            bce, KLD = acn_loss_function(yhat_batch, data, u_q, s_q, u_p, s_p)
+            loss = bce+KLD
             test_loss+= loss.item()
             if i == 0 and do_plot:
                 print('writing img')
@@ -340,12 +347,14 @@ if __name__ == '__main__':
     else:
         DEVICE = 'cpu'
 
+    #dpath = '../../dataset/MNIST/'
+    dpath = '../../dataset/FashionMNIST/'
     vae_base_filepath = os.path.join(config.model_savedir, 'sigcacn')
-    train_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
+    train_data = IndexedDataset(datasets.FashionMNIST, path=dpath,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    test_data = IndexedDataset(datasets.MNIST, path=config.base_datadir,
+    test_data = IndexedDataset(datasets.FashionMNIST, path=dpath,
                                train=False, download=True,
                                transform=transforms.ToTensor())
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)

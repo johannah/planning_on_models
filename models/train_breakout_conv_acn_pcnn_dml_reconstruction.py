@@ -1006,6 +1006,7 @@ if __name__ == '__main__':
                         ).to(DEVICE)
     prior_model = PriorNetwork(size_training_set=size_training_set, code_length=args.code_length, k=args.num_k).to(DEVICE)
     pcnn_decoder = GatedPixelCNN(input_dim=1,
+                                 # THIS SEEMS WRONG
                                  dim=info['NUM_PCNN_FILTERS'],
                                  n_layers=info['NUM_PCNN_LAYERS'],
                                  n_classes=info['num_actions'],

@@ -18,32 +18,20 @@ import os
 import sys
 import time
 import numpy as np
-from copy import deepcopy
+from copy import deepcopy, copy
 from sklearn.neighbors import KNeighborsClassifier
 from torch import nn, optim
 import torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
-#from acn import ConvVAE, PriorNetwork
 from torchvision.utils import save_image
 from IPython import embed
-from lstm_utils import plot_losses
-from make_tsne_plot import tsne_plot
 from pixel_cnn import GatedPixelCNN
-torch.manual_seed(394)
 
-"""
-\cite{acn} The ACN encoder was a convolutional
-network fashioned after a VGG-style classifier (Simonyan
-& Zisserman, 2014), and the encoding distribution q(z|x)
-was a unit variance Gaussian with mean specified by the
-output of the encoder network.
-size of z is 16 for mnist, 128 for others
-"""
-class ConvVAE(nn.Module):
+class ConvEncoder(nn.Module):
     def __init__(self, code_len, input_size=1, encoder_output_size=1000):
-        super(ConvVAE, self).__init__()
+        super(ConvEncoder, self).__init__()
         self.code_len = code_len
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels=input_size,
@@ -96,27 +84,6 @@ class ConvVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return z, mu, logvar
 
-def kl_loss_function(u_q, s_q, u_p, s_p):
-    ''' reconstruction loss + coding cost
-     coding cost is the KL divergence bt posterior and conditional prior
-     Args:
-         u_q: mean of model posterior
-         s_q: log std of model posterior
-         u_p: mean of conditional prior
-         s_p: log std of conditional prior
-
-     Returns: loss
-     '''
-    acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
-    return acn_KLD
-
-
-"""
-/cite{acn} The prior network was an
-MLP with three hidden layers each containing 512 tanh
-units, and skip connections from the input to all hidden
-layers and all hiddens to the output layer
-"""
 class PriorNetwork(nn.Module):
     def __init__(self, size_training_set, code_length, n_hidden=512, k=5, random_seed=4543):
         super(PriorNetwork, self).__init__()
@@ -136,9 +103,7 @@ class PriorNetwork(nn.Module):
     def fit_knn(self, codes):
         ''' will reset the knn  given an nd array
         '''
-        st = time.time()
         self.codes = codes
-        assert(len(self.codes)>1)
         y = np.zeros((len(self.codes)))
         self.knn.fit(self.codes, y)
 
@@ -156,10 +121,10 @@ class PriorNetwork(nn.Module):
         return self.codes[neighbor_indexes[np.arange(bsize), chosen_neighbor_index]]
 
     def forward(self, codes):
-        st = time.time()
+        device = codes.device
         np_codes = codes.cpu().detach().numpy()
         previous_codes = self.batch_pick_close_neighbor(np_codes)
-        previous_codes = torch.FloatTensor(previous_codes).to(DEVICE)
+        previous_codes = torch.FloatTensor(previous_codes).to(device)
         return self.encode(previous_codes)
 
     def encode(self, prev_code):
@@ -168,181 +133,139 @@ class PriorNetwork(nn.Module):
         logstd = self.fc2_s(h1)
         return mu, logstd
 
-def handle_plot_ckpt(do_plot, train_cnt, avg_train_loss):
-    info['train_losses'].append(avg_train_loss)
-    info['train_cnts'].append(train_cnt)
-    test_loss = test_acn(train_cnt,do_plot)
-    info['test_losses'].append(test_loss)
-    info['test_cnts'].append(train_cnt)
-    print('examples %010d train loss %03.03f test loss %03.03f' %(train_cnt,
-                              info['train_losses'][-1], info['test_losses'][-1]))
-    # plot
-    if do_plot:
-        info['last_plot'] = train_cnt
-        rolling = 3
-        if len(info['train_losses'])<rolling*3:
-            rolling = 1
-        print('adding last loss plot', train_cnt)
-        plot_name = vae_base_filepath + "_%010dloss.png"%train_cnt
-        print('plotting loss: %s with %s points'%(plot_name, len(info['train_cnts'])))
-        plot_losses(info['train_cnts'],
-                    info['train_losses'],
-                    info['test_cnts'],
-                    info['test_losses'], name=plot_name, rolling_length=rolling)
+def set_model_mode(model_dict, phase):
+    for name, model in model_dict.items():
+        print('setting', name, phase)
+        if name != 'opt':
+            if phase == 'valid':
+                model_dict[name].eval()
+            else:
+                model_dict[name].train()
+    return model_dict
 
-def handle_checkpointing(train_cnt, avg_train_loss):
-    if ((train_cnt-info['last_save'])>=args.save_every):
-        print("Saving Model at cnt:%s cnt since last saved:%s"%(train_cnt, train_cnt-info['last_save']))
-        info['last_save'] = train_cnt
-        info['save_times'].append(time.time())
-        handle_plot_ckpt(True, train_cnt, avg_train_loss)
-        filename = vae_base_filepath + "_%010dex.pt"%train_cnt
-        state = {
-                 'vae_state_dict':vae_model.state_dict(),
-                 'prior_state_dict':prior_model.state_dict(),
-                 'pcnn_state_dict':pcnn_decoder.state_dict(),
-                 'optimizer':opt.state_dict(),
-                 'info':info,
-                 }
-        save_checkpoint(state, filename=filename)
-    elif not len(info['train_cnts']):
-        print("Logging model: %s no previous logs"%(train_cnt))
-        handle_plot_ckpt(False, train_cnt, avg_train_loss)
-    elif (train_cnt-info['last_plot'])>=args.plot_every:
-        print("Plotting Model at cnt:%s cnt since last plotted:%s"%(train_cnt, train_cnt-info['last_plot']))
-        handle_plot_ckpt(True, train_cnt, avg_train_loss)
-    else:
-        if (train_cnt-info['train_cnts'][-1])>=args.log_every:
-            print("Logging Model at cnt:%s cnt since last logged:%s"%(train_cnt, train_cnt-info['train_cnts'][-1]))
-            handle_plot_ckpt(False, train_cnt, avg_train_loss)
-
-def train_acn(train_cnt):
-    vae_model.train()
-    prior_model.train()
-    train_loss = 0
-    init_cnt = train_cnt
+def run_acn(train_cnt, model_dict, data_dict, phase, device):
     st = time.time()
-    for batch_idx, (data, label, data_index) in enumerate(train_loader):
-        lst = time.time()
-        #for xx,i in enumerate(label):
-        #    label_size[xx] = i
-        target =data = data.to(DEVICE)
-        opt.zero_grad()
-        z, u_q, s_q = vae_model(data)
-        #yhat_batch = vae_model.decode(u_q, s_q, data)
+    running_loss = 0.0
+    data_loader = data_dict[phase]
+    model_dict = set_model_mode(model_dict, phase)
+    for batch_idx, (data, label, data_index) in enumerate(data_loader):
+        target = data = data.to(device)
+        bs = data.shape[0]
+        model_dict['opt'].zero_grad()
+        z, u_q, s_q = model_dict['encoder_model'](data)
         # add the predicted codes to the input
-        yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
-        prior_model.codes[data_index] = u_q.detach().cpu().numpy()
-        prior_model.fit_knn(prior_model.codes)
-        u_p, s_p = prior_model(u_q)
+        yhat_batch = torch.sigmoid(model_dict['pcnn_decoder'](x=data, float_condition=z))
+        model_dict['prior_model'].codes[data_index] = u_q.detach().cpu().numpy()
+        model_dict['prior_model'].fit_knn(model_dict['prior_model'].codes)
+        u_p, s_p = model_dict['prior_model'](u_q)
         kl = kl_loss_function(u_q, s_q, u_p, s_p)
         rec_loss = F.binary_cross_entropy(yhat_batch, target, reduction='mean')
         loss = kl+rec_loss
-        loss.backward()
-        train_loss+= loss.item()
-        opt.step()
+        if phase == 'train':
+            loss.backward()
+            model_dict['opt'].step()
+        running_loss+= loss.item()
         # add batch size because it hasn't been added to train cnt yet
-        avg_train_loss = train_loss/float((train_cnt+data.shape[0])-init_cnt)
-        handle_checkpointing(train_cnt, avg_train_loss)
-        train_cnt+=len(data)
-    print("finished epoch after %s seconds at cnt %s"%(time.time()-st, train_cnt))
-    return train_cnt
+        if phase == 'train':
+            train_cnt+=bs
+    example = {'data':data, 'target':target, 'yhat':yhat_batch}
+    avg_loss = running_loss/bs
+    print("finished %s after %s secs at cnt %s loss %s"%(phase, time.time()-st, train_cnt, avg_loss))
+    return model_dict, data_dict, avg_loss, example
 
-def test_acn(train_cnt, do_plot):
-    vae_model.eval()
-    prior_model.eval()
-    test_loss = 0
-    print('starting test', train_cnt)
-    st = time.time()
-    print(len(valid_loader))
+def train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info):
+    base_filepath = info['base_filepath']
+    base_filename = os.path.split(info['base_filepath'])[1]
+    while train_cnt < info['num_examples_to_train']:
+        print('starting epoch %s on %s'%(epoch_cnt, info['device']))
+        model_dict, data_dict, avg_train_loss, train_example = run_acn(train_cnt, model_dict, data_dict, phase='train', device=info['device'])
+        epoch_cnt +=1
+        train_cnt +=info['size_training_set']
+        if not epoch_cnt % info['save_every_epochs']:
+            # make a checkpoint
+            print('starting valid phase')
+            model_dict, data_dict, avg_valid_loss, valid_example = run_acn(train_cnt, model_dict, data_dict, phase='valid', device=info['device'])
+            state_dict = {}
+            for key, model in model_dict.items():
+                state_dict[key+'_state_dict'] = model.state_dict()
+            info['train_losses'].append(avg_train_loss)
+            info['train_cnts'].append(train_cnt)
+            info['valid_losses'].append(avg_valid_loss)
+            info['epoch_cnt'] = epoch_cnt
+            state_dict['info'] = info
+
+            ckpt_filepath = os.path.join(base_filepath, "%ss_%010dex.pt"%(base_filename, train_cnt))
+            train_img_filepath = os.path.join(base_filepath,"%s_%010d_train_rec.png"%(base_filename, train_cnt))
+            valid_img_filepath = os.path.join(base_filepath, "%s_%010d_valid_rec.png"%(base_filename, train_cnt))
+            plot_filepath = os.path.join(base_filepath, "%s_%010dloss.png"%(base_filename, train_cnt))
+
+            plot_example(train_img_filepath, train_example, num_plot=5)
+            plot_example(valid_img_filepath, valid_example, num_plot=5)
+            save_checkpoint(state_dict, filename=ckpt_filepath)
+
+            plot_losses(info['train_cnts'],
+                        info['train_losses'],
+                        info['train_cnts'],
+                        info['valid_losses'], name=plot_filepath, rolling_length=1)
+
+def call_tsne_plot(model_dict, data_dict, info):
+    from make_tsne_plot import tsne_plot
+    # always be in eval mode
+    model_dict = set_model_mode(model_dict, 'valid')
     with torch.no_grad():
-        for i, (data, label, data_index) in enumerate(valid_loader):
-            target = data = data.to(DEVICE)
-            z, u_q, s_q = vae_model(data)
-            #yhat_batch = vae_model.decode(u_q, s_q, data)
-            # add the predicted codes to the input
-            yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
-            u_p, s_p = prior_model(u_q)
-            kl = kl_loss_function(u_q, s_q, u_p, s_p)
-            rec_loss = F.binary_cross_entropy(yhat_batch, target, reduction='mean')
-            loss = kl+rec_loss
-            test_loss+= loss.item()
-            if i == 0 and do_plot:
-                print('writing img')
-                n = min(data.size(0), 8)
-                bs = data.shape[0]
-                comparison = torch.cat([target.view(bs, 1, 28, 28)[:n],
-                                      yhat_batch.view(bs, 1, 28, 28)[:n]])
-                img_name = vae_base_filepath + "_%010d_valid_reconstruction.png"%train_cnt
-                save_image(comparison.cpu(), img_name, nrow=n)
-                print('finished writing img', img_name)
-            #print('loop test', i, time.time()-lst)
-
-    test_loss /= len(valid_loader.dataset)
-    print('====> Test set loss: {:.4f}'.format(test_loss))
-    print('finished test', time.time()-st)
-    return test_loss
-
-
-def call_tsne_plot():
-    vae_model.eval()
-    prior_model.eval()
-    pcnn_decoder.eval()
-    with torch.no_grad():
-        for phase in ['train', 'valid']:
+        for phase in ['valid', 'train']:
             data_loader = data_dict[phase]
             with torch.no_grad():
                 for batch_idx, (data, label, data_index) in enumerate(data_loader):
-                    target = data = data.to(DEVICE)
+                    target = data = data.to(info['device'])
                     # yhat_batch is bt 0-1
-                    z, u_q, s_q = vae_model(data)
-                    u_p, s_p = prior_model(u_q)
-                    yhat_batch = torch.sigmoid(pcnn_decoder(x=target, float_condition=z))
-                    end = args.model_loadpath.split('.')[-1]
-                    html_path = args.model_loadpath.replace(end, 'html')
+                    z, u_q, s_q = model_dict['encoder_model'](data)
+                    u_p, s_p = model_dict['prior_model'](u_q)
+                    yhat_batch = torch.sigmoid(model_dict['pcnn_decoder'](x=target, float_condition=z))
+                    html_path = info['model_loadpath'].replace('.pt', '.html')
                     X = u_q.cpu().numpy()
-                    images = np.round(yhat_batch.cpu().numpy()[:,0], 0).astype(np.int16)
-                    #images = next_state[:,0].cpu().numpy()
-                    tsne_plot(X=X, images=images, color=batch_idx, perplexity=args.perplexity,
+                    images = np.round(yhat_batch.cpu().numpy()[:,0], 0).astype(np.int32)
+                    #images = target[:,0].cpu().numpy()
+                    tsne_plot(X=X, images=images, color=batch_idx, perplexity=info['perplexity'],
                               html_out_path=html_path)
 
-def sample():
-    print('starting sample', train_cnt)
+def sample(model_dict, data_dict, info):
     from skvideo.io import vwrite
-    vae_model.eval()
-    pcnn_decoder.eval()
+    model_dict = set_model_mode(model_dict, 'valid')
     output_savepath = args.model_loadpath.replace('.pt', '')
     with torch.no_grad():
         for phase in ['train', 'valid']:
             data_loader = data_dict[phase]
             with torch.no_grad():
                 for batch_idx, (data, label, data_index) in enumerate(data_loader):
-                    data = data.to(DEVICE)
+                    target = data = data.to(info['device'])
                     bs = data.shape[0]
-                    z, u_q, s_q = vae_model(data)
+                    z, u_q, s_q = model_dict['encoder_model'](data)
                     # teacher forced version
-                    yhat_batch = torch.sigmoid(pcnn_decoder(x=data, float_condition=z))
-                    u_p, s_p = prior_model(u_q)
-                    canvas = torch.zeros_like(data)
+                    yhat_batch = torch.sigmoid(model_dict['pcnn_decoder'](x=target, float_condition=z))
+                    # create blank canvas for autoregressive sampling
+                    canvas = torch.zeros_like(target)
                     building_canvas = []
                     for i in range(canvas.shape[1]):
                         for j in range(canvas.shape[2]):
                             print('sampling row: %s'%j)
                             for k in range(canvas.shape[3]):
-                                output = torch.sigmoid(pcnn_decoder(x=canvas, float_condition=z))
+                                output = torch.sigmoid(model_dict['pcnn_decoder'](x=canvas, float_condition=z))
                                 canvas[:,i,j,k] = output[:,i,j,k].detach()
-                                if not k%2:
+                                # add frames for video
+                                if not k%5:
                                     building_canvas.append(deepcopy(canvas[0].detach().cpu().numpy()))
-                    f,ax = plt.subplots(bs, 3, sharex=True, sharey=True, figsize=(2,2*bs))
-                    npdata = data.detach().cpu().numpy()
+
+                    f,ax = plt.subplots(bs, 3, sharex=True, sharey=True, figsize=(3,bs))
+                    nptarget = target.detach().cpu().numpy()
                     npoutput = output.detach().cpu().numpy()
                     npyhat = yhat_batch.detach().cpu().numpy()
                     for idx in range(bs):
-                        ax[idx,0].imshow(npdata[idx,0], cmap=plt.cm.gray)
+                        ax[idx,0].imshow(nptarget[idx,0], cmap=plt.cm.viridis)
                         ax[idx,0].set_title('true')
-                        ax[idx,1].imshow(npyhat[idx,0], cmap=plt.cm.gray)
+                        ax[idx,1].imshow(npyhat[idx,0], cmap=plt.cm.viridis)
                         ax[idx,1].set_title('tf')
-                        ax[idx,2].imshow(npoutput[idx,0], cmap=plt.cm.gray)
+                        ax[idx,2].imshow(npoutput[idx,0], cmap=plt.cm.viridis)
                         ax[idx,2].set_title('sam')
                         ax[idx,0].axis('off')
                         ax[idx,1].axis('off')
@@ -352,14 +275,14 @@ def sample():
                     plt.savefig(iname)
                     plt.close()
 
+                    # make movie
                     building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
                     print('writing building movie')
                     mname = output_savepath + '_build_%s.mp4'%phase
                     vwrite(mname, building_canvas)
                     print('finished %s'%mname)
+                    # only do one batch
                     break
-        sys.exit()
-
 
 class IndexedDataset(Dataset):
     def __init__(self, dataset_function, path, train=True, download=True, transform=transforms.ToTensor()):
@@ -382,102 +305,193 @@ def save_checkpoint(state, filename='model.pt'):
     torch.save(state, filename)
     print("finished save of model %s" %filename)
 
-
-if __name__ == '__main__':
-    from argparse import ArgumentParser
-    parser = ArgumentParser(description='train acn')
-    parser.add_argument('-c', '--cuda', action='store_true', default=False)
-    parser.add_argument('-l', '--model_loadpath', default='')
-    parser.add_argument('-se', '--save_every', default=60000*10, type=int)
-    parser.add_argument('-pe', '--plot_every', default=60000*10, type=int)
-    parser.add_argument('--log_every', default=60000*10, type=int)
-    parser.add_argument('-bs', '--batch_size', default=128, type=int)
-    #parser.add_argument('-nc', '--number_condition', default=4, type=int)
-    #parser.add_argument('-sa', '--steps_ahead', default=1, type=int)
-    parser.add_argument('-cl', '--code_length', default=64, type=int)
-    parser.add_argument('-k', '--num_k', default=5, type=int)
-    parser.add_argument('-nl', '--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('-e', '--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-lr', '--learning_rate', default=1e-4)
-    parser.add_argument('-pv', '--possible_values', default=1)
-    parser.add_argument('-nc', '--num_classes', default=10)
-    parser.add_argument('-eos', '--encoder_output_size', default=2048)
-    parser.add_argument('-npcnn', '--num_pcnn_layers', default=12)
-    parser.add_argument( '--model_savedir', default='../../model_savedir', help='save checkpoints here')
-    parser.add_argument( '--base_datadir', default='../../dataset/', help='save datasets here')
-    # sampling info
-    parser.add_argument('-s', '--sample', action='store_true', default=False)
-    parser.add_argument('-t', '--tsne', action='store_true', default=False)
-    parser.add_argument('-p', '--perplexity', default=3)
-    parser.add_argument('--use_training_set', action='store_true', default=False)
-    parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
-    parser.add_argument('-nt', '--num_tsne', default=300, type=int)
-
-    args = parser.parse_args()
-    if args.cuda:
-        DEVICE = 'cuda'
-    else:
-        DEVICE = 'cpu'
-
-    vae_base_filepath = os.path.join(args.model_savedir, 'pcnn_acn_mnist_cl64')
-    train_data = IndexedDataset(datasets.MNIST, path=args.base_datadir,
+def create_mnist_datasets(dataset_name, base_datadir, batch_size):
+    dataset = eval('datasets.'+dataset_name)
+    datadir = os.path.join(base_datadir, dataset_name)
+    train_data = IndexedDataset(dataset, path=datadir,
                                 train=True, download=True,
                                 transform=transforms.ToTensor())
-    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    valid_data = IndexedDataset(datasets.MNIST, path=args.base_datadir,
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    valid_data = IndexedDataset(dataset, path=datadir,
                                train=False, download=True,
                                transform=transforms.ToTensor())
-    valid_loader = DataLoader(valid_data, batch_size=args.batch_size, shuffle=True)
+    valid_loader = DataLoader(valid_data, batch_size=batch_size, shuffle=True)
     data_dict = {'train':train_loader, 'valid':valid_loader}
+    nchans,hsize,wsize = data_dict['train'].dataset[0][0].shape
+    size_training_set = len(train_data)
+    return data_dict, size_training_set, nchans, hsize, wsize
 
-    nchans,hsize,wsize = train_loader.dataset[0][0].shape
-
+def create_new_info_dict(arg_dict, size_training_set, base_filepath):
     info = {'train_cnts':[],
             'train_losses':[],
-            'test_cnts':[],
-            'test_losses':[],
+            'valid_losses':[],
             'save_times':[],
             'args':[args],
             'last_save':0,
             'last_plot':0,
+            'epoch_cnt':0,
+            'size_training_set':size_training_set,
+            'base_filepath':base_filepath,
              }
+    for arg,val in arg_dict.items():
+        info[arg] = val
+    if info['cuda']:
+        info['device'] = 'cuda'
+    else:
+        info['device'] = 'cpu'
+    return info
 
-    args.size_training_set = len(train_data)
-
-    vae_model = ConvVAE(args.code_length, input_size=1, encoder_output_size=args.encoder_output_size).to(DEVICE)
-    prior_model = PriorNetwork(size_training_set=args.size_training_set,
-                               code_length=args.code_length, k=args.num_k).to(DEVICE)
-
-    pcnn_decoder = GatedPixelCNN(input_dim=1,
-                                      dim=args.possible_values,
-                                      n_layers=args.num_pcnn_layers,
-                                      n_classes=args.num_classes,
-                                      float_condition_size=args.code_length,
-                                      last_layer_bias=0.5).to(DEVICE)
-
-    parameters = list(vae_model.parameters()) + list(prior_model.parameters()) + list(pcnn_decoder.parameters())
-    opt = optim.Adam(parameters, lr=args.learning_rate)
+def create_conv_acn_pcnn_models(info, model_loadpath=''):
+    '''
+    load details of previous model if applicable, otherwise create new models
+    '''
     train_cnt = 0
+    epoch_cnt = 0
+
+    # use argparse device no matter what info dict is loaded
+    preserve_args = ['device', 'batch_size', 'save_every_epochs', 'base_filepath']
+    preserve_dict = {}
+    for key in preserve_args:
+        preserve_dict[key] = info[key]
 
     if args.model_loadpath !='':
-        tmlp =  args.model_loadpath+'.tmp'
+        tmlp =  model_loadpath+'.tmp'
         os.system('cp %s %s'%(args.model_loadpath, tmlp))
         _dict = torch.load(tmlp, map_location=lambda storage, loc:storage)
-        vae_model.load_state_dict(_dict['vae_state_dict'])
-        prior_model.load_state_dict(_dict['prior_state_dict'])
-        pcnn_decoder.load_state_dict(_dict['pcnn_state_dict'])
-
         info = _dict['info']
         train_cnt = info['train_cnts'][-1]
+        epoch_cnt = info['epoch_cnt']
+
+    # use argparse device no matter what device is loaded
+    for key in preserve_args:
+        info[key] = preserve_dict[key]
+
+    encoder_model = ConvEncoder(info['code_length'], input_size=info['input_channels'],
+                            encoder_output_size=info['encoder_output_size']).to(info['device'])
+    prior_model = PriorNetwork(size_training_set=info['size_training_set'],
+                               code_length=info['code_length'], k=info['num_k']).to(info['device'])
+    pcnn_decoder = GatedPixelCNN(input_dim=info['target_channels'],
+                                  dim=info['possible_values'],
+                                  n_layers=info['num_pcnn_layers'],
+                                  n_classes=info['num_classes'],
+                                  float_condition_size=info['code_length'],
+                                  last_layer_bias=info['last_layer_bias']).to(info['device'])
+
+    model_dict = {'encoder_model':encoder_model, 'prior_model':prior_model, 'pcnn_decoder':pcnn_decoder}
+    parameters = []
+    for name,model in model_dict.items():
+        parameters+=list(model.parameters())
+    model_dict['opt'] = optim.Adam(parameters, lr=info['learning_rate'])
+
+    if args.model_loadpath !='':
+       for name,model in model_dict.items():
+            model_dict[name].load_state_dict(_dict[name+'_state_dict'])
+    return model_dict, info, train_cnt, epoch_cnt
+
+def seed_everything(seed=394, max_threads=2):
+    torch.manual_seed(394)
+    torch.set_num_threads(max_threads)
+
+def plot_example(img_filepath, example, plot_on=['target', 'yhat'], num_plot=10):
+    '''
+    img_filepath: location to write .png file
+    example: dict with torch images of the same shape [bs,c,h,w] to write
+    plot_on: list of keys of images in example dict to write
+    num_plot: limit the number of examples from bs to this int
+    '''
+    for cnt, pon in enumerate(plot_on):
+        bs,c,h,w = example[pon].shape
+        num_plot = min([bs, num_plot])
+        eimgs = example[pon].view(bs,c,h,w)[:num_plot]
+        if not cnt:
+            comparison = eimgs
+        else:
+            comparison = torch.cat([comparison, eimgs])
+    save_image(comparison.cpu(), img_filepath, nrow=num_plot)
+    print('writing comparison image: %s img_path'%img_filepath)
+
+def rolling_average(a, n=5) :
+    if n == 0:
+        return a
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+
+def plot_losses(train_cnts, train_losses, test_cnts, test_losses, name='loss_example.png', rolling_length=4):
+    f,ax=plt.subplots(1,1,figsize=(3,3))
+    ax.plot(rolling_average(train_cnts, rolling_length), rolling_average(train_losses, rolling_length), label='train loss', lw=1, c='orangered')
+    ax.plot(rolling_average(test_cnts, rolling_length),  rolling_average(test_losses, rolling_length), label='test loss', lw=1, c='cornflowerblue')
+    ax.scatter(rolling_average(test_cnts, rolling_length), rolling_average(test_losses, rolling_length), s=4, c='cornflowerblue')
+    ax.scatter(rolling_average(train_cnts, rolling_length),rolling_average(train_losses, rolling_length), s=4, c='orangered')
+    ax.legend()
+    plt.savefig(name)
+    plt.close()
+
+def kl_loss_function(u_q, s_q, u_p, s_p):
+    ''' reconstruction loss + coding cost
+     coding cost is the KL divergence bt posterior and conditional prior
+     Args:
+         u_q: mean of model posterior
+         s_q: log std of model posterior
+         u_p: mean of conditional prior
+         s_p: log std of conditional prior
+
+     Returns: loss
+     '''
+    acn_KLD = torch.sum(s_p-s_q-0.5 + ((2*s_q).exp() + (u_q-u_p).pow(2)) / (2*(2*s_p).exp()))
+    return acn_KLD
 
 
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+    parser = ArgumentParser(description='train acn')
+    # operatation options
+    parser.add_argument('-l', '--model_loadpath', default='', help='load model to resume training or sample')
+    parser.add_argument('-c', '--cuda', action='store_true', default=False)
+    parser.add_argument('--seed', default=394)
+    parser.add_argument('--num_threads', default=2)
+    parser.add_argument('-se', '--save_every_epochs', default=5, type=int)
+    parser.add_argument('-bs', '--batch_size', default=128, type=int)
+    parser.add_argument('-lr', '--learning_rate', default=1e-4)
+    parser.add_argument('--input_channels', default=1, type=int, help='num of channels of input')
+    parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
+    parser.add_argument('--num_examples_to_train', default=50000000, type=int)
+    # acn model setup
+    parser.add_argument('-cl', '--code_length', default=64, type=int)
+    parser.add_argument('-k', '--num_k', default=5, type=int)
+    parser.add_argument('--possible_values', default=1, help='num values that the pcnn output can take')
+    parser.add_argument('--last_layer_bias', default=0.5, help='bias for output decoder')
+    parser.add_argument('--num_classes', default=10, help='num classes for class condition in pixel cnn')
+    parser.add_argument('--encoder_output_size', default=2048, help='output as a result of the flatten of the encoder - found experimentally')
+    parser.add_argument('--num_pcnn_layers', default=12, help='num layers for pixel cnn')
+    # dataset setup
+    parser.add_argument('-d',  '--dataset_name', default='MNIST', help='which mnist to use', choices=['MNIST', 'FashionMNIST'])
+    parser.add_argument('--exp_name', default='pcnn_acn', help='name of experiment')
+    parser.add_argument('--model_savedir', default='../../model_savedir', help='save checkpoints here')
+    parser.add_argument('--base_datadir', default='../../dataset/', help='save datasets here')
+    # sampling info
+    parser.add_argument('-s', '--sample', action='store_true', default=False)
+    parser.add_argument('-tf', '--teacher_force', action='store_true', default=False)
+    # tsne info
+    parser.add_argument('-t', '--tsne', action='store_true', default=False)
+    parser.add_argument('-p', '--perplexity', default=3)
+    args = parser.parse_args()
+
+    seed_everything(args.seed, args.num_threads)
+    args.exp_name += '_'+args.dataset_name
+    base_filepath = os.path.join(args.model_savedir, args.exp_name)
+    if not os.path.exists(base_filepath):
+        os.mkdir(base_filepath)
+
+    data_dict, size_training_set, nchans, hsize, wsize = create_mnist_datasets(dataset_name=args.dataset_name, base_datadir=args.base_datadir, batch_size=args.batch_size)
+    info = create_new_info_dict(vars(args), size_training_set, base_filepath)
+    model_dict, info, train_cnt, epoch_cnt = create_conv_acn_pcnn_models(info, args.model_loadpath)
 
     if args.sample:
-        sample()
-    if args.tsne:
-        call_tsne_plot()
-
-
-    while train_cnt < args.num_examples_to_train:
-        train_cnt = train_acn(train_cnt)
+        sample(model_dict, data_dict, info)
+    elif args.tsne:
+        call_tsne_plot(model_dict, data_dict, info)
+    else:
+        train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info)
 

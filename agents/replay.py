@@ -22,8 +22,8 @@ class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
     def __init__(self, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
-                 bernoulli_probability=1.0, load_file='', sample_only=False, seed=393, use_pred_frames=False):
-                # bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', sample_only=False, seed=393):
+                 bernoulli_probability=1.0, load_file='', seed=393, use_pred_frames=False):
+                # bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', seed=393):
         """
         Args:
             size: Integer, Number of stored transitions
@@ -36,7 +36,6 @@ class ReplayMemory:
            # latent_frame_height/width: size of latent representations, if 0, then no latents are stored
 
         """
-        self.sample_only = sample_only
         self.unique_available = False
         self.use_pred_frames = use_pred_frames
         if load_file != '':
@@ -53,7 +52,7 @@ class ReplayMemory:
             self.num_heads = num_heads
             # Pre-allocate memory
             self.actions = np.empty(self.size, dtype=np.int32)
-            self.rewards = np.empty(self.size, dtype=np.float32)
+            self.rewards = np.empty(self.size, dtype=np.int32)
             # store actual frames in true frames
             self.frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
             if self.use_pred_frames:
@@ -144,12 +143,13 @@ class ReplayMemory:
         print("finished loading buffer", time.time()-st)
         print("loaded buffer current is", self.current)
 
+    # TODO add current q value
     def add_experience(self, action, frame, reward, terminal, pred_frame=None):#, latent_frame=''):
         """
         Args:
             action: An integer between 0 and env.action_space.n - 1
                 determining the action the agent perfomed
-            frame: A (84, 84) frame of an Atari game in grayscale
+            frame: A (84, 84) frame of an Atari game in grayscale - is the "next state" when moving through a game
             reward: A float determining the reward the agend received for performing an action
             terminal: A bool stating whether the episode terminated
         """
@@ -220,16 +220,39 @@ class ReplayMemory:
             # the action that got us to this frame, and the reward received
             self.states[i], self.pred_states[i] = self._get_state(idx - 1)
             self.new_states[i], self.pred_new_states[i] = self._get_state(idx)
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.pred_states, self.pred_new_states
+        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
+        #return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.pred_states, self.pred_new_states
+
+    def init_unique(self):
+        """ must call this to before using reset_unique - this will change when adding to buffer """
+        self.unique_indexes = self._find_all_valid_indices()
+        print('found %s unique_indexes in buffer' %len(self.unique_indexes))
 
     def reset_unique(self):
-        self.unique_indexes = np.arange(self.count)
+        if 'unique_indexes' not in self.__dict__.keys():
+            self.init_unique()
         self.random_state.shuffle(self.unique_indexes)
         self.unique_index = 0
         self.unique_available = True
 
+    def _find_all_valid_indices(self):
+        """ find all indices which can be used for data """
+        unique_indexes = []
+        for index in range(self.count):
+            if index < self.agent_history_length:
+                continue
+            if index >= self.current and index - self.agent_history_length <= self.current:
+                continue
+            # dont add if there was a terminal flag in previous
+            # history_length steps
+            if self.terminal_flags[index - self.agent_history_length:index].any():
+                continue
+            unique_indexes.append(index)
+        return np.array(unique_indexes, np.int32)
+
     def _get_unique_valid_indices(self, batch_size):
         unique_indices = []
+        index_indices = []
         for i in range(batch_size):
             while self.unique_index < len(self.unique_indexes):
                 index = self.unique_indexes[self.unique_index]
@@ -243,12 +266,13 @@ class ReplayMemory:
                 if self.terminal_flags[index - self.agent_history_length:index].any():
                     continue
                 break
+            index_indices.append(self.unique_index-1)
             unique_indices.append(index)
 
         if self.unique_index >= len(self.unique_indexes)-1:
             self.unique_available = False
 
-        return np.array(unique_indices, np.int32)
+        return np.array(unique_indices, np.int32), np.array(index_indices, np.int32)
 
     def get_unique_minibatch(self, batch_size):
         """
@@ -260,7 +284,8 @@ class ReplayMemory:
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
 
-        unique_indices = self._get_unique_valid_indices(batch_size)
+        # index indices is the value that should be used for acn
+        unique_indices, index_indices = self._get_unique_valid_indices(batch_size)
         batch_size = unique_indices.shape[0]
 
         if batch_size != self.states.shape[0]:
@@ -280,7 +305,7 @@ class ReplayMemory:
             # the action that got us to this frame, and the reward received
             self.states[i], self.pred_states[i] = self._get_state(idx - 1)
             self.new_states[i], self.pred_new_states[i] = self._get_state(idx)
-        return self.states, self.actions[unique_indices], self.rewards[unique_indices], self.new_states, self.terminal_flags[unique_indices], self.masks[unique_indices], unique_indices
+        return self.states, self.actions[unique_indices], self.rewards[unique_indices], self.new_states, self.terminal_flags[unique_indices], self.masks[unique_indices], unique_indices, index_indices
 
 def test_replay_values():
     pass
