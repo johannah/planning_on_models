@@ -167,14 +167,12 @@ def clip_parameters(model_dict, clip_val=10):
     return model_dict
 
 def forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info):
-    model_dict = set_model_mode(model_dict, phase)
     # prepare data in appropriate way
     prep_batch = make_atari_channel_action_reward_state(states, actions, rewards, next_states,
                                                         info['device'],
                                                         info['num_actions'], info['num_rewards'])
     states, action_cond, reward_cond, target = prep_batch
     bs,c,h,w = target.shape
-    model_dict['opt'].zero_grad()
 
     states = F.dropout(states, p=info['dropout_rate'], training=True, inplace=False)
     # put action cond and reward cond in and project to same size as state
@@ -197,15 +195,20 @@ def run(train_cnt, model_dict, data_dict, phase, info):
     loss_dict = {'running': 0,
              'kl':0,
              'pcnn_%s'%info['rec_loss_type']:0,
-              'vq':0,
+             'vq':0,
              'commit':0,
              'loss':0,
               }
+    print('starting', phase, 'cuda', torch.cuda.memory_allocated(device=None))
     data_loader = data_dict[phase]
     data_loader.reset_unique()
     num_batches = len(data_loader.unique_indexes)//info['batch_size']
     idx = 0
+    set_model_mode(model_dict, phase)
+    torch.set_grad_enabled(phase=='train')
     while data_loader.unique_available:
+        for key in model_dict.keys():
+            model_dict[key].zero_grad()
         batch = data_loader.get_unique_minibatch(info['batch_size'])
         states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
         fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
@@ -225,11 +228,11 @@ def run(train_cnt, model_dict, data_dict, phase, info):
         commit_loss *= info['vq_commitment_beta']
         loss = kl+pcnn_loss+commit_loss+vq_loss
         loss_dict['running']+=bs
-        loss_dict['loss']+=loss.item()
-        loss_dict['kl']+= kl.item()
-        loss_dict['vq']+= vq_loss.item()
-        loss_dict['commit']+= commit_loss.item()
-        loss_dict['pcnn_%s'%info['rec_loss_type']]+=pcnn_loss.item()
+        loss_dict['loss']+=loss.detach().cpu().item()
+        loss_dict['kl']+= kl.detach().cpu().item()
+        loss_dict['vq']+= vq_loss.detach().cpu().item()
+        loss_dict['commit']+= commit_loss.detach().cpu().item()
+        loss_dict['pcnn_%s'%info['rec_loss_type']]+=pcnn_loss.detach().cpu().item()
         if phase == 'train':
             model_dict = clip_parameters(model_dict)
             loss.backward()
@@ -239,13 +242,14 @@ def run(train_cnt, model_dict, data_dict, phase, info):
             # store example near end for plotting
             pcnn_yhat = sample_from_discretized_mix_logistic(pcnn_dml, info['nr_logistic_mix'], only_mean=info['sample_mean'], sampling_temperature=info['sampling_temperature'])
             rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=info['sample_mean'], sampling_temperature=info['sampling_temperature'])
-            example = {'prev_frame':rescale_inv(states[:,:-1].detach().cpu()),
+            example = {'prev_frame':rescale_inv(states[:,-1:].detach().cpu()),
                        'target':rescale_inv(target.detach().cpu()),
                        'deconv_yhat':rescale_inv(rec_yhat.detach().cpu()),
                        'pcnn_yhat':rescale_inv(pcnn_yhat.detach().cpu()),
                        }
         if not idx % 10:
             print(train_cnt, idx, account_losses(loss_dict))
+            print(phase, 'cuda', torch.cuda.memory_allocated(device=None))
         idx+=1
 
     loss_avg = account_losses(loss_dict)
@@ -254,7 +258,13 @@ def run(train_cnt, model_dict, data_dict, phase, info):
                                                 train_cnt,
                                                 ))
     print(loss_avg)
-    return model_dict, data_dict, loss_avg, example
+    print('end', phase, 'cuda', torch.cuda.memory_allocated(device=None))
+    del states; del target; del actions; del rewards
+    torch.cuda.empty_cache()
+    print('after delete end', phase, 'cuda', torch.cuda.memory_allocated(device=None))
+    #return model_dict, data_dict, loss_avg, example
+    return loss_avg, example
+
 
 def train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info, rescale_inv):
     print('starting training routine')
@@ -262,19 +272,22 @@ def train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info, rescale_inv):
     base_filename = os.path.split(info['base_filepath'])[1]
     while train_cnt < info['num_examples_to_train']:
         print('starting epoch %s on %s'%(epoch_cnt, info['device']))
-        model_dict, data_dict, train_loss_avg, train_example = run(train_cnt,
-                                                                       model_dict,
-                                                                       data_dict,
-                                                                       phase='train', info=info)
+        #model_dict, data_dict, train_loss_avg, train_example = run(train_cnt,
+        train_loss_avg, train_example = run(train_cnt,
+                                                       model_dict,
+                                                       data_dict,
+                                                       phase='train', info=info)
+
         epoch_cnt +=1
         train_cnt +=info['size_training_set']
         if not epoch_cnt % info['save_every_epochs'] or epoch_cnt == 1:
             # make a checkpoint
             print('starting valid phase')
-            model_dict, data_dict, valid_loss_avg, valid_example = run(train_cnt,
-                                                                           model_dict,
-                                                                           data_dict,
-                                                                           phase='valid', info=info)
+            #model_dict, data_dict, valid_loss_avg, valid_example = run(train_cnt,
+            valid_loss_avg, valid_example = run(train_cnt,
+                                                 model_dict,
+                                                 data_dict,
+                                                 phase='valid', info=info)
             for loss_key in valid_loss_avg.keys():
                 for lphase in ['train_losses', 'valid_losses']:
                     if loss_key not in info[lphase].keys():
@@ -305,8 +318,8 @@ def train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info, rescale_inv):
 
 
 def call_plot(model_dict, data_dict, info):
-    from utils import tsne_plot
-    from utils import pca_plot
+    from acn_utils import tsne_plot
+    from acn_utils import pca_plot
     # always be in eval mode
     model_dict = set_model_mode(model_dict, 'valid')
     with torch.no_grad():
@@ -317,7 +330,7 @@ def call_plot(model_dict, data_dict, info):
             states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
             fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
             model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, pcnn_dml, z_e_x, z_q_x, latents = fp_out
-            bs = data.shape[0]
+            bs = states.shape[0]
             u_q_flat = u_q.view(bs, info['code_length'])
             X = u_q_flat.cpu().numpy()
             color = index_indexes
@@ -407,7 +420,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', default=394)
     parser.add_argument('--num_threads', default=2)
     parser.add_argument('-se', '--save_every_epochs', default=5, type=int)
-    parser.add_argument('-bs', '--batch_size', default=84, type=int)
+    parser.add_argument('-bs', '--batch_size', default=64, type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
@@ -436,7 +449,8 @@ if __name__ == '__main__':
     parser.add_argument('--model_savedir', default='../../model_savedir', help='save checkpoints here')
     parser.add_argument('--base_datadir', default='../../dataset/trained_dqn_ATARI', help='save datasets here')
     parser.add_argument('--base_train_buffer_path',  type=str, default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_00/breakout_S014342_N0002813995_train.npz', help='load frames/actions from pretrained dqn')
-    parser.add_argument('--size_training_set', default=85000, type=int, help='number of random examples from base_train_buffer_path to use')
+    #parser.add_argument('--size_training_set', default=85000, type=int, help='number of random examples from base_train_buffer_path to use')
+    parser.add_argument('--size_training_set', default=60000, type=int, help='number of random examples from base_train_buffer_path to use')
     # sampling info
     parser.add_argument('-s', '--sample', action='store_true', default=False)
     parser.add_argument('-st', '--sampling_temperature', default=0.1, help='temperature to sample dml')

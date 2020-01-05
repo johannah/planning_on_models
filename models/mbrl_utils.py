@@ -61,7 +61,7 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
             num_examples = 0
             while num_examples < max_examples:
                 batch = load_buffer.get_unique_minibatch(1)
-                states, actions, rewards, next_states, real_terminal_flags, _, unique_indices = batch
+                states, actions, rewards, next_states, real_terminal_flags, _, unique_indices, index_indices = batch
                 bs,num_hist,h,s = states.shape
                 # action is the action that was used to get from state to next state
                 #    t-3, t-2, t-1, t-1, t
