@@ -5,8 +5,7 @@ import sys
 import numpy as np
 from IPython import embed
 
-def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100000, frame_height=40, frame_width=40):
-    import cv2
+def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100000, kernel_size=(2,2), trim=1):
     sys.path.append('../agents')
     from replay import ReplayMemory
     # keep max_examples < 100000 to enable knn search
@@ -24,7 +23,7 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
             max_examples = int(0.15*train_max_examples)
         else:
             max_examples = train_max_examples
-        small_name = buffer_name.replace('.npz', '_random_subset_%06d_%sx%s_%s.npz' %(max_examples, frame_height, frame_width, phase))
+        small_name = buffer_name.replace('.npz', '_random_subset_%06d_%sx%st%s_%s.npz' %(max_examples, kernel_size[0], kernel_size[1], trim, phase))
         small_path = os.path.join(dataset_path, small_name)
         paths[phase] = small_path
         if os.path.exists(small_path):
@@ -55,14 +54,18 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
             # actions for breakout:
             # ['NOOP', 'FIRE', 'RIGHT', 'LEFT']
             frames_needed = max_examples*frame_multiplier
-            sbuffer = ReplayMemory(frames_needed, frame_height=frame_height, frame_width=frame_width,
+            _,oh,ow = load_buffer.frames.shape
+
+            load_buffer.shrink_frame_size(kernel_size=kernel_size, reduction_function=np.max, trim=trim)
+            sbuffer = ReplayMemory(frames_needed,
+                                   frame_height=load_buffer.frame_height, frame_width=load_buffer.frame_width,
                                    agent_history_length=load_buffer.agent_history_length)
 
             num_examples = 0
             while num_examples < max_examples:
                 batch = load_buffer.get_unique_minibatch(1)
                 states, actions, rewards, next_states, real_terminal_flags, _, unique_indices, index_indices = batch
-                bs,num_hist,h,s = states.shape
+                bs,num_hist,h,w = states.shape
                 # action is the action that was used to get from state to next state
                 #    t-3, t-2, t-1, t-1, t
                 #  s-4, s-3, s-2, s-1
@@ -76,7 +79,7 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
                     for ss in range(num_hist+1):
                         # only use batch size 1 in minibatch
                         # frame is "next state" in replay buffer
-                        frame=cv2.resize(all_states[batch_idx,ss][:,:,None], (frame_height, frame_width))
+                        frame = all_states[batch_idx,ss]
                         action = load_buffer.actions[past_indices[ss]]
                         reward = load_buffer.rewards[past_indices[ss]]
                         if ss == num_hist:
@@ -105,7 +108,9 @@ def test_make_random_subset_buffers():
     # on raza
     train_data_path = '/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_00/breakout_S014342_N0002813995_train.npz'
     dataset_path = '../../dataset/breakout'
-    buffers = make_random_subset_buffers(dataset_path, train_data_path, train_max_examples=90000)
+    buffers = make_random_subset_buffers(dataset_path, train_data_path, train_max_examples=5000)
     return buffers
 
+if __name__ == '__main__':
+    test_make_random_subset_buffers()
 

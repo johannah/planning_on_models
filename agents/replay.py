@@ -100,7 +100,7 @@ class ReplayMemory:
                  frames=self.frames, pred_frames=self.pred_frames,
                  actions=self.actions, rewards=self.rewards,
                  terminal_flags=self.terminal_flags, masks=self.masks,
-                 count=self.count, current=self.current, sizze=self.size,
+                 count=self.count, current=self.current, size=self.size,
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
@@ -116,6 +116,11 @@ class ReplayMemory:
             self.pred_frames = npfile['pred_frames']
         else:
             self.pred_frames = self.frames
+
+        try:
+            self.size = npfile['size']
+        except:
+            self.size = npfile['sizze']
 
         self.actions = npfile['actions']
         self.rewards = npfile['rewards']
@@ -274,6 +279,29 @@ class ReplayMemory:
 
         return np.array(unique_indices, np.int32), np.array(index_indices, np.int32)
 
+    def shrink_frame_size(self, kernel_size=2, reduction_function=np.max, trim=1,  batch_size=32):
+        '''
+        new batch size deafult
+        '''
+        _, oh, ow = self.frames.shape
+        self.frames = pool_2d(self.frames, kernel_size, reduction_function)
+        self.pred_frames = pool_2d(self.pred_frames, kernel_size, reduction_function)
+        if trim > 0:
+            self.frames = self.frames[:,trim:-trim, trim:-trim]
+            self.pred_frames = self.pred_frames[:,trim:-trim, trim:-trim]
+        _,self.frame_height,self.frame_width = self.frames.shape
+        print('resized frames from %sx%s to %sx%s'%(oh,ow,self.frame_height,self.frame_width))
+        self.states = np.empty((batch_size, self.agent_history_length,
+                                self.frame_height, self.frame_width), dtype=np.uint8)
+        self.new_states = np.empty((batch_size, self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
+        self.pred_states = np.empty((batch_size, self.agent_history_length,
+                                self.frame_height, self.frame_width), dtype=np.uint8)
+        self.pred_new_states = np.empty((batch_size, self.agent_history_length,
+                                        self.frame_height, self.frame_width), dtype=np.uint8)
+
+
+
     def get_unique_minibatch(self, batch_size):
         """
         Returns a unique minibatch of batch_size -
@@ -307,7 +335,45 @@ class ReplayMemory:
             self.new_states[i], self.pred_new_states[i] = self._get_state(idx)
         return self.states, self.actions[unique_indices], self.rewards[unique_indices], self.new_states, self.terminal_flags[unique_indices], self.masks[unique_indices], unique_indices, index_indices
 
-def test_replay_values():
-    pass
+def pool_2d(arr, kernel_size, reduction_function, debug_plot=False, debug_name=""):
+    # takes in arr of bs, h, w
+    # returns bs, h, w where h and w are reduced
+    # reduction function MUST SUPPORT AXIS ARGUMENT
+    assert arr.shape[1] % kernel_size[0] == 0
+    assert arr.shape[2] % kernel_size[1] == 0
+
+    if debug_plot:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        plt.matshow(arr[0])
+        plt.axis("off")
+        plt.savefig("plt_{}_0.png".format(debug_name))
+        plt.close()
+
+    arr = arr.reshape(arr.shape[0], arr.shape[1], arr.shape[2] // kernel_size[1], kernel_size[1])
+    arr = np.transpose(arr, (0, 2, 3, 1))
+    arr = arr.reshape(arr.shape[0], arr.shape[1], arr.shape[2], arr.shape[3] // kernel_size[0], kernel_size[0])
+    arr = np.transpose(arr, (0, 3, 1, 4, 2))
+    # now bs, h, w, sp1_h, sp2_w
+
+    if debug_plot:
+        f, axarr = plt.subplots(arr.shape[1], arr.shape[2])
+        for i in range(arr.shape[1]):
+            for j in range(arr.shape[2]):
+                axarr[i, j].matshow(arr[0, i, j, :, :])
+                axarr[i, j].axis("off")
+        plt.savefig("plt_{}_1.png".format(debug_name))
+        plt.close()
+
+    arr = reduction_function(arr, axis=-1)
+    arr = reduction_function(arr, axis=-1)
+    if debug_plot:
+        plt.matshow(arr[0])
+        plt.axis("off")
+        plt.savefig("plt_{}_2.png".format(debug_name))
+        print("Plotted debug plots")
+    return arr
 
 

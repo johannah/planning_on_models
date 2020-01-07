@@ -72,8 +72,7 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
     data_dict, data_paths = make_random_subset_buffers(dataset_path=info['base_datadir'],
                                            buffer_path=info['base_train_buffer_path'],
                                            train_max_examples=info['size_training_set'],
-                                           kernel_size=info['frame_shrink_kernel_size'],
-                                                       trim=info['frame_shrink_trim'])
+                                           frame_height=info['frame_height'], frame_width=info['frame_width'])
 
     info['num_actions'] = data_dict['train'].num_actions()
     info['num_rewards'] = data_dict['train'].num_rewards()
@@ -131,6 +130,32 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
             model_dict[name].load_state_dict(_dict[name+'_state_dict'])
     return model_dict, data_dict, info, train_cnt, epoch_cnt, rescale, rescale_inv
 
+def make_atari_channel_action_reward_diff_state(frames, actions, rewards, next_frames, device, num_actions, num_rewards):
+    '''  batch is composed of
+     frames are [ts0, ts1, ts2, ts3] uint8
+     actions are                  [a3] int
+     next_frame     [ts1, ts2, ts3, ts4] uint8
+     rewards are                  [r3] int
+    '''
+    diff = torch.FloatTensor(rescale(frames[:,-1:]-next_frames[:,-1:]))
+    states = torch.FloatTensor(rescale(frames))
+    # only predict the unseen (most recent) state
+    #next_states = torch.FloatTensor(rescale(next_frames[:,-1:]))
+    # find diff between this state and next state
+    # this isn't necessarily bt -1 and 1 ....
+    bs,_,h,w = frames.shape
+    # next state is the corresponding action
+    action_cond = torch.zeros((bs,num_actions,h,w))
+    reward_cond = torch.zeros((bs,num_rewards,h,w))
+    # add in actions/reward as conditioning
+    for i in range(bs):
+        a = actions[i]
+        r = rewards[i]
+        action_cond[i,a]=1.0
+        reward_cond[i,r]=1.0
+    return states.to(device), action_cond.to(device), reward_cond.to(device), diff.to(device)
+
+
 def make_atari_channel_action_reward_state(frames, actions, rewards, next_frames, device, num_actions, num_rewards):
     '''  batch is composed of
      frames are [ts0, ts1, ts2, ts3] uint8
@@ -169,7 +194,7 @@ def clip_parameters(model_dict, clip_val=10):
 
 def forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info):
     # prepare data in appropriate way
-    prep_batch = make_atari_channel_action_reward_state(states, actions, rewards, next_states,
+    prep_batch = make_atari_channel_action_reward_diff_state(states, actions, rewards, next_states,
                                                         info['device'],
                                                         info['num_actions'], info['num_rewards'])
     states, action_cond, reward_cond, target = prep_batch
@@ -223,7 +248,7 @@ def run(train_cnt, model_dict, data_dict, phase, info):
                               u_p.view(bs, info['code_length']), s_p.view(bs, info['code_length']),
                               reduction=info['reduction'])
         # no loss on deconv rec
-        pcnn_loss = discretized_mix_logistic_loss(pcnn_dml, target, nr_mix=info['nr_logistic_mix'], reduction=info['reduction'])/2.0
+        pcnn_loss = discretized_mix_logistic_loss(pcnn_dml, target, nr_mix=info['nr_logistic_mix'], reduction=info['reduction'])
         vq_loss = F.mse_loss(z_q_x, z_e_x.detach(), reduction=info['reduction'])
         commit_loss = F.mse_loss(z_e_x, z_q_x.detach(), reduction=info['reduction'])
         commit_loss *= info['vq_commitment_beta']
@@ -362,16 +387,24 @@ def sample(model_dict, data_dict, info):
                 batch = data_loader.get_unique_minibatch(bs)
                 states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
                 st_can = '_zc'
+
                 iname = output_savepath + st_can + '_st%s'%args.sampling_temperature + '_sample_%s.png'%phase
                 fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
+                prep_batch = make_atari_channel_action_reward_diff_state(states, actions, rewards, next_states,
+                                                                             info['device'],
+                                                                             info['num_actions'], info['num_rewards'])
+
+                states, action_cond, reward_cond, target = prep_batch
+                last = states[:,-1:]
+                rlast = rescale_inv(last)
                 model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, pcnn_dml, z_e_x, z_q_x, latents = fp_out
                 # teacher forced version
                 pcnn_yhat = sample_from_discretized_mix_logistic(pcnn_dml, info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
                 rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
                 # create blank canvas for autoregressive sampling
+                nprlast = rlast.detach().cpu().numpy()
                 np_target = target.detach().cpu().numpy()
-                np_rec_yhat = rec_yhat.detach().cpu().numpy()
-                np_pcnn_yhat = pcnn_yhat.detach().cpu().numpy()
+                #np_rec_yhat = nprlast+rec_yhat.detach().cpu().numpy()
                 #canvas = deconv_yhat_batch
                 print('using zero output as sample canvas')
                 canvas = torch.zeros_like(target)
@@ -379,25 +412,40 @@ def sample(model_dict, data_dict, info):
                     for j in range(canvas.shape[2]):
                         print('sampling row: %s'%j)
                         for k in range(canvas.shape[3]):
+                            #output = model_dict['pcnn_decoder_model'](x=canvas, spatial_condition=rec_dml)
                             output = model_dict['pcnn_decoder_model'](x=canvas, spatial_condition=rec_dml)
                             output = sample_from_discretized_mix_logistic(output.detach(), info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
-                            canvas[:,i,j,k] = output[:,i,j,k]
+                            canvas[:,i,j,k] = rescale(rlast[:,i,j,k]-rescale_inv(output[:,i,j,k]))
+                            if target[0,i,j,k] != -1:
+                                print(j,k,output[0,i,j,k], canvas[0,i,j,k], target[0,i,j,k])
 
-                f,ax = plt.subplots(bs, 4, sharex=True, sharey=True, figsize=(3,bs))
-                np_output = output.detach().cpu().numpy()
+                f,ax = plt.subplots(bs, 3, sharex=True, sharey=True, figsize=(3,bs))
+                #np_output = output.detach().cpu().numpy()
+                #np_output = nprlast+rescale_inv(output.detach().cpu().numpy())
+                np_pcnn_yhat = pcnn_yhat.detach().cpu().numpy()
+                true_diff = target.detach().cpu().numpy()
+                pred_diff = output.detach().cpu().numpy()
+                #pred_diff = canvas.detach().cpu().numpy()
+                np_pred = nprlast+rescale_inv(pred_diff)
+                np_true = nprlast+rescale_inv(true_diff)
+                np_tf = nprlast+rescale_inv(np_pcnn_yhat)
+                ma_true = true_diff * (np.abs(true_diff) > 0)
+                ma_pred = pred_diff * (np.abs(pred_diff) > 0)
+                ma_tf = np_pcnn_yhat * (np.abs(np_pcnn_yhat) > 0)
+
                 for idx in range(bs):
-                    ax[idx,0].matshow(np_target[idx,0], cmap=plt.cm.gray)
-                    ax[idx,1].matshow(np_rec_yhat[idx,0], cmap=plt.cm.gray)
-                    ax[idx,2].matshow(np_pcnn_yhat[idx,0], cmap=plt.cm.gray)
-                    ax[idx,3].matshow(np_output[idx,0], cmap=plt.cm.gray)
-                    ax[idx,0].set_title('true')
-                    ax[idx,1].set_title('conv')
-                    ax[idx,2].set_title('tf')
-                    ax[idx,3].set_title('sam')
+                    ax[idx,0].matshow(np_true[idx,0], cmap=plt.cm.gray)
+                    ax[idx,0].imshow(ma_true[idx,0], alpha=0.5, cmap=plt.cm.Reds_r)
+                    ax[idx,1].matshow(np_tf[idx,0], cmap=plt.cm.gray)
+                    ax[idx,1].imshow(ma_tf[idx,0], alpha=0.5, cmap=plt.cm.Reds_r)
+                    ax[idx,2].matshow(np_pred[idx,0], cmap=plt.cm.gray)
+                    ax[idx,2].imshow(ma_pred[idx,0], alpha=0.5, cmap=plt.cm.Reds_r)
                     ax[idx,0].axis('off')
                     ax[idx,1].axis('off')
                     ax[idx,2].axis('off')
-                    ax[idx,3].axis('off')
+                ax[0,0].set_title('target')
+                ax[0,1].set_title('tf')
+                ax[0,2].set_title('sam')
                 print('plotting %s'%iname)
                 plt.savefig(iname)
                 plt.close()
@@ -426,13 +474,11 @@ if __name__ == '__main__':
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
     parser.add_argument('--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvqpcnn_mp', help='name of experiment')
+    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvqpcnn_diff', help='name of experiment')
     parser.add_argument('-dr', '--dropout_rate', default=0.0, type=float)
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
     parser.add_argument('--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('--frame_shrink_kernel_size', default=(2,2))
-    parser.add_argument('--frame_shrink_trim', default=1, type=int)
     # pcnn
     parser.add_argument('--pixel_cnn_dim', default=64, type=int, help='pixel cnn dimension')
     parser.add_argument('--num_pcnn_layers', default=8, help='num layers for pixel cnn')
