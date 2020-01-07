@@ -37,6 +37,9 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
     if not len(buffers.keys()) == 2:
         print('creating new train/valid buffers')
         load_buffer = ReplayMemory(load_file=buffer_path)
+        if max(list(kernel_size)+[trim]) > 1:
+            load_buffer.shrink_frame_size(kernel_size=kernel_size,
+                                          reduction_function=np.max, trim=trim)
         load_buffer.reset_unique()
         # history_length + 1 for every random example
         frame_multiplier = (load_buffer.agent_history_length+1)
@@ -54,9 +57,6 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
             # actions for breakout:
             # ['NOOP', 'FIRE', 'RIGHT', 'LEFT']
             frames_needed = max_examples*frame_multiplier
-            _,oh,ow = load_buffer.frames.shape
-
-            load_buffer.shrink_frame_size(kernel_size=kernel_size, reduction_function=np.max, trim=trim)
             sbuffer = ReplayMemory(frames_needed,
                                    frame_height=load_buffer.frame_height, frame_width=load_buffer.frame_width,
                                    agent_history_length=load_buffer.agent_history_length)
