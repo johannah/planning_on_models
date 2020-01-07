@@ -223,7 +223,7 @@ def run(train_cnt, model_dict, data_dict, phase, info):
                               u_p.view(bs, info['code_length']), s_p.view(bs, info['code_length']),
                               reduction=info['reduction'])
         # no loss on deconv rec
-        pcnn_loss = discretized_mix_logistic_loss(pcnn_dml, target, nr_mix=info['nr_logistic_mix'], reduction=info['reduction'])/2.0
+        pcnn_loss = discretized_mix_logistic_loss(pcnn_dml, target, nr_mix=info['nr_logistic_mix'], reduction=info['reduction'])
         vq_loss = F.mse_loss(z_q_x, z_e_x.detach(), reduction=info['reduction'])
         commit_loss = F.mse_loss(z_e_x, z_q_x.detach(), reduction=info['reduction'])
         commit_loss *= info['vq_commitment_beta']
