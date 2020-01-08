@@ -65,8 +65,19 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
         epoch_cnt = info['epoch_cnt']
         info['args'].append(largs)
 
-    info['frame_height'] = 40
-    info['frame_width'] = 40
+    if info['small']:
+        info['frame_shrink_kernel_size'] = (4,4)
+        info['frame_shrink_trim_after'] = 0
+        info['frame_shrink_trim_before'] = 2
+        info['frame_height'] = 20
+        info['frame_width'] = 20
+    else:
+        info['frame_shrink_kernel_size'] = (2,2)
+        info['frame_shrink_trim_after'] = 1
+        info['frame_shrink_trim_before'] = 0
+        info['frame_height'] = 20
+        info['frame_width'] = 20
+
 
     # transform is dependent on loss type
     data_dict, data_paths = make_random_subset_buffers(dataset_path=info['base_datadir'],
@@ -481,14 +492,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     if args.small:
-        args.frame_shrink_kernel_size = (4,4)
-        args.frame_shrink_trim_after = 0
-        args.frame_shrink_trim_before = 2
         sz = '20x20'
     else:
-        args.frame_shrink_kernel_size = (2,2)
-        args.frame_shrink_trim_after = 1
-        args.frame_shrink_trim_before = 0
         sz = '40x40'
     if args.tf_train_last_frame:
         sz+='_tftpcnn'
