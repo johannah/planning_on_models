@@ -261,7 +261,8 @@ def run(train_cnt, model_dict, data_dict, phase, info):
             # store example near end for plotting
             pcnn_yhat = sample_from_discretized_mix_logistic(pcnn_dml, info['nr_logistic_mix'], only_mean=info['sample_mean'], sampling_temperature=info['sampling_temperature'])
             rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=info['sample_mean'], sampling_temperature=info['sampling_temperature'])
-            example = {'prev_frame':rescale_inv(states[:,-1:].detach().cpu()),
+            example = {
+                       'prev_frame':rescale_inv(states[:,-1:].detach().cpu()),
                        'target':rescale_inv(target.detach().cpu()),
                        'deconv_yhat':rescale_inv(rec_yhat.detach().cpu()),
                        'pcnn_yhat':rescale_inv(pcnn_yhat.detach().cpu()),
@@ -339,7 +340,7 @@ def train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info, rescale_inv):
 def call_plot(model_dict, data_dict, info):
     from acn_utils import tsne_plot
     from acn_utils import pca_plot
-    # always be in eval mode
+    # always be in eval mode - so we dont swap neighbors
     model_dict = set_model_mode(model_dict, 'valid')
     with torch.no_grad():
         for phase in ['valid', 'train']:
@@ -368,12 +369,11 @@ def call_plot(model_dict, data_dict, info):
             break
 
 def sample(model_dict, data_dict, info):
-    from skvideo.io import vwrite
     model_dict = set_model_mode(model_dict, 'valid')
     output_savepath = args.model_loadpath.replace('.pt', '')
     bs = 10
     with torch.no_grad():
-        for phase in ['train', 'valid']:
+        for phase in ['valid', 'train']:
             with torch.no_grad():
                 data_loader = data_dict[phase]
                 data_loader.reset_unique()
@@ -386,13 +386,13 @@ def sample(model_dict, data_dict, info):
                 rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
                 # create blank canvas for autoregressive sampling
                 last = states[:,-1:]
-                np_last = last.detach().cpu().numpy()
-                np_target = target.detach().cpu().numpy()
+                np_last = deepcopy(last.detach().cpu().numpy())
+                np_target = deepcopy(target.detach().cpu().numpy())
                 np_rec_yhat = rec_yhat.detach().cpu().numpy()
                 np_pcnn_yhat = pcnn_yhat.detach().cpu().numpy()
                 if args.teacher_force_prev:
                     st_can = '_lf'
-                    canvas = torch.FloatTensor(np_last)
+                    canvas = last
                 else:
                     st_can = '_zc'
                     canvas = torch.zeros_like(target)
@@ -427,15 +427,6 @@ def sample(model_dict, data_dict, info):
                 print('plotting %s'%iname)
                 plt.savefig(iname)
                 plt.close()
-
-                ## make movie
-                #building_canvas = (np.array(building_canvas)*255).astype(np.uint8)
-                #print('writing building movie')
-                #mname = output_savepath + '_build_%s.mp4'%phase
-                #vwrite(mname, building_canvas)
-                #print('finished %s'%mname)
-                ## only do one batch
-
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
