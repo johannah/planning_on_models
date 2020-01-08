@@ -187,7 +187,12 @@ def forward_pass(model_dict, states, actions, rewards, next_states, index_indexe
         assert index_indexes.max() < model_dict['prior_model'].codes.shape[0]
         model_dict['prior_model'].update_codebook(index_indexes, u_q_flat.detach())
     rec_dml, z_e_x, z_q_x, latents =  model_dict['fwd_vq_acn_model'].decode(z)
-    pcnn_dml = model_dict['pcnn_decoder_model'](x=target, spatial_condition=rec_dml)
+    if info['tf_train_last_frame']:
+        # teacher force with last frame to make sampling easier
+        last_frame = states[:,-1:]
+        pcnn_dml = model_dict['pcnn_decoder_model'](x=last_frame, spatial_condition=rec_dml)
+    else:
+        pcnn_dml = model_dict['pcnn_decoder_model'](x=target, spatial_condition=rec_dml)
     u_p, s_p = model_dict['prior_model'](u_q_flat)
     u_p = u_p.view(bs, 3, 8, 8)
     s_p = s_p.view(bs, 3, 8, 8)
@@ -363,20 +368,25 @@ def sample(model_dict, data_dict, info):
                 data_loader.reset_unique()
                 batch = data_loader.get_unique_minibatch(bs)
                 states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
-                st_can = '_zc'
-                iname = output_savepath + st_can + '_st%s'%args.sampling_temperature + '_sample_%s.png'%phase
                 fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
                 model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, pcnn_dml, z_e_x, z_q_x, latents = fp_out
                 # teacher forced version
                 pcnn_yhat = sample_from_discretized_mix_logistic(pcnn_dml, info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
                 rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
                 # create blank canvas for autoregressive sampling
+                last = states[:,-1:]
+                np_last = last.detach().cpu().numpy()
                 np_target = target.detach().cpu().numpy()
                 np_rec_yhat = rec_yhat.detach().cpu().numpy()
                 np_pcnn_yhat = pcnn_yhat.detach().cpu().numpy()
-                #canvas = deconv_yhat_batch
+                if args.teacher_force_prev:
+                    st_can = '_lf'
+                    canvas = torch.FloatTensor(np_last)
+                else:
+                    st_can = '_zc'
+                    canvas = torch.zeros_like(target)
+                iname = output_savepath + st_can + '_st%s'%args.sampling_temperature + '_sample_%s.png'%phase
                 print('using zero output as sample canvas')
-                canvas = torch.zeros_like(target)
                 for i in range(canvas.shape[1]):
                     for j in range(canvas.shape[2]):
                         print('sampling row: %s'%j)
@@ -385,21 +395,24 @@ def sample(model_dict, data_dict, info):
                             output = sample_from_discretized_mix_logistic(output.detach(), info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
                             canvas[:,i,j,k] = output[:,i,j,k]
 
-                f,ax = plt.subplots(bs, 4, sharex=True, sharey=True, figsize=(3,bs))
+                f,ax = plt.subplots(bs, 5, sharex=True, sharey=True, figsize=(3,bs))
                 np_output = output.detach().cpu().numpy()
                 for idx in range(bs):
-                    ax[idx,0].matshow(np_target[idx,0], cmap=plt.cm.gray)
-                    ax[idx,1].matshow(np_rec_yhat[idx,0], cmap=plt.cm.gray)
-                    ax[idx,2].matshow(np_pcnn_yhat[idx,0], cmap=plt.cm.gray)
-                    ax[idx,3].matshow(np_output[idx,0], cmap=plt.cm.gray)
-                    ax[idx,0].set_title('true')
-                    ax[idx,1].set_title('conv')
-                    ax[idx,2].set_title('tf')
-                    ax[idx,3].set_title('sam')
+                    ax[idx,0].matshow(np_last[idx,0], cmap=plt.cm.gray)
+                    ax[idx,1].matshow(np_target[idx,0], cmap=plt.cm.gray)
+                    ax[idx,2].matshow(np_rec_yhat[idx,0], cmap=plt.cm.gray)
+                    ax[idx,3].matshow(np_pcnn_yhat[idx,0], cmap=plt.cm.gray)
+                    ax[idx,4].matshow(np_output[idx,0], cmap=plt.cm.gray)
+                    ax[idx,0].set_title('last')
+                    ax[idx,1].set_title('true')
+                    ax[idx,2].set_title('conv')
+                    ax[idx,3].set_title('tf')
+                    ax[idx,4].set_title('sam')
                     ax[idx,0].axis('off')
                     ax[idx,1].axis('off')
                     ax[idx,2].axis('off')
                     ax[idx,3].axis('off')
+                    ax[idx,4].axis('off')
                 print('plotting %s'%iname)
                 plt.savefig(iname)
                 plt.close()
@@ -422,13 +435,14 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--cuda', action='store_true', default=False)
     parser.add_argument('--seed', default=394)
     parser.add_argument('--num_threads', default=2)
+    parser.add_argument('--tf_train_last_frame', action='store_true', default=False)
     parser.add_argument('-se', '--save_every_epochs', default=5, type=int)
     parser.add_argument('-bs', '--batch_size', default=64, type=int)
     parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
     parser.add_argument('--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvqpcnn_mp20x20', help='name of experiment')
+    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvqpcnn', help='name of experiment')
     parser.add_argument('-dr', '--dropout_rate', default=0.0, type=float)
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
@@ -457,6 +471,7 @@ if __name__ == '__main__':
     parser.add_argument('--size_training_set', default=60000, type=int, help='number of random examples from base_train_buffer_path to use')
     # sampling info
     parser.add_argument('-s', '--sample', action='store_true', default=False)
+    parser.add_argument('-tf', '--teacher_force_prev', action='store_true', default=False)
     parser.add_argument('-st', '--sampling_temperature', default=0.1, help='temperature to sample dml')
     # latent pca/tsne info
     parser.add_argument('--pca', action='store_true', default=False)
@@ -474,7 +489,9 @@ if __name__ == '__main__':
         args.frame_shrink_kernel_size = (2,2)
         args.frame_shrink_trim_after = 1
         args.frame_shrink_trim_before = 0
-        sz = '4x040'
+        sz = '40x40'
+    if args.tf_train_last_frame:
+        sz+='_tftpcnn'
     # note - when reloading model, this will use the seed given in args - not
     # the original random seed
     # todo buffer init_unique()
