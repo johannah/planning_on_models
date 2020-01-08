@@ -279,16 +279,20 @@ class ReplayMemory:
 
         return np.array(unique_indices, np.int32), np.array(index_indices, np.int32)
 
-    def shrink_frame_size(self, kernel_size=2, reduction_function=np.max, trim=1,  batch_size=32):
-        '''
-        new batch size deafult
-        '''
+    def trim_array(self, array, trim):
+       return array[:,trim:-trim, trim:-trim]
+
+    def shrink_frame_size(self, kernel_size=2, reduction_function=np.max, trim_before=0, trim_after=0,  batch_size=32):
         _, oh, ow = self.frames.shape
+        if trim_before > 0:
+            self.frames = self.trim_array(self.frames, trim_before)
+            self.pred_frames = self.trim_array(self.pred_frames, trim_before)
+
         self.frames = pool_2d(self.frames, kernel_size, reduction_function)
         self.pred_frames = pool_2d(self.pred_frames, kernel_size, reduction_function)
-        if trim > 0:
-            self.frames = self.frames[:,trim:-trim, trim:-trim]
-            self.pred_frames = self.pred_frames[:,trim:-trim, trim:-trim]
+        if trim_after > 0:
+            self.frames = self.trim_array(self.frames, trim_after)
+            self.pred_frames = self.trim_array(self.pred_frames, trim_after)
         _,self.frame_height,self.frame_width = self.frames.shape
         print('resized frames from %sx%s to %sx%s'%(oh,ow,self.frame_height,self.frame_width))
         self.states = np.empty((batch_size, self.agent_history_length,

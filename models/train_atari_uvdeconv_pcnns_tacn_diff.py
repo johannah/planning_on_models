@@ -65,15 +65,15 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
         epoch_cnt = info['epoch_cnt']
         info['args'].append(largs)
 
-    info['frame_height'] = 40
-    info['frame_width'] = 40
-
     # transform is dependent on loss type
     data_dict, data_paths = make_random_subset_buffers(dataset_path=info['base_datadir'],
                                            buffer_path=info['base_train_buffer_path'],
                                            train_max_examples=info['size_training_set'],
-                                           frame_height=info['frame_height'], frame_width=info['frame_width'])
+                                           kernel_size=info['frame_shrink_kernel_size'],
+                                                       trim=info['frame_shrink_trim'])
 
+    info['frame_height'] = data_dict['train'].frame_height
+    info['frame_width'] = data_dict['train'].frame_width
     info['num_actions'] = data_dict['train'].num_actions()
     info['num_rewards'] = data_dict['train'].num_rewards()
     # assume actions/rewards are 0 indexed
@@ -474,11 +474,13 @@ if __name__ == '__main__':
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
     parser.add_argument('--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvqpcnn_diff', help='name of experiment')
+    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvqpcnn_diff_mp', help='name of experiment')
     parser.add_argument('-dr', '--dropout_rate', default=0.0, type=float)
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
     parser.add_argument('--nr_logistic_mix', default=10, type=int)
+    parser.add_argument('--frame_shrink_kernel_size', default=(2,2))
+    parser.add_argument('--frame_shrink_trim', default=1, type=int)
     # pcnn
     parser.add_argument('--pixel_cnn_dim', default=64, type=int, help='pixel cnn dimension')
     parser.add_argument('--num_pcnn_layers', default=8, help='num layers for pixel cnn')

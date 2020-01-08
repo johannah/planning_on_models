@@ -5,7 +5,7 @@ import sys
 import numpy as np
 from IPython import embed
 
-def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100000, kernel_size=(2,2), trim=1):
+def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100000, kernel_size=(2,2), trim_before=0, trim_after=0):
     sys.path.append('../agents')
     from replay import ReplayMemory
     # keep max_examples < 100000 to enable knn search
@@ -23,7 +23,7 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
             max_examples = int(0.15*train_max_examples)
         else:
             max_examples = train_max_examples
-        small_name = buffer_name.replace('.npz', '_random_subset_%06d_%sx%st%s_%s.npz' %(max_examples, kernel_size[0], kernel_size[1], trim, phase))
+        small_name = buffer_name.replace('.npz', '_random_subset_%06d_%sx%stb%sta%s_%s.npz' %(max_examples, kernel_size[0], kernel_size[1], trim_before, trim_after, phase))
         small_path = os.path.join(dataset_path, small_name)
         paths[phase] = small_path
         if os.path.exists(small_path):
@@ -37,9 +37,10 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
     if not len(buffers.keys()) == 2:
         print('creating new train/valid buffers')
         load_buffer = ReplayMemory(load_file=buffer_path)
-        if max(list(kernel_size)+[trim]) > 1:
+        if max(list(kernel_size)+[trim_before, trim_after]) > 1:
             load_buffer.shrink_frame_size(kernel_size=kernel_size,
-                                          reduction_function=np.max, trim=trim)
+                                          reduction_function=np.max,
+                                          trim_before=trim_before, trim_after=trim_after)
         load_buffer.reset_unique()
         # history_length + 1 for every random example
         frame_multiplier = (load_buffer.agent_history_length+1)
