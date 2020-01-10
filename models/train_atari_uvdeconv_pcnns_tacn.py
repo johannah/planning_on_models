@@ -403,11 +403,12 @@ def sample(model_dict, data_dict, info):
                         print('sampling row: %s'%j)
                         for k in range(canvas.shape[3]):
                             output = model_dict['pcnn_decoder_model'](x=canvas, spatial_condition=rec_dml)
-                            output = sample_from_discretized_mix_logistic(output.detach(), info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
-                            canvas[:,i,j,k] = output[:,i,j,k]
+                            output_o = sample_from_discretized_mix_logistic(output.detach(), info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
+                            canvas[:,i,j,k] = output_o[:,i,j,k]
+                output_o = sample_from_discretized_mix_logistic(output.detach(), info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
 
                 f,ax = plt.subplots(bs, 5, sharex=True, sharey=True, figsize=(3,bs))
-                np_output = output.detach().cpu().numpy()
+                np_output = output_o.detach().cpu().numpy()
                 for idx in range(bs):
                     ax[idx,0].matshow(np_last[idx,0], cmap=plt.cm.gray)
                     ax[idx,1].matshow(np_target[idx,0], cmap=plt.cm.gray)
