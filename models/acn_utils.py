@@ -359,6 +359,8 @@ def discretized_mix_logistic_loss(prediction, target, nr_mix=10, reduction='mean
         dml_loss = -lse.mean()
     elif reduction == 'sum':
         dml_loss = -lse.sum()
+    elif reduction == None:
+        dml_loss = -lse
     else:
         raise ValueError('reduction not known')
     return dml_loss
