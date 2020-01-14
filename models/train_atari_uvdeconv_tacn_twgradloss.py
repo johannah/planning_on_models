@@ -100,8 +100,6 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
     # for dml prediction, need to output mixture of size nmix
     info['nmix'] =  (2*info['nr_logistic_mix']+info['nr_logistic_mix'])*info['target_channels']
     info['output_dim']  = info['nmix']
-    # last layer for pcnn - bias is 0 for dml
-    info['last_layer_bias'] = 0.0
 
     # setup models
     # acn prior with vqvae embedding
@@ -119,19 +117,7 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
                                code_length=info['code_length'], k=info['num_k']).to(info['device'])
     prior_model.codes = prior_model.codes.to(info['device'])
 
-    pcnn_decoder = GatedPixelCNN(input_dim=info['target_channels'],
-                                 output_dim=info['output_dim'],
-                                 dim=info['pixel_cnn_dim'],
-                                 n_layers=info['num_pcnn_layers'],
-                                 # output dim is same as deconv output in this
-                                 # case
-                                 spatial_condition_size=info['output_dim'],
-                                 last_layer_bias=info['last_layer_bias'],
-                                 use_batch_norm=False,
-                                 output_projection_size=info['output_projection_size']).to(info['device'])
-
-
-    model_dict = {'fwd_vq_acn_model':fwd_vq_acn_model, 'prior_model':prior_model, 'pcnn_decoder_model':pcnn_decoder}
+    model_dict = {'fwd_vq_acn_model':fwd_vq_acn_model, 'prior_model':prior_model}
     parameters = []
     for name,model in model_dict.items():
         parameters+=list(model.parameters())
@@ -198,22 +184,16 @@ def forward_pass(model_dict, states, actions, rewards, next_states, index_indexe
         assert index_indexes.max() < model_dict['prior_model'].codes.shape[0]
         model_dict['prior_model'].update_codebook(index_indexes, u_q_flat.detach())
     rec_dml, z_e_x, z_q_x, latents =  model_dict['fwd_vq_acn_model'].decode(z)
-    if info['tf_train_last_frame']:
-        # teacher force with last frame to make sampling easier
-        last_frame = states[:,-1:]
-        pcnn_dml = model_dict['pcnn_decoder_model'](x=last_frame, spatial_condition=rec_dml)
-    else:
-        pcnn_dml = model_dict['pcnn_decoder_model'](x=target, spatial_condition=rec_dml)
     u_p, s_p = model_dict['prior_model'](u_q_flat)
     u_p = u_p.view(bs, 3, 8, 8)
     s_p = s_p.view(bs, 3, 8, 8)
-    return model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, pcnn_dml, z_e_x, z_q_x, latents
+    return model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, z_e_x, z_q_x, latents
 
 def run(train_cnt, model_dict, data_dict, phase, info):
     st = time.time()
     loss_dict = {'running': 0,
              'kl':0,
-             'pcnn_%s'%info['rec_loss_type']:0,
+             'rec_%s'%info['rec_loss_type']:0,
              'vq':0,
              'commit':0,
              'loss':0,
@@ -233,7 +213,7 @@ def run(train_cnt, model_dict, data_dict, phase, info):
         batch = data_loader.get_unique_minibatch(info['batch_size'])
         states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
         fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
-        model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, pcnn_dml, z_e_x, z_q_x, latents = fp_out
+        model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, z_e_x, z_q_x, latents = fp_out
         bs,c,h,w = states.shape
         if idx == 0:
             log_ones = torch.zeros(bs, info['code_length']).to(info['device'])
@@ -248,24 +228,23 @@ def run(train_cnt, model_dict, data_dict, phase, info):
         # find changing pixels
         diff_mask = (torch.abs(diff1 + diff2 + diff3)>0).float()[:,0]
         # no loss on deconv rec
-        # output of pcnn_loss with reduction==None is bs,h,w
-        pcnn_loss = discretized_mix_logistic_loss(pcnn_dml, target, nr_mix=info['nr_logistic_mix'], reduction=None)
-        pcnn_loss_change = diff_mask * pcnn_loss * (torch.abs(1. - diff_mask).sum(dim=-1).sum(dim=-1) / (diff_mask.shape[-2] * diff_mask.shape[-1]))[:, None, None]
-        pcnn_loss_static = torch.abs(1. - diff_mask) * pcnn_loss * (diff_mask.sum(dim=-1).sum(dim=-1) / (diff_mask.shape[-2] * diff_mask.shape[-1]))[:, None, None]
-        pcnn_loss = pcnn_loss_change + pcnn_loss_static
-        pcnn_loss = pcnn_loss.sum()
+        rec_loss = discretized_mix_logistic_loss(rec_dml, target, nr_mix=info['nr_logistic_mix'], reduction=None)
+        rec_loss_change =  diff_mask * rec_loss * (torch.abs(1. - diff_mask).sum(dim=-1).sum(dim=-1) / (diff_mask.shape[-2] * diff_mask.shape[-1]))[:, None, None]
+        rec_loss_static = torch.abs(1. - diff_mask) * rec_loss * (diff_mask.sum(dim=-1).sum(dim=-1) / (diff_mask.shape[-2] * diff_mask.shape[-1]))[:, None, None]
+        rec_loss = rec_loss_change + rec_loss_static
+        rec_loss = 20*rec_loss.sum()
         vq_loss = F.mse_loss(z_q_x, z_e_x.detach(), reduction=info['reduction'])
         commit_loss = F.mse_loss(z_e_x, z_q_x.detach(), reduction=info['reduction'])
         commit_loss *= info['vq_commitment_beta']
-        loss = kl+pcnn_loss+commit_loss+vq_loss
+        loss = kl+rec_loss+commit_loss+vq_loss
         loss_dict['running']+=bs
         loss_dict['loss']+=loss.detach().cpu().item()
         loss_dict['kl']+= kl.detach().cpu().item()
-        loss_dict['change']+= pcnn_loss_change.sum().detach().cpu().item()
-        loss_dict['static']+= pcnn_loss_static.sum().detach().cpu().item()
+        loss_dict['change']+= rec_loss_change.sum().detach().cpu().item()
+        loss_dict['static']+= rec_loss_static.sum().detach().cpu().item()
         loss_dict['vq']+= vq_loss.detach().cpu().item()
         loss_dict['commit']+= commit_loss.detach().cpu().item()
-        loss_dict['pcnn_%s'%info['rec_loss_type']]+=pcnn_loss.detach().cpu().item()
+        loss_dict['rec_%s'%info['rec_loss_type']]+=rec_loss.detach().cpu().item()
         if phase == 'train':
             model_dict = clip_parameters(model_dict)
             loss.backward()
@@ -273,14 +252,13 @@ def run(train_cnt, model_dict, data_dict, phase, info):
             train_cnt+=bs
         if idx == num_batches-3:
             # store example near end for plotting
-            pcnn_yhat = sample_from_discretized_mix_logistic(pcnn_dml, info['nr_logistic_mix'], only_mean=info['sample_mean'], sampling_temperature=info['sampling_temperature'])
             rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=info['sample_mean'], sampling_temperature=info['sampling_temperature'])
             example = {
                        'prev_frame':rescale_inv(states[:,-1:].detach().cpu()),
-                       'diff_mask':diff_mask.detach().cpu(),
+                       'diff_mask':diff_mask.detach().cpu()[:,None],
                        'target':rescale_inv(target.detach().cpu()),
                        'deconv_yhat':rescale_inv(rec_yhat.detach().cpu()),
-                       'pcnn_yhat':rescale_inv(pcnn_yhat.detach().cpu()),
+                       'rec_yhat':rescale_inv(rec_yhat.detach().cpu()),
                        }
         if not idx % 10:
             print(train_cnt, idx, account_losses(loss_dict))
@@ -364,7 +342,7 @@ def call_plot(model_dict, data_dict, info):
             batch = data_loader.get_unique_minibatch(84)
             states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
             fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
-            model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, pcnn_dml, z_e_x, z_q_x, latents = fp_out
+            model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, z_e_x, z_q_x, latents = fp_out
             bs = states.shape[0]
             u_q_flat = u_q.view(bs, info['code_length'])
             X = u_q_flat.cpu().numpy()
@@ -383,68 +361,6 @@ def call_plot(model_dict, data_dict, info):
                           html_out_path=html_path, serve=False)
             break
 
-def sample(model_dict, data_dict, info):
-    model_dict = set_model_mode(model_dict, 'valid')
-    output_savepath = args.model_loadpath.replace('.pt', '')
-    bs = 10
-    with torch.no_grad():
-        for phase in ['valid', 'train']:
-            with torch.no_grad():
-                data_loader = data_dict[phase]
-                data_loader.reset_unique()
-                batch = data_loader.get_unique_minibatch(bs)
-                states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
-                fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
-                model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, pcnn_dml, z_e_x, z_q_x, latents = fp_out
-                # teacher forced version
-                pcnn_yhat = sample_from_discretized_mix_logistic(pcnn_dml, info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
-                rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
-                # create blank canvas for autoregressive sampling
-                last = states[:,-1:]
-                np_last = deepcopy(last.detach().cpu().numpy())
-                np_target = deepcopy(target.detach().cpu().numpy())
-                np_rec_yhat = rec_yhat.detach().cpu().numpy()
-                np_pcnn_yhat = pcnn_yhat.detach().cpu().numpy()
-                if args.teacher_force_prev:
-                    st_can = '_lf'
-                    #canvas = last
-                    canvas = target
-                else:
-                    st_can = '_zc'
-                    canvas = torch.zeros_like(target)
-                iname = output_savepath + st_can + '_st%s'%args.sampling_temperature + '_sample_%s.png'%phase
-                print('using zero output as sample canvas')
-                for i in range(canvas.shape[1]):
-                    for j in range(canvas.shape[2]):
-                        print('sampling row: %s'%j)
-                        for k in range(canvas.shape[3]):
-                            output = model_dict['pcnn_decoder_model'](x=canvas, spatial_condition=rec_dml)
-                            output_o = sample_from_discretized_mix_logistic(output.detach(), info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
-                            canvas[:,i,j,k] = output_o[:,i,j,k]
-                output_o = sample_from_discretized_mix_logistic(output.detach(), info['nr_logistic_mix'], only_mean=args.sample_mean, sampling_temperature=args.sampling_temperature)
-
-                f,ax = plt.subplots(bs, 5, sharex=True, sharey=True, figsize=(3,bs))
-                np_output = output_o.detach().cpu().numpy()
-                for idx in range(bs):
-                    ax[idx,0].matshow(np_last[idx,0], cmap=plt.cm.gray)
-                    ax[idx,1].matshow(np_target[idx,0], cmap=plt.cm.gray)
-                    ax[idx,2].matshow(np_rec_yhat[idx,0], cmap=plt.cm.gray)
-                    ax[idx,3].matshow(np_pcnn_yhat[idx,0], cmap=plt.cm.gray)
-                    ax[idx,4].matshow(np_output[idx,0], cmap=plt.cm.gray)
-                    ax[idx,0].set_title('last')
-                    ax[idx,1].set_title('true')
-                    ax[idx,2].set_title('conv')
-                    ax[idx,3].set_title('tf')
-                    ax[idx,4].set_title('sam')
-                    ax[idx,0].axis('off')
-                    ax[idx,1].axis('off')
-                    ax[idx,2].axis('off')
-                    ax[idx,3].axis('off')
-                    ax[idx,4].axis('off')
-                print('plotting %s'%iname)
-                plt.savefig(iname)
-                plt.close()
-
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser(description='train acn')
@@ -461,16 +377,12 @@ if __name__ == '__main__':
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
     parser.add_argument('--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvqpcnn_twgrad', help='name of experiment')
+    parser.add_argument('-e', '--exp_name', default='fwd_trbreakout_spvq_twgrad', help='name of experiment')
     parser.add_argument('-dr', '--dropout_rate', default=0.0, type=float)
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
     parser.add_argument('--nr_logistic_mix', default=10, type=int)
     parser.add_argument('--small', action='store_true', default=False)
-    # pcnn
-    parser.add_argument('--pixel_cnn_dim', default=64, type=int, help='pixel cnn dimension')
-    parser.add_argument('--num_pcnn_layers', default=8, help='num layers for pixel cnn')
-    parser.add_argument('--output_projection_size', default=32, type=int)
     # acn model setup
     parser.add_argument('-cl', '--code_length', default=192, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
@@ -503,8 +415,6 @@ if __name__ == '__main__':
         sz = '20x20'
     else:
         sz = '40x40'
-    if args.tf_train_last_frame:
-        sz+='_tftpcnn'
     # note - when reloading model, this will use the seed given in args - not
     # the original random seed
     # todo buffer init_unique()
