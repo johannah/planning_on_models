@@ -17,8 +17,6 @@ import torch.nn.functional as F
 from dqn_model import EnsembleNet, NetWithPrior
 
 from IPython import embed
-# add annealing in
-
 def seed_everything(seed=1234):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -49,7 +47,7 @@ def vote_action_function(vals):
 
 def get_frame_prepared_minibatch(ch, minibatch):
     #states, actions, rewards, next_states, terminal_flags, masks = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
-    states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states = minibatch
+    states, actions, rewards, next_states, terminal_flags, masks = minibatch
     states = prepare_state(ch, states)
     next_states = prepare_state(ch, next_states)
     # move states between 0 and 1 - they are stored as uint8
@@ -64,7 +62,7 @@ def get_frame_prepared_minibatch(ch, minibatch):
     actions = torch.LongTensor(actions).to(ch.device)
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(ch.device)
     masks = torch.FloatTensor(masks.astype(np.int)).to(ch.device)
-    minibatch = states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states
+    minibatch = states, actions, rewards, next_states, terminal_flags, masks
     return  minibatch
 
 def dqn_learn(sm, model_dict):
@@ -73,7 +71,7 @@ def dqn_learn(sm, model_dict):
         if not sm.step_number%sm.ch.cfg['DQN']['learn_every_steps']:
             minibatch = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
             prepared_minibatch = get_frame_prepared_minibatch(sm.ch, minibatch)
-            states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states = prepared_minibatch
+            states, actions, rewards, next_states, terminal_flags, masks = prepared_minibatch
             # min history to learn is 200,000 frames in dqn - 50000 steps
             losses = [0.0 for _ in range(sm.ch.cfg['DQN']['n_ensemble'])]
             model_dict['opt'].zero_grad()
@@ -204,12 +202,11 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
     from handler import ConfigHandler, StateManager
     parser = ArgumentParser()
-    parser.add_argument('-cp', '--config_path', default='', help='path of config file that will be used to generate random data')
+    parser.add_argument('-cp', '--config_path', help='path of config file that will be used to generate random data')
     parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')
     parser.add_argument('-mp', '--model_path', default='', help='path of .pt model file to load checkpoint')
     parser.add_argument('-c', '--cuda', action='store_true', default=False, help='flag to use cuda device')
     # TODO - add reload and continue of previous projects
-
     args = parser.parse_args()
     if args.cuda: device = 'cuda';
     else: device='cpu'
@@ -238,6 +235,7 @@ if __name__ == '__main__':
             train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
             eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
 
+    seed_everything(ch.cfg['RUN']['train_seed'])
     model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
     if args.model_path != '':
         model_dict = load_models(args.model_path, model_dict)
@@ -246,9 +244,8 @@ if __name__ == '__main__':
     else:
         print('fresh models')
 
-
-    seed_everything(ch.cfg['RUN']['train_seed'])
-    #TODO load model_dict
+    checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
+    save_models(checkpoint_basepath, model_dict)
 
     steps_to_train = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
     num_eval_episodes = ch.cfg['EVAL']['num_eval_episodes']

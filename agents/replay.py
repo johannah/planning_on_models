@@ -16,13 +16,15 @@ def find_component_proportion(data, unique):
             component_percentages.append(0.0)
     return component_percentages
 
+
 # This function was mostly pulled from
 # https://github.com/fg91/Deep-Q-Learning/blob/master/DQN.ipynb
 class ReplayMemory:
     """Replay Memory that stores the last size=1,000,000 transitions"""
     def __init__(self, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
-                 bernoulli_probability=1.0, load_file='', seed=393, use_pred_frames=False):
+                 bernoulli_probability=1.0, load_file='', seed=393, use_pred_frames=False,
+                 maxpool=False, trim_before=0, trim_after=0, kernel_size=0, reduction_function=np.max):
                 # bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', seed=393):
         """
         Args:
@@ -36,6 +38,12 @@ class ReplayMemory:
            # latent_frame_height/width: size of latent representations, if 0, then no latents are stored
 
         """
+        if maxpool:
+            self.maxpool = maxpool
+            self.trim_before = trim_before
+            self.trim_after = trim_after
+            self.kernel_size = kernel_size
+            self.reduction_function = reduction_function
         self.unique_available = False
         self.use_pred_frames = use_pred_frames
         if load_file != '':
@@ -104,6 +112,11 @@ class ReplayMemory:
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
                  num_heads=self.num_heads, bernoulli_probability=self.bernoulli_probability,
+                 maxpool=self.maxpool,
+                 trim_before=self.trim_before,
+                 trim_after=self.trim_after,
+                 kernel_size=self.kernel_size,
+                 reduction_function=str(self.reduction_function),
                  )
         print("finished saving buffer", time.time()-st)
 
@@ -133,6 +146,15 @@ class ReplayMemory:
         self.frame_width = npfile['frame_width']
         self.num_heads = npfile['num_heads']
         self.bernoulli_probability = npfile['bernoulli_probability']
+        if 'maxpool' in npfile.keys():
+            self.maxpool = npfile['maxpool']
+            self.trim_before = npfile['trim_before']
+            self.trim_after = npfile['trim_after']
+            self.kernel_size = npfile['kernel_size']
+            self.reduction_function = eval(npfile['reduction_function'])
+        else:
+            self.maxpool = False
+        self.unique_available = False
         #self.latent_frames = npfile['latent_frames']
 
         if self.num_heads == 1:
@@ -158,6 +180,8 @@ class ReplayMemory:
             reward: A float determining the reward the agend received for performing an action
             terminal: A bool stating whether the episode terminated
         """
+        if self.maxpool:
+            frame = self.online_shrink_frame_size(frame)
         if frame.shape != (self.frame_height, self.frame_width):
             raise ValueError('Dimension of frame is wrong!')
         self.actions[self.current] = action
@@ -198,6 +222,12 @@ class ReplayMemory:
                     continue
                 break
             self.indices[i] = index
+
+    def last_state(self):
+        # TODO
+        if self.count < self.agent_history_length:
+            raise ValueError('Not enough memories to get a minibatch')
+        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
 
     def get_minibatch(self, batch_size):
         """
@@ -279,20 +309,27 @@ class ReplayMemory:
 
         return np.array(unique_indices, np.int32), np.array(index_indices, np.int32)
 
-    def trim_array(self, array, trim):
-       return array[:,trim:-trim, trim:-trim]
+
+    def online_shrink_frame_size(self, frames):
+        _, oh, ow = frames.shape
+        if self.trim_before > 0:
+            frames = trim_array(frames, self.trim_before)
+        frames = pool_2d(frames, self.kernel_size, self.reduction_function)
+        if self.trim_after > 0:
+            frames = trim_array(frames, self.trim_after)
+        return frames
 
     def shrink_frame_size(self, kernel_size=2, reduction_function=np.max, trim_before=0, trim_after=0,  batch_size=32):
         _, oh, ow = self.frames.shape
         if trim_before > 0:
-            self.frames = self.trim_array(self.frames, trim_before)
-            self.pred_frames = self.trim_array(self.pred_frames, trim_before)
+            self.frames = trim_array(self.frames, trim_before)
+            self.pred_frames = trim_array(self.pred_frames, trim_before)
 
         self.frames = pool_2d(self.frames, kernel_size, reduction_function)
         self.pred_frames = pool_2d(self.pred_frames, kernel_size, reduction_function)
         if trim_after > 0:
-            self.frames = self.trim_array(self.frames, trim_after)
-            self.pred_frames = self.trim_array(self.pred_frames, trim_after)
+            self.frames = trim_array(self.frames, trim_after)
+            self.pred_frames = trim_array(self.pred_frames, trim_after)
         _,self.frame_height,self.frame_width = self.frames.shape
         print('resized frames from %sx%s to %sx%s'%(oh,ow,self.frame_height,self.frame_width))
         self.states = np.empty((batch_size, self.agent_history_length,
@@ -338,6 +375,9 @@ class ReplayMemory:
             self.states[i], self.pred_states[i] = self._get_state(idx - 1)
             self.new_states[i], self.pred_new_states[i] = self._get_state(idx)
         return self.states, self.actions[unique_indices], self.rewards[unique_indices], self.new_states, self.terminal_flags[unique_indices], self.masks[unique_indices], unique_indices, index_indices
+
+def trim_array(array, trim):
+   return array[:,trim:-trim, trim:-trim]
 
 def pool_2d(arr, kernel_size, reduction_function, debug_plot=False, debug_name=""):
     # takes in arr of bs, h, w

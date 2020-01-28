@@ -343,6 +343,24 @@ def call_plot(model_dict, data_dict, info):
             states, actions, rewards, next_states, _, _, batch_indexes, index_indexes = batch
             fp_out = forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info)
             model_dict, states, actions, rewards, target, u_q, u_p, s_p, rec_dml, z_e_x, z_q_x, latents = fp_out
+            rec_yhat = sample_from_discretized_mix_logistic(rec_dml, info['nr_logistic_mix'], only_mean=info['sample_mean'], sampling_temperature=info['sampling_temperature'])
+            f,ax = plt.subplots(10,3)
+            ax[0,0].set_title('prev')
+            ax[0,1].set_title('true')
+            ax[0,2].set_title('pred')
+            for i in range(10):
+                ax[i,0].matshow(states[i,-1])
+                ax[i,1].matshow(target[i,-1])
+                ax[i,2].matshow(rec_yhat[i,-1])
+                ax[i,0].axis('off')
+                ax[i,1].axis('off')
+                ax[i,2].axis('off')
+            plt.subplots_adjust(wspace=0, hspace=0)
+            plt.tight_layout()
+
+            plt_path = info['model_loadpath'].replace('.pt', '_%s_plt.png'%phase)
+            print('plotting', plt_path)
+            plt.savefig(plt_path)
             bs = states.shape[0]
             u_q_flat = u_q.view(bs, info['code_length'])
             X = u_q_flat.cpu().numpy()
@@ -359,7 +377,7 @@ def call_plot(model_dict, data_dict, info):
                 html_path = info['model_loadpath'].replace('.pt', param_name)
                 pca_plot(X=X, images=images, color=color,
                           html_out_path=html_path, serve=False)
-            break
+
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -440,13 +458,7 @@ if __name__ == '__main__':
     kldis = nn.KLDivLoss(reduction=info['reduction'])
     lsm = nn.LogSoftmax(dim=1)
     sm = nn.Softmax(dim=1)
-    if args.tsne or args.pca:
-        call_plot(model_dict, data_dict, info)
-    #if args.walk:
-    #    latent_walk(model_dict, data_dict, info)
-    if args.sample:
-        # limit batch size
-        sample(model_dict, data_dict, info)
+    call_plot(model_dict, data_dict, info)
     # only train if we weren't asked to do anything else
     if not max([args.sample, args.tsne, args.pca]):
         write_log_files(info)

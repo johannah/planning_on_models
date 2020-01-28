@@ -21,61 +21,61 @@ copy code to working directory
 plot entire episode observed frames - could do this in a sep script
 """
 
-def collect_random_experience(seed, env, memory_buffer, num_random_steps, pred_next_state_function=None):
-    # note that since we are making the env different here
-    # we should always use a different env for the random portion vs the
-    # learning agent
-    # create new replay memory
-    print("starting random experience collection for %s steps"%num_random_steps)
-    step_number = 0
-    epoch_num = 0
-    random_state = np.random.RandomState(seed)
-    heads = np.arange(memory_buffer.num_heads)
-    while step_number < num_random_steps:
-        epoch_frame = 0
-        terminal = False
-        life_lost = True
-        # use real state
-        episode_reward_sum = 0
-        random_state.shuffle(heads)
-        active_head = heads[0]
-        print("Gathering data with head=%s"%active_head)
-        # at every new episode - recalculate action/reward weight
-        state = env.reset()
-        while not terminal:
-            action = random_state.choice(env.actions)
-            next_state, reward, life_lost, terminal = env.step(action)
-            # TODO - dead as end? should be from ini file or is it handled
-            # in env?
-            if pred_next_state_function == None:
-                # Store transition in the replay memory
-                memory_buffer.add_experience(action=action,
-                                             frame=next_state[-1],
-                                             #reward=1+np.sign(reward), # add one so that rewards are <=0
-                                             reward=np.sign(reward), # add one so that rewards are <=0
-                                             terminal=life_lost,
-                                             )
-                state = next_state
-            #else:
-            #    batch = (state[None], np.array([action]), np.array([reward]), next_state[None], np.array([life_lost]), 1)
-            #    pred_next_state = pred_next_state_function(batch)[0,0].cpu().numpy()
-            #    pred_next_state = (pred_next_state*255).astype(np.uint8)
-            #    memory_buffer.add_experience(action=action,
-            #                                 frame=next_state[-1],
-            #                                 pred_frame=pred_next_state,
-            #                                 #reward=1+np.sign(reward), # add one so that rewards are <=0
-            #                                 reward=np.sign(reward), # add one so that rewards are <=0
-            #                                 terminal=life_lost,
-            #                                 )
-            #    state = np.vstack((state[:-1], next_state[-1:]))
-
-            step_number += 1
-            epoch_frame += 1
-            episode_reward_sum += reward
-        print("finished epoch %s: reward %s" %(epoch_num, episode_reward_sum))
-        print("%s/%s steps completed" %(step_number, num_random_steps))
-        epoch_num += 1
-    return memory_buffer
+#def collect_random_experience(seed, env, memory_buffer, num_random_steps, pred_next_state_function=None):
+#    # note that since we are making the env different here
+#    # we should always use a different env for the random portion vs the
+#    # learning agent
+#    # create new replay memory
+#    print("starting random experience collection for %s steps"%num_random_steps)
+#    step_number = 0
+#    epoch_num = 0
+#    random_state = np.random.RandomState(seed)
+#    heads = np.arange(memory_buffer.num_heads)
+#    while step_number < num_random_steps:
+#        epoch_frame = 0
+#        terminal = False
+#        life_lost = True
+#        # use real state
+#        episode_reward_sum = 0
+#        random_state.shuffle(heads)
+#        active_head = heads[0]
+#        print("Gathering data with head=%s"%active_head)
+#        # at every new episode - recalculate action/reward weight
+#        state = env.reset()
+#        while not terminal:
+#            action = random_state.choice(env.actions)
+#            next_state, reward, life_lost, terminal = env.step(action)
+#            # TODO - dead as end? should be from ini file or is it handled
+#            # in env?
+#            if pred_next_state_function == None:
+#                # Store transition in the replay memory
+#                memory_buffer.add_experience(action=action,
+#                                             frame=next_state[-1],
+#                                             #reward=1+np.sign(reward), # add one so that rewards are <=0
+#                                             reward=np.sign(reward), # add one so that rewards are <=0
+#                                             terminal=life_lost,
+#                                             )
+#                state = next_state
+#            #else:
+#            #    batch = (state[None], np.array([action]), np.array([reward]), next_state[None], np.array([life_lost]), 1)
+#            #    pred_next_state = pred_next_state_function(batch)[0,0].cpu().numpy()
+#            #    pred_next_state = (pred_next_state*255).astype(np.uint8)
+#            #    memory_buffer.add_experience(action=action,
+#            #                                 frame=next_state[-1],
+#            #                                 pred_frame=pred_next_state,
+#            #                                 #reward=1+np.sign(reward), # add one so that rewards are <=0
+#            #                                 reward=np.sign(reward), # add one so that rewards are <=0
+#            #                                 terminal=life_lost,
+#            #                                 )
+#            #    state = np.vstack((state[:-1], next_state[-1:]))
+#
+#            step_number += 1
+#            epoch_frame += 1
+#            episode_reward_sum += reward
+#        print("finished epoch %s: reward %s" %(epoch_num, episode_reward_sum))
+#        print("%s/%s steps completed" %(step_number, num_random_steps))
+#        epoch_num += 1
+#    return memory_buffer
 
 class ConfigHandler():
     """
@@ -202,17 +202,35 @@ class ConfigHandler():
         else:
             return ""
 
-    def create_empty_memory_buffer(self, seed, buffer_size):
-        return  ReplayMemory(size=buffer_size,
-                               frame_height=self.cfg['ENV']['obs_height'],
-                               frame_width=self.cfg['ENV']['obs_width'],
+    def create_empty_memory_buffer(self, seed, buffer_size, kernel_size=0, reduction_function=np.max, trim_before=0, trim_after=0):
+        self.frame_height = self.cfg['ENV']['obs_width']
+        self.frame_width = self.cfg['ENV']['obs_width']
+        self.maxpool = False
+        if 'REP' in self.cfg.keys():
+            if self.cfg['REP']['MP_HEIGHT'] > 0:
+                # if maxpooling is done to output of env.py -> then this is what
+                # goes in the replay buffer. we used maxpool downsample in atari to
+                # get small enough frames, while preserving important info in the
+                # frames
+                self.frame_height = self.cfg['REP']['mp_width']
+                self.frame_width = self.cfg['REP']['mp_width']
+                self.maxpool = True
+        return ReplayMemory(size=buffer_size,
+                               frame_height=frame_height,
+                               frame_width=frame_width,
                                agent_history_length=self.cfg['ENV']['history_size'],
                                batch_size=self.cfg['DQN']['batch_size'],
                                num_heads=self.cfg['DQN']['n_ensemble'],
                                bernoulli_probability=self.cfg['DQN']['bernoulli_probability'],
                                seed=seed,
-                               use_pred_frames=self.cfg['DQN']['use_pred_frames']
-                                       )
+                               use_pred_frames=self.cfg['DQN']['use_pred_frames'],
+                               # details needed for online max pooling
+                               maxpool=self.maxpool,
+                               trim_before=self.cfg['REP']['trim_before'],
+                               trim_after=self.cfg['REP']['trim_after'],
+                               kernel_size=self.cfg['REP']['kernel_size'],
+                               reduction_function=eval(self.cfg['REP']['reduction_function']),
+                             )
 
     def load_memory_buffer(self, phase, load_previously_saved=True):
         """
@@ -247,14 +265,14 @@ class ConfigHandler():
             print('did not find saved replay buffers')
             print('cannot find a suitable random replay buffers... creating one - this will take some time')
             # did not find any checkpoints - load random buffer
-            random_memory_buffer = self.create_empty_memory_buffer(seed,
+            empty_memory_buffer = self.create_empty_memory_buffer(seed,
                                                                    buffer_size)
 
             env = self.create_environment(seed)
-            random_memory_buffer = collect_random_experience(seed, env, random_memory_buffer, num_random_steps, pred_next_state_function=self.pred_next_state_function)
+            #random_memory_buffer = collect_random_experience(seed, env, random_memory_buffer, num_random_steps, pred_next_state_function=self.pred_next_state_function)
             # save the random buffer
-            random_memory_buffer.save_buffer(random_buffer_path)
-            return random_memory_buffer
+            #random_memory_buffer.save_buffer(random_buffer_path)
+            return empty_memory_buffer
 
 class StateManager():
     def __init__(self):
@@ -265,6 +283,7 @@ class StateManager():
         self.save_time = time.time()-100000
         self.phase = phase
         self.step_number = 0
+        self.end_step_number = -1
         self.episode_number = 0
         self.seed = self.ch.cfg['RUN']['%s_seed'%self.phase]
         self.random_state = np.random.RandomState(self.seed)
@@ -365,6 +384,7 @@ class StateManager():
         self.start_time = time.time()
         self.random_state.shuffle(self.heads)
         self.active_head = self.heads[0]
+        self.end_step_number = -1
 
         self.episode_losses = []
         self.episode_actions = []
@@ -402,24 +422,25 @@ class StateManager():
         suptitle = 'Details E%s S%s'%(self.episode_number, self.end_step_number)
         edet_plot_path = plot_basepath+'_details_episodes.png'
         sdet_plot_path = plot_basepath+'_details_episodes.png'
-        #exdata = np.arange(self.episode_number)
-        #self.plot_data(edet_plot_path, det_plot_dict, suptitle, xname='episode', xdata=exdata)
-        #self.plot_data(sdet_plot_path, det_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
-        self.plot_data(edet_plot_path, det_plot_dict, suptitle, xname='episode')#, xdata=exdata)
-        self.plot_data(sdet_plot_path, det_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
+        if self.end_step_number > 1:
+            #exdata = np.arange(self.episode_number)
+            #self.plot_data(edet_plot_path, det_plot_dict, suptitle, xname='episode', xdata=exdata)
+            #self.plot_data(sdet_plot_path, det_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
+            self.plot_data(edet_plot_path, det_plot_dict, suptitle, xname='episode')#, xdata=exdata)
+            self.plot_data(sdet_plot_path, det_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
 
-        rew_plot_dict = {
-            'episodic reward':self.episodic_reward,
-            'smooth episodic reward':self.episodic_reward_avg,
-        }
+            rew_plot_dict = {
+                'episodic reward':self.episodic_reward,
+                'smooth episodic reward':self.episodic_reward_avg,
+            }
 
-        suptitle = 'Reward E%s S%s R%s'%(self.episode_number, self.end_step_number, self.episodic_reward[-1])
-        erew_plot_path = plot_basepath+'_reward_episodes.png'
-        srew_plot_path = plot_basepath+'_reward_steps.png'
-        #self.plot_data(erew_plot_path, rew_plot_dict, suptitle, xname='episode', xdata=np.arange(self.episode_number))
-        #self.plot_data(srew_plot_path, rew_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
-        self.plot_data(erew_plot_path, rew_plot_dict, suptitle, xname='episode')#, xdata=np.arange(self.episode_number))
-        self.plot_data(srew_plot_path, rew_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
+            suptitle = 'Reward E%s S%s R%s'%(self.episode_number, self.end_step_number, self.episodic_reward[-1])
+            erew_plot_path = plot_basepath+'_reward_episodes.png'
+            srew_plot_path = plot_basepath+'_reward_steps.png'
+            #self.plot_data(erew_plot_path, rew_plot_dict, suptitle, xname='episode', xdata=np.arange(self.episode_number))
+            #self.plot_data(srew_plot_path, rew_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
+            self.plot_data(erew_plot_path, rew_plot_dict, suptitle, xname='episode')#, xdata=np.arange(self.episode_number))
+            self.plot_data(srew_plot_path, rew_plot_dict, suptitle, xname='steps', xdata=self.episodic_step_ends)
 
     def plot_data(self, savepath, plot_dict, suptitle, xname, xdata=None):
         st = time.time()
@@ -481,11 +502,12 @@ class StateManager():
 
     def step(self, action):
         next_state, reward, self.life_lost, self.terminal = self.env.step(action)
+        # the replay buffer will convert the observed state as needed
         self.memory_buffer.add_experience(action=action,
-                                            frame=next_state[-1],
-                                            #reward=1+np.sign(reward),
-                                            reward=np.sign(reward),
-                                            terminal=self.life_lost,
+                                          frame=next_state[-1],
+                                          #reward=1+np.sign(reward),
+                                          reward=np.sign(reward),
+                                          terminal=self.life_lost,
                                             )
         self.episode_actions.append(action)
         self.episode_rewards.append(reward)

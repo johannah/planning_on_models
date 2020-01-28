@@ -24,8 +24,6 @@ from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import make_state as re
 
 
 from IPython import embed
-# TODO - add annealing
-
 
 def seed_everything(seed=1234):
     torch.manual_seed(seed)
@@ -57,23 +55,21 @@ def vote_action_function(vals):
 
 def get_frame_prepared_minibatch(ch, minibatch):
     #states, actions, rewards, next_states, terminal_flags, masks = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
-    states, actions, rewards, next_states, terminal_flags, masks = minibatch
+    states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states = minibatch
     states = prepare_state(ch, states)
     next_states = prepare_state(ch, next_states)
-    rewards = torch.Tensor(rewards).to(ch.device)
-    actions = torch.LongTensor(actions).to(ch.device)
     # move states between 0 and 1 - they are stored as uint8
     assert(states.max() <= 1)
     assert(next_states.max() <= 1)
     assert(states.min() >= 0)
     assert(next_states.max() >= 0)
-
+    rewards = torch.Tensor(rewards).to(ch.device)
     assert(rewards.max() <= 1)
     assert(rewards.min() >= -1)
-
+    actions = torch.LongTensor(actions).to(ch.device)
     terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(ch.device)
     masks = torch.FloatTensor(masks.astype(np.int)).to(ch.device)
-    minibatch = states, actions, rewards, next_states, terminal_flags, masks
+    minibatch = states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states
     return  minibatch
 
 def acn_pcnn_pred_next_state_function(batch):
@@ -91,7 +87,7 @@ def dqn_learn(sm, model_dict):
         if not sm.step_number%sm.ch.cfg['DQN']['learn_every_steps']:
             minibatch = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
             prepared_minibatch = get_frame_prepared_minibatch(sm.ch, minibatch)
-            states, actions, rewards, next_states, terminal_flags, masks = prepared_minibatch
+            states, actions, rewards, next_states, terminal_flags, masks, pred_states, pred_next_states = prepared_minibatch
             # min history to learn is 200,000 frames in dqn - 50000 steps
             losses = [0.0 for _ in range(sm.ch.cfg['DQN']['n_ensemble'])]
             model_dict['opt'].zero_grad()
@@ -132,14 +128,11 @@ def dqn_learn(sm, model_dict):
     sm.episode_losses.append(s_loss)
     return sm, model_dict
 
+
 def prepare_state(ch, state):
-    assert(state.dtype == np.uint8)
-    pt_state = torch.Tensor(state.astype(np.float)/ch.norm_by).to(ch.device)
-    """
-    TODO: how does prepare state change?
-    should we make decisions on the true state or the reconstructed state?
-    """
-    return pt_state
+    # resize using max pool
+    dummy_next_state = state
+    make_atari_channel_action_reward_state(state, prev_action, prev_reward, dummy_next_state, info['device'], info['num_actions'], info['num_rewards'])
 
 def train_agent(sm, model_dict, steps_to_train):
     print('training at S%s'%sm.step_number)
@@ -221,35 +214,16 @@ def create_dqn_model_dict(ch, num_actions, model_dict={}):
     model_dict['opt'] = optim.Adam(model_dict['policy_net'].parameters(), lr=ch.cfg['DQN']['adam_learning_rate'])
     return model_dict
 
-def load_representation_model(representation_model_path):
-    # load rec model
-    tmlp =  representation_model_path+'.tmp'
-    os.system('cp %s %s'%(representation_model_path, tmlp))
-    _dict = torch.load(tmlp, map_location=lambda storage, loc:storage)
-    rep_info = _dict['info']
-    rep_args = _dict['info']['args'][-1]
-    if 'size_training_set' not in rep_info.keys():
-        rep_info['size_training_set'] = 80000 # was what i used to train base model on dec 4 2019
-        print('NO TRAINING SIZE GIVEN, using %s'%rep_info['size_training_set'])
-    vae_model = ConvVAE(rep_args.code_length, input_size=6, num_output_channels=1).to(device)
-    prior_model = PriorNetwork(size_training_set=rep_info['size_training_set'],
-                               code_length=rep_args.code_length, k=rep_args.num_k).to(device)
-    pcnn_decoder = GatedPixelCNN(input_dim=1,
-                                 dim=rep_info['NUM_PCNN_FILTERS'],
-                                 n_layers=rep_info['NUM_PCNN_LAYERS'],
-                                 n_classes=rep_info['num_actions'],
-                                 float_condition_size=rep_args.code_length,
-                                 last_layer_bias=rep_info['last_layer_bias'],
-                                 hsize=rep_info['hsize'],
-                                 wsize=rep_info['wsize']).to(device)
-    vae_model.load_state_dict(_dict['vae_state_dict'])
-    prior_model.load_state_dict(_dict['prior_state_dict'])
-    pcnn_decoder.load_state_dict(_dict['pcnn_state_dict'])
-    rep_dict = {'vae_model':vae_model,
-                      'prior_model':prior_model,
-                      'pcnn_decoder':pcnn_decoder,
-                      'info':rep_info}
-    return rep_dict
+def load_uvdeconv_representation_model(representation_model_path):
+    # model trained with this file:
+    # ../models/train_atari_uvdeconv_tacn_twgradloss.py
+    # will output a acn flat float representation and a vq discrete
+    # representation - which to use?
+    from train_atari_uvdeconv_tacn_twgradloss import create_models, forward_pass, make_atari_channel_action_reward_state
+    rep_info = {'device':device}
+    rep_model_dict, _, rep_info, train_cnt, epoch_cnt, rescale, rescale_inv = create_models(rep_info, representation_model_path)
+    return rep_model_dict, rep_info
+
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -269,7 +243,7 @@ if __name__ == '__main__':
     if args.cuda: device = 'cuda';
     else: device='cpu'
 
-    rep_dict = load_representation_model(args.representation_model_path)
+    rep_model_dict, rep_info = load_uvdeconv_representation_model(args.representation_model_path)
 
     # this will load latest availalbe buffer - if none available - it will
     # create or load a random replay for this seed
@@ -293,11 +267,16 @@ if __name__ == '__main__':
             print('loading checkpoint with specified config')
             train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
             eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
+
     # make sure given info in the config file is the same as what the
     # representation model was trained on
-    assert (rep_dict['info']['wsize'] ==  ch.cfg['ENV']['obs_width'])
-    assert (rep_dict['info']['hsize'] ==  ch.cfg['ENV']['obs_height'])
+    #assert (rep_info['wsize'] ==  ch.cfg['ENV']['obs_width'])
+    #assert (rep_info['hsize'] ==  ch.cfg['ENV']['obs_height'])
+    # JRH Jan 2020 - for the uvdeconv model, it should be resized once by
+    # env.py, then resized again with max pooling to get it down to the
+    # prescribed size - this is available in replay.py
 
+    seed_everything(ch.cfg['RUN']['train_seed'])
     model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
     if args.model_path != '':
         model_dict = load_models(args.model_path, model_dict)
@@ -307,7 +286,6 @@ if __name__ == '__main__':
         print('fresh models')
 
 
-    seed_everything(ch.cfg['RUN']['train_seed'])
     #TODO load model_dict
 
     steps_to_train = ch.cfg['RUN']['eval_and_checkpoint_every_steps']

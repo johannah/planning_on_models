@@ -44,9 +44,6 @@ HISTORY_SIZE = 4
 # how big are the observations
 OBS_WIDTH = 84
 OBS_HEIGHT = 84
-MP_WIDTH = 0
-MP_HEIGHT = 0
-# number of steps before the env should end
 # 50e6 steps is 200e6 frames
 MAX_FRAMES = 200000000
 # number of frames to skip between each observation
@@ -130,10 +127,14 @@ LOAD_RANDOM_EVAL_BUFFER=1
 NUM_PURE_RANDOM_STEPS_TRAIN = 50000
 NUM_PURE_RANDOM_STEPS_EVAL = 1000
 #
-
 [REP]
 # details for maxpooling operation for representation
 trim_before=0
 trim_after=1
 kernel_size=2
+# max pool to get to a particular height/width used by representation model
+MP_HEIGHT = 40
+MP_WIDTH = 40
+# number of steps before the env should end
+
 
