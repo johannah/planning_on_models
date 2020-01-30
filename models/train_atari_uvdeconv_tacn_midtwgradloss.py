@@ -31,7 +31,7 @@ from acn_utils import discretized_mix_logistic_loss, sample_from_discretized_mix
 
 from mbrl_utils import make_random_subset_buffers
 from pixel_cnn import GatedPixelCNN
-from acn_models import tPTPriorNetwork, ACNVQVAEres
+from acn_models import tPTPriorNetwork, midACNVQVAEres
 from IPython import embed
 
 # setup loss-specific parameters for data
@@ -103,19 +103,21 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
 
     # setup models
     # acn prior with vqvae embedding
-    vq_acn_model = ACNVQVAEres(code_len=info['code_length'],
+    mid_vq_acn_model = midACNVQVAEres(code_len=info['code_length'],
                                input_size=info['input_channels'],
                                output_size=info['output_dim'],
                                hidden_size=info['hidden_size'],
                                num_clusters=info['num_vqk'],
                                num_z=info['num_z'],
+                               num_actions=info['num_actions'],
+                               num_rewards=info['num_rewards'],
                                small=info['small']).to(info['device'])
 
     prior_model = tPTPriorNetwork(size_training_set=info['size_training_set'],
-                                  code_length=info['code_length'], k=info['num_k']).to(info['device'])
+                               code_length=info['code_length'], k=info['num_k']).to(info['device'])
     prior_model.codes = prior_model.codes.to(info['device'])
 
-    model_dict = {'vq_acn_model':vq_acn_model, 'prior_model':prior_model}
+    model_dict = {'mid_vq_acn_model':mid_vq_acn_model, 'prior_model':prior_model}
     parameters = []
     for name,model in model_dict.items():
         parameters+=list(model.parameters())
@@ -128,7 +130,7 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
             model_dict[name].load_state_dict(_dict[name+'_state_dict'])
     return model_dict, data_dict, info, train_cnt, epoch_cnt, rescale, rescale_inv
 
-def make_atari_channel_state(frames, device):
+def make_atari_channel_action_reward_state(frames, actions, rewards, next_frames, device, num_actions, num_rewards):
     '''  batch is composed of
      frames are [ts0, ts1, ts2, ts3] uint8
      actions are                  [a3] int
@@ -137,9 +139,18 @@ def make_atari_channel_state(frames, device):
     '''
     states = torch.FloatTensor(rescale(frames))
     # only predict the unseen (most recent) state
-    target = torch.FloatTensor(rescale(frames[:,-1:]))
+    next_states = torch.FloatTensor(rescale(next_frames[:,-1:]))
     bs,_,h,w = frames.shape
-    return states.to(device), target.to(device)
+    # next state is the corresponding action
+    action_cond = torch.zeros((bs,num_actions,8,8))
+    reward_cond = torch.zeros((bs,num_rewards,8,8))
+    # add in actions/reward as conditioning
+    for i in range(bs):
+        a = actions[i]
+        r = rewards[i]
+        action_cond[i,a]=1.0
+        reward_cond[i,r]=1.0
+    return states.to(device), action_cond.to(device), reward_cond.to(device), next_states.to(device)
 
 def account_losses(loss_dict):
     ''' return avg losses for each loss sum in loss_dict based on total examples in running key'''
@@ -157,19 +168,22 @@ def clip_parameters(model_dict, clip_val=10):
 
 def forward_pass(model_dict, states, actions, rewards, next_states, index_indexes, phase, info):
     # prepare data in appropriate way
-    states, target = make_atari_channel_state(states, info['device'])
+    prep_batch = make_atari_channel_action_reward_state(states, actions, rewards, next_states,
+                                                        info['device'],
+                                                        info['num_actions'], info['num_rewards'])
+    states, action_cond, reward_cond, target = prep_batch
     bs,c,h,w = target.shape
 
     states = F.dropout(states, p=info['dropout_rate'], training=True, inplace=False)
     # put action cond and reward cond in and project to same size as state
-    z, u_q = model_dict['vq_acn_model'](states)
+    z, u_q = model_dict['mid_vq_acn_model'](states)
     u_q_flat = u_q.view(bs, info['code_length'])
     if phase == 'train':
         # check that we are getting what we think we are getting from the replay
         # buffer
         assert index_indexes.max() < model_dict['prior_model'].codes.shape[0]
         model_dict['prior_model'].update_codebook(index_indexes, u_q_flat.detach())
-    rec_dml, z_e_x, z_q_x, latents =  model_dict['vq_acn_model'].decode(z)
+    rec_dml, z_e_x, z_q_x, latents =  model_dict['mid_vq_acn_model'].decode(z, action_cond, reward_cond)
     u_p, s_p = model_dict['prior_model'](u_q_flat)
     u_p = u_p.view(bs, 3, 8, 8)
     s_p = s_p.view(bs, 3, 8, 8)
@@ -381,7 +395,7 @@ if __name__ == '__main__':
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
     parser.add_argument('--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-e', '--exp_name', default='trbreakout_spvq_rectwgrad', help='name of experiment')
+    parser.add_argument('-e', '--exp_name', default='mid_trbreakout_spvq_twgrad', help='name of experiment')
     parser.add_argument('-dr', '--dropout_rate', default=0.0, type=float)
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
