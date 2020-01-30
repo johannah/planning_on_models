@@ -21,75 +21,17 @@ copy code to working directory
 plot entire episode observed frames - could do this in a sep script
 """
 
-#def collect_random_experience(seed, env, memory_buffer, num_random_steps, pred_next_state_function=None):
-#    # note that since we are making the env different here
-#    # we should always use a different env for the random portion vs the
-#    # learning agent
-#    # create new replay memory
-#    print("starting random experience collection for %s steps"%num_random_steps)
-#    step_number = 0
-#    epoch_num = 0
-#    random_state = np.random.RandomState(seed)
-#    heads = np.arange(memory_buffer.num_heads)
-#    while step_number < num_random_steps:
-#        epoch_frame = 0
-#        terminal = False
-#        life_lost = True
-#        # use real state
-#        episode_reward_sum = 0
-#        random_state.shuffle(heads)
-#        active_head = heads[0]
-#        print("Gathering data with head=%s"%active_head)
-#        # at every new episode - recalculate action/reward weight
-#        state = env.reset()
-#        while not terminal:
-#            action = random_state.choice(env.actions)
-#            next_state, reward, life_lost, terminal = env.step(action)
-#            # TODO - dead as end? should be from ini file or is it handled
-#            # in env?
-#            if pred_next_state_function == None:
-#                # Store transition in the replay memory
-#                memory_buffer.add_experience(action=action,
-#                                             frame=next_state[-1],
-#                                             #reward=1+np.sign(reward), # add one so that rewards are <=0
-#                                             reward=np.sign(reward), # add one so that rewards are <=0
-#                                             terminal=life_lost,
-#                                             )
-#                state = next_state
-#            #else:
-#            #    batch = (state[None], np.array([action]), np.array([reward]), next_state[None], np.array([life_lost]), 1)
-#            #    pred_next_state = pred_next_state_function(batch)[0,0].cpu().numpy()
-#            #    pred_next_state = (pred_next_state*255).astype(np.uint8)
-#            #    memory_buffer.add_experience(action=action,
-#            #                                 frame=next_state[-1],
-#            #                                 pred_frame=pred_next_state,
-#            #                                 #reward=1+np.sign(reward), # add one so that rewards are <=0
-#            #                                 reward=np.sign(reward), # add one so that rewards are <=0
-#            #                                 terminal=life_lost,
-#            #                                 )
-#            #    state = np.vstack((state[:-1], next_state[-1:]))
-#
-#            step_number += 1
-#            epoch_frame += 1
-#            episode_reward_sum += reward
-#        print("finished epoch %s: reward %s" %(epoch_num, episode_reward_sum))
-#        print("%s/%s steps completed" %(step_number, num_random_steps))
-#        epoch_num += 1
-#    return memory_buffer
-
 class ConfigHandler():
     """
     class to wrap configs and setup the housekeeping materials needed to run an experiment
     """
     def __init__(self, config_file, device,
-                       restart_last_run=False, restart_run='',
-                       pred_next_state_function=None):
+                 restart_last_run=False, restart_run=''):
 
         self.device = device
         self.output_base = '../../'
         self.model_savedir = 'model_savedir'
         self.random_buffer_dir = os.path.join(self.output_base, self.model_savedir, 'random_buffers')
-        self.pred_next_state_function = pred_next_state_function
         self.start_time = time.time()
 
         self._load_config(config_file)
@@ -143,10 +85,17 @@ class ConfigHandler():
             for key in self.cfg[section].keys():
                 try:
                     val = self.cfg[section][key]
+                    if section == 'REP' and key == 'reduction_function':
+                        self.cfg[section][key] = eval(val)
+                    elif section == 'REP' and key == 'kernel_size':
+                        self.cfg[section][key] = eval(val)
+                    # correctly load filepath
+                    elif '.pt' in val:
+                        self.cfg[section][key] = eval(val)
                     # handle float
-                    if '.' in val:
+                    elif '.' in val:
                         self.cfg[section][key] = float(val)
-                    # hadnle int
+                    # handle int
                     else:
                         self.cfg[section][key] = int(val)
                 except Exception:
@@ -202,12 +151,12 @@ class ConfigHandler():
         else:
             return ""
 
-    def create_empty_memory_buffer(self, seed, buffer_size, kernel_size=0, reduction_function=np.max, trim_before=0, trim_after=0):
+    def create_empty_memory_buffer(self, seed, buffer_size, kernel_size=(0,0), reduction_function=np.max, trim_before=0, trim_after=0):
         self.frame_height = self.cfg['ENV']['obs_width']
         self.frame_width = self.cfg['ENV']['obs_width']
         self.maxpool = False
         if 'REP' in self.cfg.keys():
-            if self.cfg['REP']['MP_HEIGHT'] > 0:
+            if self.cfg['REP']['mp_height'] > 0:
                 # if maxpooling is done to output of env.py -> then this is what
                 # goes in the replay buffer. we used maxpool downsample in atari to
                 # get small enough frames, while preserving important info in the
@@ -216,8 +165,8 @@ class ConfigHandler():
                 self.frame_width = self.cfg['REP']['mp_width']
                 self.maxpool = True
         return ReplayMemory(size=buffer_size,
-                               frame_height=frame_height,
-                               frame_width=frame_width,
+                               frame_height=self.frame_height,
+                               frame_width=self.frame_width,
                                agent_history_length=self.cfg['ENV']['history_size'],
                                batch_size=self.cfg['DQN']['batch_size'],
                                num_heads=self.cfg['DQN']['n_ensemble'],
@@ -256,23 +205,20 @@ class ConfigHandler():
         #####################################################
         # from here on - we assume we need random values
         # load a presaved random buffer if it is available
-        random_buffer_path = self.get_random_buffer_path(phase, seed)
-        if os.path.exists(random_buffer_path):
-            print("loading random replay buffer:%s"%random_buffer_path)
-            return ReplayMemory(load_file=random_buffer_path)
-        else:
-            # no buffer file was found, and we want an empty buffer
-            print('did not find saved replay buffers')
-            print('cannot find a suitable random replay buffers... creating one - this will take some time')
-            # did not find any checkpoints - load random buffer
-            empty_memory_buffer = self.create_empty_memory_buffer(seed,
-                                                                   buffer_size)
-
-            env = self.create_environment(seed)
-            #random_memory_buffer = collect_random_experience(seed, env, random_memory_buffer, num_random_steps, pred_next_state_function=self.pred_next_state_function)
-            # save the random buffer
-            #random_memory_buffer.save_buffer(random_buffer_path)
-            return empty_memory_buffer
+        #random_buffer_path = self.get_random_buffer_path(phase, seed)
+        #if os.path.exists(random_buffer_path):
+        #    print("loading random replay buffer:%s"%random_buffer_path)
+        #    return ReplayMemory(load_file=random_buffer_path)
+        #else:
+        # no buffer file was found, and we want an empty buffer
+        #print('did not find saved replay buffers')
+        #print('cannot find a suitable random replay buffers... creating one - this will take some time')
+        # did not find any checkpoints - load random buffer
+        empty_memory_buffer = self.create_empty_memory_buffer(seed, buffer_size)
+        #env = self.create_environment(seed)
+        # save the random buffer
+        #random_memory_buffer.save_buffer(random_buffer_path)
+        return empty_memory_buffer
 
 class StateManager():
     def __init__(self):
@@ -396,7 +342,20 @@ class StateManager():
         self.life_lost = True
         self.episode_reward = 0
 
-        self.state = self.env.reset()
+        state = self.env.reset()
+        self.prev_action = 0
+        self.prev_reward = 0
+        for i in range(state.shape[0]):
+            # add enough memories to use the memory buffer
+            # not sure if this is correct
+            self.memory_buffer.add_experience(action=0,
+                                          frame=state[i],
+                                          reward=0,
+                                          terminal=0,
+                                          )
+
+        # get correctly formatted last state
+        self.state = self.memory_buffer.get_last_state()
         return self.state
 
     def plot_current_episode(self, plot_basepath):
@@ -480,40 +439,20 @@ class StateManager():
             if not self.episode_number % self.ch.cfg['PLOT']['plot_every_%s_episodes'%self.phase]:
                 self.plot_progress(plot_basepath)
 
-
-    #def step_pred_next_state(self, action, pred_next_state_function):
-    #    next_state, reward, self.life_lost, self.terminal = self.env.step(action)
-    #    #pred_next_state = pred_next_state_function(self.state, action, reward, next_state)
-    #    #embed()
-    #    self.memory_buffer.add_experience(action=action,
-    #                                        #frame=next_state[-1],
-    #                                        frame=next_state[-1],
-    #    #                                    pred_frame=pred_next_state,
-    #                                        #reward=1+np.sign(reward),
-    #                                        reward=np.sign(reward),
-    #                                        terminal=self.life_lost,
-    #                                        )
-    #    self.episode_actions.append(action)
-    #    self.episode_rewards.append(reward)
-    #    self.step_number+=1
-    #    #self.state = pred_next_state
-    #    self.state = next_state
-    #    self.last_state = self.state
-
     def step(self, action):
         next_state, reward, self.life_lost, self.terminal = self.env.step(action)
+        self.prev_action = action
+        self.prev_reward = np.sign(reward)
         # the replay buffer will convert the observed state as needed
         self.memory_buffer.add_experience(action=action,
                                           frame=next_state[-1],
-                                          #reward=1+np.sign(reward),
-                                          reward=np.sign(reward),
+                                          reward=self.prev_reward,
                                           terminal=self.life_lost,
                                             )
-        self.episode_actions.append(action)
-        self.episode_rewards.append(reward)
+        self.episode_actions.append(self.prev_action)
+        self.episode_rewards.append(self.prev_reward)
         self.step_number+=1
-        self.state = next_state
-        self.last_state = self.state
+        self.state = self.memory_buffer.get_last_state()
 
     def set_eps(self):
         # TODO function to find eps - for now use constant

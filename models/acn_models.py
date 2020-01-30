@@ -648,11 +648,10 @@ class fwdACNVQVAEres(nn.Module):
         return x_tilde, z_e_x, z_q_x, latents
 
 
-
 class ACNVQVAEres(nn.Module):
-    def __init__(self, code_len, input_size=1, output_size=1, encoder_output_size=1024,
+    def __init__(self, code_len, input_size=1, output_size=1,
                        hidden_size=256,
-                       num_clusters=512, num_z=32):
+                      num_clusters=512, num_z=32, small=False):
 
         super(ACNVQVAEres, self).__init__()
         self.code_len = code_len
@@ -660,24 +659,47 @@ class ACNVQVAEres(nn.Module):
         self.num_z = num_z
         self.hidden_size = hidden_size
         # encoder output size found experimentally when architecture changes
-        self.encoder_output_size = encoder_output_size
-        self.eo = 7
+        self.eo = 8
+        self.small = small
+        fsos = first_stage_output_size = 64
+        self.frame_encoder = nn.Sequential(
+                               nn.Conv2d(input_size, fsos, 1, 1, 0),
+                               nn.BatchNorm2d(fsos),
+                               nn.ReLU(True),
+                               nn.Conv2d(fsos, fsos, 1, 1, 0),
+                               nn.ReLU(True),
+                             )
 
-        self.encoder = nn.Sequential(
-                nn.Conv2d(input_size, hidden_size, 4, 2, 1),
+        if self.small:
+            self.encoder = nn.Sequential(
+                nn.Conv2d(fsos, hidden_size, 4, 2, 0),
                 nn.BatchNorm2d(hidden_size),
                 nn.ReLU(True),
-                nn.Conv2d(hidden_size, hidden_size, 4, 2, 1),
+                nn.Conv2d(hidden_size, hidden_size, 1, 1, 0),
+                nn.Conv2d(hidden_size, hidden_size, 2, 1, 0),
                 ResBlock(hidden_size),
                 ResBlock(hidden_size),
                 nn.Conv2d(hidden_size, 16, 1, 1, 0),
-                nn.Conv2d(16, 4, 1, 1, 0),
+                nn.Conv2d(16, 3, 1, 1, 0),
                 # need to get small enough to have reasonable knn - this is
-                # 4*7*7=196
+                # 3*8*8=192
                 )
-
+        else:
+            self.encoder = nn.Sequential(
+                nn.Conv2d(fsos, hidden_size, 4, 2, 1),
+                nn.BatchNorm2d(hidden_size),
+                nn.ReLU(True),
+                nn.Conv2d(hidden_size, hidden_size, 4, 2, 0),
+                nn.Conv2d(hidden_size, hidden_size, 2, 1, 0),
+                ResBlock(hidden_size),
+                ResBlock(hidden_size),
+                nn.Conv2d(hidden_size, 16, 1, 1, 0),
+                nn.Conv2d(16, 3, 1, 1, 0),
+                # need to get small enough to have reasonable knn - this is
+                # 3*8*8=192
+                )
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(4, 16, 1, 1, 0),
+            nn.Conv2d(3, 16, 1, 1, 0),
             nn.Conv2d(16, hidden_size, 1, 1, 0),
             nn.BatchNorm2d(hidden_size),
             nn.ReLU(True),
@@ -686,10 +708,22 @@ class ACNVQVAEres(nn.Module):
             nn.Conv2d(hidden_size, hidden_size, 1, 1, 0),
             )
         self.codebook = VQEmbedding(num_clusters, hidden_size)
-        self.decoder = nn.Sequential(
+        if self.small:
+            self.decoder = nn.Sequential(
                   ResBlock(hidden_size),
                   ResBlock(hidden_size),
-                  nn.ConvTranspose2d(hidden_size, hidden_size, 4, 2, 1),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 2, 1, 0),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 1, 1, 0),
+                  nn.BatchNorm2d(hidden_size),
+                  nn.ReLU(True),
+                  nn.ConvTranspose2d(hidden_size, output_size, 4, 2, 0),
+                  )
+        else:
+            self.decoder = nn.Sequential(
+                  ResBlock(hidden_size),
+                  ResBlock(hidden_size),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 2, 1, 0),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 4, 2, 0),
                   nn.BatchNorm2d(hidden_size),
                   nn.ReLU(True),
                   nn.ConvTranspose2d(hidden_size, output_size, 4, 2, 1),
@@ -709,7 +743,8 @@ class ACNVQVAEres(nn.Module):
         latents = self.codebook(z_e_x)
         return z_e_x, latents
 
-    def forward(self, x):
+    def forward(self, frames):
+        x = self.frame_encoder(frames)
         mu = self.encoder(x)
         z = self.reparameterize(mu)
         return z, mu
@@ -719,7 +754,6 @@ class ACNVQVAEres(nn.Module):
         z_q_x_st, z_q_x = self.codebook.straight_through(z_e_x)
         x_tilde = self.decoder(z_q_x_st)
         return x_tilde, z_e_x, z_q_x, latents
-
 
 class ACNres(nn.Module):
     def __init__(self, code_len, input_size=1, output_size=1, encoder_output_size=1024,

@@ -1,6 +1,6 @@
 [RUN]
 # directory name to save this experiment in
-NAME=MFBreakout_train_anneal
+NAME=MFBreakout_acn_rep
 # load buffer from previous agent
 REPLAY_MEMORY_LOADPATH=
 REPLAY_MEMORY_VALID_LOADPATH= 
@@ -79,7 +79,8 @@ N_PLAYOUT=50
 [DQN]
 USE_PRED_FRAMES=0
 # min steps needed to start training neural nets
-MIN_STEPS_TO_LEARN=50000
+#MIN_STEPS_TO_LEARN=50000
+MIN_STEPS_TO_LEARN=500
 # SIZE Expected by DQN - should make this more automated
 # 10*10*16 for mb
 # 3136 for mf?
@@ -131,10 +132,11 @@ NUM_PURE_RANDOM_STEPS_EVAL = 1000
 # details for maxpooling operation for representation
 trim_before=0
 trim_after=1
-kernel_size=2
+kernel_size=(2,2)
+reduction_function='np.max'
 # max pool to get to a particular height/width used by representation model
 MP_HEIGHT = 40
 MP_WIDTH = 40
 # number of steps before the env should end
-
+REP_MODEL_PATH="/usr/local/data/jhansen/planning/model_savedir/fwd_trbreakout_spvq_twgrad40x40/fwd_trbreakout_spvq_twgrad40x40_0049800000ex.pt"
 

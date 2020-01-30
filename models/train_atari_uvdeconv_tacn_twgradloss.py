@@ -125,7 +125,7 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
 
     model_dict['opt'] = optim.Adam(parameters, lr=info['learning_rate'])
 
-    if args.model_loadpath !='':
+    if model_loadpath !='':
        for name,model in model_dict.items():
             model_dict[name].load_state_dict(_dict[name+'_state_dict'])
     return model_dict, data_dict, info, train_cnt, epoch_cnt, rescale, rescale_inv
@@ -330,7 +330,7 @@ def train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info, rescale_inv):
                         info['valid_losses'], name=plot_filepath, rolling_length=1)
 
 
-def call_plot(model_dict, data_dict, info):
+def call_plot(model_dict, data_dict, info, sample, tsne, pca):
     from acn_utils import tsne_plot
     from acn_utils import pca_plot
     # always be in eval mode - so we dont swap neighbors
@@ -366,13 +366,13 @@ def call_plot(model_dict, data_dict, info):
             X = u_q_flat.cpu().numpy()
             color = index_indexes
             images = target[:,0].cpu().numpy()
-            if args.tsne:
+            if tsne:
                 param_name = '_tsne_%s_P%s.html'%(phase, info['perplexity'])
                 html_path = info['model_loadpath'].replace('.pt', param_name)
                 tsne_plot(X=X, images=images, color=color,
                       perplexity=info['perplexity'],
                       html_out_path=html_path, serve=False)
-            if args.pca:
+            if pca:
                 param_name = '_pca_%s.html'%(phase)
                 html_path = info['model_loadpath'].replace('.pt', param_name)
                 pca_plot(X=X, images=images, color=color,
@@ -458,9 +458,10 @@ if __name__ == '__main__':
     kldis = nn.KLDivLoss(reduction=info['reduction'])
     lsm = nn.LogSoftmax(dim=1)
     sm = nn.Softmax(dim=1)
-    call_plot(model_dict, data_dict, info)
-    # only train if we weren't asked to do anything else
-    if not max([args.sample, args.tsne, args.pca]):
+    if max([args.sample, args.tsne, args.pca]):
+        call_plot(model_dict, data_dict, info, args.sample, args.tsne, args.pca)
+    else:
+        # only train if we weren't asked to do anything else
         write_log_files(info)
         train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info, rescale_inv)
 

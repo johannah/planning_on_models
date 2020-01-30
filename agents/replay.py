@@ -180,10 +180,11 @@ class ReplayMemory:
             reward: A float determining the reward the agend received for performing an action
             terminal: A bool stating whether the episode terminated
         """
-        if self.maxpool:
-            frame = self.online_shrink_frame_size(frame)
         if frame.shape != (self.frame_height, self.frame_width):
-            raise ValueError('Dimension of frame is wrong!')
+            if self.maxpool:
+                frame = self.online_shrink_frame_size(frame)
+            else:
+                raise ValueError('Dimension of frame is wrong!', frame.shape)
         self.actions[self.current] = action
         self.frames[self.current, ...] = frame
         if self.use_pred_frames:
@@ -194,6 +195,7 @@ class ReplayMemory:
         self.masks[self.current] = mask
         self.count = max(self.count, self.current+1)
         self.current = (self.current + 1) % self.size
+        return frame
 
     def _get_state(self, index):
         if self.count is 0:
@@ -223,11 +225,12 @@ class ReplayMemory:
                 break
             self.indices[i] = index
 
-    def last_state(self):
+    def get_last_state(self):
         # TODO
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
+        next_states, _ = self._get_state(self.current)
+        return next_states
 
     def get_minibatch(self, batch_size):
         """
@@ -310,14 +313,14 @@ class ReplayMemory:
         return np.array(unique_indices, np.int32), np.array(index_indices, np.int32)
 
 
-    def online_shrink_frame_size(self, frames):
-        _, oh, ow = frames.shape
+    def online_shrink_frame_size(self, frame):
+        frame = frame[None]
         if self.trim_before > 0:
-            frames = trim_array(frames, self.trim_before)
-        frames = pool_2d(frames, self.kernel_size, self.reduction_function)
+            frame = trim_array(frame, self.trim_before)
+        frame = pool_2d(frame, self.kernel_size, self.reduction_function)
         if self.trim_after > 0:
-            frames = trim_array(frames, self.trim_after)
-        return frames
+            frame = trim_array(frame, self.trim_after)
+        return frame[0]
 
     def shrink_frame_size(self, kernel_size=2, reduction_function=np.max, trim_before=0, trim_after=0,  batch_size=32):
         _, oh, ow = self.frames.shape
