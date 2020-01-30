@@ -64,26 +64,24 @@ def prepare_details(actions, rewards, terminal_flags, masks, device):
     masks = torch.FloatTensor(masks.astype(np.int)).to(device)
     return actions, rewards, terminal_flags, masks
 
-def dqn_learn(sm, model_dict, prepare_state_fn):
+def dqn_learn(sm, model_dict):
+    # TODO - put rep model in eval / no_grad
     s_loss = 0
     if sm.step_number > sm.ch.cfg['DQN']['min_steps_to_learn']:
         if not sm.step_number%sm.ch.cfg['DQN']['learn_every_steps']:
             minibatch = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
             states, actions, rewards, next_states, terminal_flags, masks = minibatch
-            print("dqn learn")
-            embed()
-
-            pt_state, pt_next_state = prepare_state_fn(states, actions, rewards, next_states)
-
+            # pt_states is acn representation bs,3,8,8
+            pt_states = prepare_state_fn(states)
+            pt_next_states = prepare_state_fn(next_states)
             actions, rewards, terminal_flags, masks = prepare_details(actions, rewards, terminal_flags, masks, ch.device)
             # min history to learn is 200,000 frames in dqn - 50000 steps
             losses = [0.0 for _ in range(sm.ch.cfg['DQN']['n_ensemble'])]
             model_dict['opt'].zero_grad()
-            q_policy_vals = model_dict['policy_net'](states, None)
-            next_q_target_vals = model_dict['target_net'](next_states, None)
-            next_q_policy_vals = model_dict['policy_net'](next_states, None)
+            q_policy_vals = model_dict['policy_net'](pt_states, None)
+            next_q_target_vals = model_dict['target_net'](pt_next_states, None)
+            next_q_policy_vals = model_dict['policy_net'](pt_next_states, None)
             cnt_losses = []
-            embed()
             for k in range(sm.ch.cfg['DQN']['n_ensemble']):
                 #TODO finish masking
                 total_used = torch.sum(masks[:,k])
@@ -159,50 +157,51 @@ def create_dqn_model_dict(ch, num_actions, model_dict={}):
 
     for name,model in model_dict.items():
         print('created %s model with %s parameters' %(name,count_parameters(model)))
+        model.eval()
+
     model_dict['opt'] = optim.Adam(model_dict['policy_net'].parameters(), lr=ch.cfg['DQN']['adam_learning_rate'])
     return model_dict
 
 def load_uvdeconv_representation_model(representation_model_path):
     # model trained with this file:
-    # ../models/train_atari_uvdeconv_tacn_twgradloss.py
+    # ../models/train_atari_uvdeconv_tacn_midtwgradloss.py
     # will output a acn flat float representation and a vq discrete
     # representation - which to use?
     rep_info = {'device':device, 'args':args}
     rep_model_dict, _, rep_info, train_cnt, epoch_cnt, rescale, rescale_inv = create_models(rep_info, representation_model_path)
-    return rep_model_dict, rep_info, prepare_uv_state_latents
+    return rep_model_dict, rep_info, prepare_uv_state_latents, rescale, rescale_inv
 
-def prepare_uv_state_latents(states, actions, rewards, next_states):
+def prepare_uv_state_latents(states):
     # resize using max pool
-    out = make_atari_channel_action_reward_state(states,
-                                                 actions, rewards,
-                                                 next_states, device,
-                                                 rep_info['num_actions'], rep_info['num_rewards'])
-    states, action_cond, reward_cond, _ = out
-    z, u_q = rep_model_dict['fwd_vq_acn_model'](states, action_cond, reward_cond)
-    rec_dml, z_e_x, z_q_x, latents =  rep_model_dict['fwd_vq_acn_model'].decode(z)
+    with torch.no_grad():
+        z, u_q = rep_model_dict['mid_vq_acn_model'](torch.FloatTensor(rescale(states)).to(device))
     return z
 
-def run_agent(sm, model_dict, phase, prepare_state_fn, max_count, count_type='steps'):
+def get_latent_pred_representation(z, state, actions, rewards, next_state):
+    embed()
+
+
+def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
     """
     num_to_run: number of steps or episodes to run - training is conventionally
     measured in steps while evaluation is measured in episodes.
     """
     print('training at S%s'%sm.step_number)
     start_step = deepcopy(sm.step_number)
-    step_count = 0
-    episode_count = 0
+    start_episode = deepcopy(sm.episode_number)
     count = 0
     while count < max_count:
         print('count', count, count_type)
         #### START MAIN LOOP #####################################################################
         sm.start_episode()
-        dummy_next_state = np.zeros_like(sm.state)
         while not sm.terminal:
-            is_random, action = sm.is_random_action()
+            is_random = sm.is_random_action()
             # make first step go thru agent for debugging
-            if not is_random or step_count == 0:
+            if is_random and sm.step_number > 0:
+                action = sm.random_action()
+            else:
                 # state coming from the env looks like (4,84,84) and is a uint8
-                pt_state = prepare_state_fn(sm.state[None], [sm.prev_action], [sm.prev_reward], dummy_next_state[None])
+                pt_state = prepare_state_fn(sm.state[None])
                 vals = get_action_vals(model_dict['policy_net'], pt_state)
                 if phase == 'train':
                     action = single_head_action_function(vals, sm.active_head)
@@ -210,24 +209,23 @@ def run_agent(sm, model_dict, phase, prepare_state_fn, max_count, count_type='st
                     action = vote_action_function(vals)
             sm.step(action)
             if phase == 'train':
-                sm, model_dict =  dqn_learn(sm, model_dict, prepare_state_fn)
+                sm, model_dict =  dqn_learn(sm, model_dict)
         sm.end_episode()
         sm.handle_plotting()
-        print(phase, np.sum(sm.episode_rewards))
+        print(phase, 'total reward', np.sum(sm.episode_rewards))
         if phase == 'eval':
+            sm.plot_current_episode()
             print('rewards', np.histogram(sm.episode_rewards))
-            print('actions', np.histogram(sm.episode_actions))
-        episode_count +=1
         if count_type == 'steps':
             count = sm.step_number-start_step
         else:
-            count = episode_count
-        embed()
+            count = sm.episode_number-start_episode
+        #get_latent_pred_representation(z, states, actions, rewards, next_states)
     return sm, model_dict
 
 
 if __name__ == '__main__':
-    from train_atari_uvdeconv_tacn_twgradloss import create_models, forward_pass, make_atari_channel_action_reward_state
+    from train_atari_uvdeconv_tacn_midtwgradloss import create_models, forward_pass, make_atari_channel_action_reward_state
     from argparse import ArgumentParser
     from handler import ConfigHandler, StateManager
     parser = ArgumentParser()
@@ -272,7 +270,7 @@ if __name__ == '__main__':
     # env.py, then resized again with max pooling to get it down to the
     # prescribed size - this is available in replay.py
     rep_model_path = ch.cfg['REP']['rep_model_path']
-    rep_model_dict, rep_info, prepare_state_fn = load_uvdeconv_representation_model(rep_model_path)
+    rep_model_dict, rep_info, prepare_state_fn, rescale, rescale_inv = load_uvdeconv_representation_model(rep_model_path)
 
     seed_everything(ch.cfg['RUN']['train_seed'])
     model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
@@ -289,9 +287,9 @@ if __name__ == '__main__':
     num_eval_episodes = ch.cfg['EVAL']['num_eval_episodes']
     while train_sm.step_number < ch.cfg['RUN']['total_train_steps']:
 
-        train_sm, model_dict = run_agent(train_sm, model_dict,  phase='train', prepare_state_fn=prepare_state_fn, max_count=steps_to_train, count_type='steps')
+        train_sm, model_dict = run_agent(train_sm, model_dict,  phase='train', max_count=steps_to_train, count_type='steps')
         # we save according to train num - so train should come before eval
-        eval_sm, _ = run_agent(eval_sm, model_dict,  phase='eval', prepare_state_fn=prepare_state_fn, max_count=num_eval_episodes, count_type='episodes')
+        eval_sm, _ = run_agent(eval_sm, model_dict,  phase='eval', max_count=num_eval_episodes, count_type='episodes')
 
         checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
         save_models(checkpoint_basepath, model_dict)

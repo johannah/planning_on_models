@@ -225,6 +225,7 @@ class StateManager():
         pass
 
     def create_new_state_instance(self, config_handler, phase):
+        self.reward_space = [-1, 0, 1]
         self.ch = config_handler
         self.save_time = time.time()-100000
         self.phase = phase
@@ -322,8 +323,10 @@ class StateManager():
         self.episodic_times.append(self.end_time-self.start_time)
         self.episodic_eps.append(self.eps)
         # smoothed reward over last 100 episodes
-        self.episodic_reward_avg.append(np.mean(self.episodic_reward[-100:]))
-        print("*** %s E%05d S%010d R%s ***"%(self.phase, self.episode_number, self.step_number, self.episodic_reward[-1]))
+        self.episodic_reward_avg.append(np.mean(self.episodic_reward[-self.ch.cfg['PLOT']['num_prev_steps_avg']:]))
+        num_steps = self.episodic_step_count[-1]
+        print("*** %s E%05d S%010d R%s num random/total steps:%s/%s***"%(self.phase, self.episode_number, self.step_number, self.episodic_reward[-1], self.num_random_steps, num_steps ))
+        self.episode_active = False
         self.episode_number += 1
 
     def start_episode(self):
@@ -336,6 +339,7 @@ class StateManager():
         self.episode_actions = []
         self.episode_rewards = []
         self.start_step_number = deepcopy(self.step_number)
+        self.num_random_steps = 0
 
         # restart counters
         self.terminal = False
@@ -356,9 +360,12 @@ class StateManager():
 
         # get correctly formatted last state
         self.state = self.memory_buffer.get_last_state()
+        self.episode_active = True
         return self.state
 
-    def plot_current_episode(self, plot_basepath):
+    def plot_current_episode(self, plot_basepath=''):
+        if plot_basepath == '':
+            plot_basepath = self.get_plot_basepath()
         plot_dict = {
                      'mean loss':self.episode_losses,
                      'actions':self.episode_actions,
@@ -369,8 +376,24 @@ class StateManager():
         #step_range = np.arange(self.start_step_number, self.end_step_number)
         #self.plot_data(plot_path, plot_dict, suptitle, xname='episode steps', xdata=step_range)
         self.plot_data(plot_path, plot_dict, suptitle, xname='episode steps')#, xdata=step_range)
+        ep_steps = self.end_step_number-self.start_step_number
+        self.plot_histogram(plot_basepath+'_ep_histrewards_%06d.png'%self.episode_number, data=self.episode_rewards, bins=self.reward_space,  title='rewards TR%s'%self.episode_reward)
+        self.plot_histogram(plot_basepath+'_ep_histactions_%06d.png'%self.episode_number, data=self.episode_actions, bins=self.env.action_space,  title='actions acthead:%s nrand:%s/%s'%(self.active_head, self.num_random_steps, ep_steps))
+        #self.memory_buffer.get_last_episode()
+        #embed()
 
-    def plot_progress(self, plot_basepath):
+    def plot_histogram(self, plot_path, data, bins, title=''):
+        n, bins, _ = plt.hist(data, bins=bins)
+        plt.xticks(bins, bins)
+        plt.yticks(n, n)
+        plt.xlim(min(bins), max(bins)+1)
+        plt.title(title)
+        plt.savefig(plot_path)
+        plt.close()
+
+    def plot_progress(self, plot_basepath=''):
+        if plot_basepath == '':
+            plot_basepath = self.get_plot_basepath()
         det_plot_dict = {
             'episodic step count':self.episodic_step_count,
             'episodic time':self.episodic_times,
@@ -427,16 +450,21 @@ class StateManager():
             print("plot")
             embed()
 
-    def handle_plotting(self, plot_basepath=''):
+    def get_plot_basepath(self):
+        return self.ch.get_checkpoint_basepath(self.step_number)+'_%s'%self.phase
+
+    def handle_plotting(self, plot_basepath='', force_plot=False):
         # will plot at beginning of episode
-        if plot_basepath == '':
-            plot_basepath = self.ch.get_checkpoint_basepath(self.step_number)+'_%s'%self.phase
         #if not self.episode_number % self.ch.cfg['PLOT']['plot_episode_every_%s_episodes'%self.phase]:
         # dont plot first episode
+        plot_basepath = self.get_plot_basepath()
         if self.episode_number:
-            if not self.episode_number % self.ch.cfg['PLOT']['plot_episode_every_%s_episodes'%self.phase]:
+            if force_plot:
                 self.plot_current_episode(plot_basepath)
-            if not self.episode_number % self.ch.cfg['PLOT']['plot_every_%s_episodes'%self.phase]:
+                self.plot_progress(plot_basepath)
+            if self.episode_number==1 or not self.episode_number % self.ch.cfg['PLOT']['plot_episode_every_%s_episodes'%self.phase]:
+                self.plot_current_episode(plot_basepath)
+            if self.episode_number==1 or not self.episode_number % self.ch.cfg['PLOT']['plot_every_%s_episodes'%self.phase]:
                 self.plot_progress(plot_basepath)
 
     def step(self, action):
@@ -465,12 +493,17 @@ class StateManager():
         else:
             self.eps = self.ch.cfg['EVAL']['eps_eval']
 
+    def random_action(self):
+        self.num_random_steps +=1
+        # pass action_idx to env.action_space
+        return self.random_state.choice(range(self.env.num_actions))
+
     def is_random_action(self):
         self.set_eps()
         r = self.random_state.rand()
         if r < self.eps:
-            return True, self.random_state.choice(self.env.actions)
+            return True
         else:
-            return False, -1
+            return False
 
 

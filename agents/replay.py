@@ -1,5 +1,6 @@
 import numpy as np
 import time
+from copy import deepcopy
 from IPython import embed
 
 def find_component_proportion(data, unique):
@@ -226,11 +227,32 @@ class ReplayMemory:
             self.indices[i] = index
 
     def get_last_state(self):
-        # TODO
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
         next_states, _ = self._get_state(self.current)
         return next_states
+
+    def get_last_episode(self):
+        if self.count < self.agent_history_length:
+            raise ValueError('Not enough memories to get a minibatch')
+
+        # terminal_flags[self.current-1] will be True if it was the end of the
+        # episode
+        get_indexes = [self.current-1]
+        # self.current-2 will be False unless it was a very tiny episode
+        last_index = self.current-2
+        while not self.terminal_flags[last_index]:
+            get_indexes.append(last_index)
+            last_index-=1
+        # change order
+        get_indexes = get_indexes[::-1]
+        #TODO - finish getting arrays
+        embed()
+        #next_states, _ = self._get_state(self.current)
+        #self.states[i], self.pred_states[i] = self._get_state(idx - 1)
+        # self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
+        #return next_states
+
 
     def get_minibatch(self, batch_size):
         """
