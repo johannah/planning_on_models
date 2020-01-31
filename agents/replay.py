@@ -208,22 +208,26 @@ class ReplayMemory:
         pframes =  self.pred_frames[index-self.agent_history_length+1:index+1, ...]
         return frames, pframes
 
+    def is_valid_index(self, index):
+        if index < self.agent_history_length:
+            return False
+        if index >= self.current and index - self.agent_history_length <= self.current:
+            return False
+        # dont add if there was a terminal flag in previous
+        # history_length steps
+        if self.terminal_flags[index - self.agent_history_length:index].any():
+            return False
+        return True
+
     def _get_valid_indices(self, batch_size):
         if batch_size != self.indices.shape[0]:
              self.indices = np.empty(batch_size, dtype=np.int32)
 
         for i in range(batch_size):
-            while True:
+            valid = False
+            while not valid:
                 index = self.random_state.randint(self.agent_history_length, self.count - 1)
-                if index < self.agent_history_length:
-                    continue
-                if index >= self.current and index - self.agent_history_length <= self.current:
-                    continue
-                # dont add if there was a terminal flag in previous
-                # history_length steps
-                if self.terminal_flags[index - self.agent_history_length:index].any():
-                    continue
-                break
+                valid = self.is_valid_index(index)
             self.indices[i] = index
 
     def get_last_state(self):
@@ -241,18 +245,26 @@ class ReplayMemory:
         get_indexes = [self.current-1]
         # self.current-2 will be False unless it was a very tiny episode
         last_index = self.current-2
-        while not self.terminal_flags[last_index]:
+        while self.is_valid_index(last_index):
+            # step back in time, quit when index reaches previous episode - no
+            # idea how this will work across buffer boundaries -
             get_indexes.append(last_index)
             last_index-=1
         # change order
         get_indexes = get_indexes[::-1]
         #TODO - finish getting arrays
-        embed()
-        #next_states, _ = self._get_state(self.current)
-        #self.states[i], self.pred_states[i] = self._get_state(idx - 1)
-        # self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
-        #return next_states
+        states = np.empty((len(get_indexes), self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
+        next_states = np.empty((len(get_indexes), self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
 
+        for i, idx in enumerate(get_indexes):
+            # This seems correct to me
+            # when adding experience - every input frame is the "next frame",
+            # the action that got us to this frame, and the reward received
+            states[i], _ = self._get_state(idx-1)
+            next_states[i], _ = self._get_state(idx)
+        return states, self.actions[get_indexes], self.rewards[get_indexes], next_states, self.terminal_flags[get_indexes], self.masks[get_indexes], get_indexes
 
     def get_minibatch(self, batch_size):
         """

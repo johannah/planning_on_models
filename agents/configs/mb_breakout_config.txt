@@ -1,6 +1,6 @@
 [RUN]
 # directory name to save this experiment in
-NAME=MFBreakout_acn_rep
+NAME=DEBUG_MFBreakout_acn_22mrepvid
 # load buffer from previous agent
 REPLAY_MEMORY_LOADPATH=
 REPLAY_MEMORY_VALID_LOADPATH= 
@@ -139,5 +139,5 @@ reduction_function='np.max'
 MP_HEIGHT = 40
 MP_WIDTH = 40
 # number of steps before the env should end
-REP_MODEL_PATH="/usr/local/data/jhansen/planning/model_savedir/mid_trbreakout_spvq_twgrad40x40/mid_trbreakout_spvq_twgrad40x40_0016200000ex.pt"
+REP_MODEL_PATH="/usr/local/data/jhansen/planning/model_savedir/mid_trbreakout_spvq_twgrad40x40/mid_trbreakout_spvq_twgrad40x40_0022800000ex.pt"
 

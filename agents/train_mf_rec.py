@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from dqn_acn_model import EnsembleNet, NetWithPrior
 
 sys.path.append('../models')
-from acn_utils import count_parameters
+from acn_utils import count_parameters, sample_from_discretized_mix_logistic
 from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import ConvVAE, GatedPixelCNN, PriorNetwork
 from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import make_state as rep_make_state
 
@@ -177,9 +177,25 @@ def prepare_uv_state_latents(states):
         z, u_q = rep_model_dict['mid_vq_acn_model'](torch.FloatTensor(rescale(states)).to(device))
     return z
 
-def get_latent_pred_representation(z, state, actions, rewards, next_state):
-    embed()
+def get_dummy_representation(states, actions, rewards):
+    return states
 
+def get_latent_pred_representation(states, actions, rewards):
+    with torch.no_grad():
+        z = prepare_uv_state_latents(states)
+        bs,_,h,w = states.shape
+        # next state is the corresponding action
+        action_cond = torch.zeros((bs,num_actions,8,8))
+        reward_cond = torch.zeros((bs,num_rewards,8,8))
+        # add in actions/reward as conditioning
+        for i in range(bs):
+            a = actions[i]
+            r = rewards[i]
+            action_cond[i,a]=1.0
+            reward_cond[i,r]=1.0
+        rec_dml, z_e_x, z_q_x, latents =  rep_model_dict['mid_vq_acn_model'].decode(z, action_cond.to(device), reward_cond.to(device))
+        rec_yhat = sample_from_discretized_mix_logistic(rec_dml, rep_info['nr_logistic_mix'], only_mean=False, sampling_temperature=0.1)
+    return rescale_inv(rec_yhat), z, latents
 
 def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
     """
@@ -273,6 +289,9 @@ if __name__ == '__main__':
     rep_model_dict, rep_info, prepare_state_fn, rescale, rescale_inv = load_uvdeconv_representation_model(rep_model_path)
 
     seed_everything(ch.cfg['RUN']['train_seed'])
+    train_sm.latent_representation_function = get_latent_pred_representation
+    num_actions = train_sm.env.num_actions
+    num_rewards = train_sm.ch.num_rewards
     model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
     if args.model_path != '':
         model_dict = load_models(args.model_path, model_dict)

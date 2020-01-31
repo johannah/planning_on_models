@@ -9,6 +9,7 @@ from glob import glob
 from copy import deepcopy
 import pickle
 
+from skvideo.io import vwrite
 from env import Environment
 from replay import ReplayMemory
 
@@ -222,6 +223,7 @@ class ConfigHandler():
 
 class StateManager():
     def __init__(self):
+        self.latent_representation_function = None
         pass
 
     def create_new_state_instance(self, config_handler, phase):
@@ -379,8 +381,46 @@ class StateManager():
         ep_steps = self.end_step_number-self.start_step_number
         self.plot_histogram(plot_basepath+'_ep_histrewards_%06d.png'%self.episode_number, data=self.episode_rewards, bins=self.reward_space,  title='rewards TR%s'%self.episode_reward)
         self.plot_histogram(plot_basepath+'_ep_histactions_%06d.png'%self.episode_number, data=self.episode_actions, bins=self.env.action_space,  title='actions acthead:%s nrand:%s/%s'%(self.active_head, self.num_random_steps, ep_steps))
-        #self.memory_buffer.get_last_episode()
-        #embed()
+        ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes = self.memory_buffer.get_last_episode()
+        self.plot_episode_states(ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes)
+
+    def plot_episode_states(self, states, actions, rewards, next_states, terminals, masks, indexes):
+        plot_basepath = self.get_plot_basepath()+'_episode_states_frames'
+        if not os.path.exists(plot_basepath):
+            os.makedirs(plot_basepath)
+        n_steps = states.shape[0]
+        if self.latent_representation_function == None:
+            n_cols = 4+1
+        else:
+            n_cols = 4+2
+            # todo - will need to batch this when episodes are longer
+            try:
+                pred_next_states, zs, latents = self.latent_representation_function(states, actions, rewards)
+            except:
+                print('unable to get representation function')
+                embed()
+            pred_next_states = pred_next_states.detach().cpu().numpy()
+        f, ax = plt.subplots(1, n_cols, figsize=(n_cols,1.5))
+        image_path = os.path.join(plot_basepath, 'step_%05d.png')
+        movie_path = plot_basepath+'_movie.mp4'
+        for step in range(n_steps):
+            ax[0].matshow(states[step, 0])
+            ax[1].matshow(states[step, 1])
+            ax[2].matshow(states[step, 2])
+            ax[2].set_xlabel('I%s' %(indexes[step]-1))
+            ax[3].matshow(states[step, 3])
+            ax[3].set_xlabel('OS-A%s' %(actions[step]))
+            ax[4].matshow(next_states[step, 3])
+            ax[4].set_xlabel('NS-R%s'%rewards[step])
+            if self.latent_representation_function != None:
+                ax[5].matshow(pred_next_states[step,0])
+                ax[5].set_xlabel('PNS')
+            for aa in range(n_cols):
+                ax[aa].set_xticks([])
+                ax[aa].set_yticks([])
+            plt.savefig(image_path%step)
+        cmd = "ffmpeg -r 30 -i %s -c:v libx264 -pix_fmt yuv420p %s"%(image_path,movie_path)
+        os.system(cmd)
 
     def plot_histogram(self, plot_path, data, bins, title=''):
         n, bins, _ = plt.hist(data, bins=bins)
