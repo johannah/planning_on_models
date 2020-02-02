@@ -41,7 +41,26 @@ norm_by = 255.0
 rescale = lambda x: ((x / norm_by) * 2.)-1
 rescale_inv = lambda x: 255*((x+1)/2.)
 
-def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
+def load_data_fn(info):
+    # transform is dependent on loss type
+    data_dict, data_paths = make_random_subset_buffers(dataset_path=info['base_datadir'],
+                                           buffer_path=info['base_train_buffer_path'],
+                                           train_max_examples=info['size_training_set'],
+                                           kernel_size=info['frame_shrink_kernel_size'],
+                                           trim_before=info['frame_shrink_trim_before'],
+                                           trim_after=info['frame_shrink_trim_after'],
+                                                       )
+
+    info['num_actions'] = data_dict['train'].num_actions()
+    info['num_rewards'] = data_dict['train'].num_rewards()
+    # assume actions/rewards are 0 indexed
+    assert(min(data_dict['train'].rewards) == 0)
+    assert(max(data_dict['train'].rewards) == info['num_rewards']-1)
+    assert(min(data_dict['train'].actions) == 0)
+    assert(max(data_dict['train'].actions) == info['num_actions']-1)
+    return data_dict, info
+
+def create_models(info, model_loadpath='', dataset_name='FashionMNIST', load_data=True):
     '''
     load details of previous model if applicable, otherwise create new models
     '''
@@ -78,28 +97,15 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST'):
         info['frame_height'] = 20
         info['frame_width'] = 20
 
-
-    # transform is dependent on loss type
-    data_dict, data_paths = make_random_subset_buffers(dataset_path=info['base_datadir'],
-                                           buffer_path=info['base_train_buffer_path'],
-                                           train_max_examples=info['size_training_set'],
-                                           kernel_size=info['frame_shrink_kernel_size'],
-                                           trim_before=info['frame_shrink_trim_before'],
-                                           trim_after=info['frame_shrink_trim_after'],
-                                                       )
-
-    info['num_actions'] = data_dict['train'].num_actions()
-    info['num_rewards'] = data_dict['train'].num_rewards()
-    # assume actions/rewards are 0 indexed
-    assert(min(data_dict['train'].rewards) == 0)
-    assert(max(data_dict['train'].rewards) == info['num_rewards']-1)
-    assert(min(data_dict['train'].actions) == 0)
-    assert(max(data_dict['train'].actions) == info['num_actions']-1)
-
     # pixel cnn architecture is dependent on loss
     # for dml prediction, need to output mixture of size nmix
     info['nmix'] =  (2*info['nr_logistic_mix']+info['nr_logistic_mix'])*info['target_channels']
     info['output_dim']  = info['nmix']
+
+    if load_data:
+        data_dict, info = load_data_fn(info)
+    else:
+        data_dict = {}
 
     # setup models
     # acn prior with vqvae embedding
@@ -455,6 +461,7 @@ if __name__ == '__main__':
 
     info = create_new_info_dict(vars(args), base_filepath, __file__)
     model_dict, data_dict, info, train_cnt, epoch_cnt, rescale, rescale_inv = create_models(info, args.model_loadpath)
+
     kldis = nn.KLDivLoss(reduction=info['reduction'])
     lsm = nn.LogSoftmax(dim=1)
     sm = nn.Softmax(dim=1)

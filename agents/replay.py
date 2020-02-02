@@ -68,7 +68,8 @@ class ReplayMemory:
                 self.pred_frames = np.empty((self.size, self.frame_height, self.frame_width), dtype=np.uint8)
             else:
                 self.pred_frames = self.frames
-            self.terminal_flags = np.empty(self.size, dtype=np.bool)
+            self.terminal_flags = np.zeros(self.size, dtype=np.bool)
+            self.end_flags = np.zeros(self.size, dtype=np.bool)
             self.masks = np.empty((self.size, self.num_heads), dtype=np.bool)
 
             if self.num_heads == 1:
@@ -108,7 +109,9 @@ class ReplayMemory:
         np.savez(filepath,
                  frames=self.frames, pred_frames=self.pred_frames,
                  actions=self.actions, rewards=self.rewards,
-                 terminal_flags=self.terminal_flags, masks=self.masks,
+                 terminal_flags=self.terminal_flags,
+                 end_flags=self.end_flags,
+                 masks=self.masks,
                  count=self.count, current=self.current, size=self.size,
                  agent_history_length=self.agent_history_length,
                  frame_height=self.frame_height, frame_width=self.frame_width,
@@ -139,6 +142,7 @@ class ReplayMemory:
         self.actions = npfile['actions']
         self.rewards = npfile['rewards']
         self.terminal_flags = npfile['terminal_flags']
+        self.end_flags = npfile['end_flags']
         self.masks = npfile['masks']
         self.count = npfile['count']
         self.current = npfile['current']
@@ -152,7 +156,9 @@ class ReplayMemory:
             self.trim_before = npfile['trim_before']
             self.trim_after = npfile['trim_after']
             self.kernel_size = npfile['kernel_size']
-            self.reduction_function = eval(npfile['reduction_function'])
+            #self.reduction_function = eval(npfile['reduction_function'])
+            print("not loading reduction function")
+            self.reduction_function = np.max
         else:
             self.maxpool = False
         self.unique_available = False
@@ -172,7 +178,7 @@ class ReplayMemory:
         print("loaded buffer current is", self.current)
 
     # TODO add current q value
-    def add_experience(self, action, frame, reward, terminal, pred_frame=None):#, latent_frame=''):
+    def add_experience(self, action, frame, reward, terminal, end, pred_frame=None):#, latent_frame=''):
         """
         Args:
             action: An integer between 0 and env.action_space.n - 1
@@ -192,6 +198,7 @@ class ReplayMemory:
             self.pred_frames[self.current, ...] = pred_frame
         self.rewards[self.current] = reward
         self.terminal_flags[self.current] = terminal
+        self.end_flags[self.current] = end
         mask = self.random_state.binomial(1, self.bernoulli_probability, self.num_heads)
         self.masks[self.current] = mask
         self.count = max(self.count, self.current+1)
@@ -199,23 +206,49 @@ class ReplayMemory:
         return frame
 
     def _get_state(self, index):
-        if self.count is 0:
-            raise ValueError("The replay memory is empty!")
-        if index < self.agent_history_length - 1:
-            raise ValueError("Index must be min 3")
-        frames = self.frames[index-self.agent_history_length+1:index+1, ...]
-        # if not use_pred_states, this will be a copy of frames
-        pframes =  self.pred_frames[index-self.agent_history_length+1:index+1, ...]
+        try:
+            if self.count < self.agent_history_length - 1:
+                raise ValueError("The replay memory is empty!")
+            if index <= self.agent_history_length and self.count >= self.size:
+                print("WE HIT THE BOUNDARY CONDITION")
+                #if index < self.agent_history_length - 1:
+                #    raise ValueError("Index must be min 3")
+                index_frames = []
+                for j in range(self.agent_history_length):
+                    ii = index - self.agent_history_length + 1 + j
+                    index_frames.append(ii)
+                frames = self.frames[index_frames, ...]
+                pframes = self.pred_frames[index_frames, ...]
+            else:
+                frames = self.frames[index-self.agent_history_length+1:index+1, ...]
+                # if not use_pred_states, this will be a copy of frames
+                pframes =  self.pred_frames[index-self.agent_history_length+1:index+1, ...]
+        except Exception as e:
+            print('get_indices', e)
+            embed()
+        if frames.shape[0] == 0:
+            print('frames wrong size')
+            embed()
         return frames, pframes
 
-    def is_valid_index(self, index):
-        if index < self.agent_history_length:
+    def is_valid_index(self, index, last_state_allowed=False):
+        if self.count < self.agent_history_length-1:
+            print("INVALID INDEX: count:%s less than %s" %(self.count, self.agent_history_length-1))
             return False
-        if index >= self.current and index - self.agent_history_length <= self.current:
+        if index > self.count:
             return False
-        # dont add if there was a terminal flag in previous
-        # history_length steps
-        if self.terminal_flags[index - self.agent_history_length:index].any():
+        #if index < self.agent_history_length-1:
+        #    return False
+        # Jan 2020 - not sure why this flag was in there - doesnt allow me to
+        # get last state though - which is needed
+        if not last_state_allowed:
+            if index >= self.current and index - self.agent_history_length <= self.current:
+                print('INVALID index:%s >= current:%s'%(index, self.current))
+                print('and index buff:%s <= current %s'%(index - self.agent_history_length,
+                                                         self.current))
+                return False
+        if self.end_flags[index-self.agent_history_length+1:index].any():
+            #print('INVALID index:%s - end in state'%index)
             return False
         return True
 
@@ -226,20 +259,51 @@ class ReplayMemory:
         for i in range(batch_size):
             valid = False
             while not valid:
-                index = self.random_state.randint(self.agent_history_length, self.count - 1)
+                index = self.random_state.randint(self.agent_history_length, min([self.count, self.size]) - 1)
                 valid = self.is_valid_index(index)
             self.indices[i] = index
 
     def get_last_state(self):
-        if self.count < self.agent_history_length:
-            raise ValueError('Not enough memories to get a minibatch')
-        next_states, _ = self._get_state(self.current)
+        # not handling rollovers of replay buffer correctly
+        last_count = self.current - 1
+        if self.is_valid_index(last_count, last_state_allowed=True):
+            next_states, _ = self._get_state(last_count)
+        else:
+            print('----------------------------------unable to get valid index', last_count)
+            embed()
+            next_states = self.states[0]*0
+        if next_states.shape[0] != self.agent_history_length:
+            print("BAD GET_LAST STATE")
+            embed()
         return next_states
 
-    def get_last_episode(self):
-        if self.count < self.agent_history_length:
-            raise ValueError('Not enough memories to get a minibatch')
+    def get_last_n_states(self, num_steps):
+        # terminal_flags[self.current-1] will be True if it was the end of the
+        # episode
+        index = self.current-1
+        get_indexes = []
+        for i in range(num_steps):
+            if self.is_valid_index(index, last_state_allowed=True):
+                get_indexes.append(index)
+            index-=1
+        # change order
+        get_indexes = get_indexes[::-1]
+        #TODO - finish getting arrays
+        states = np.empty((len(get_indexes), self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
+        next_states = np.empty((len(get_indexes), self.agent_history_length,
+                                    self.frame_height, self.frame_width), dtype=np.uint8)
 
+        for i, idx in enumerate(get_indexes):
+            # This seems correct to me
+            # when adding experience - every input frame is the "next frame",
+            # the action that got us to this frame, and the reward received
+            states[i], _ = self._get_state(idx-1)
+            next_states[i], _ = self._get_state(idx)
+        return states, self.actions[get_indexes], self.rewards[get_indexes], next_states, self.terminal_flags[get_indexes], self.masks[get_indexes], get_indexes
+
+    def get_last_episode(self):
+        # NOTE THIS WORKS ON terminal_flags - not end_episode
         # terminal_flags[self.current-1] will be True if it was the end of the
         # episode
         get_indexes = [self.current-1]
@@ -280,13 +344,13 @@ class ReplayMemory:
             self.pred_new_states = np.empty((batch_size, self.agent_history_length,
                                         self.frame_height, self.frame_width), dtype=np.uint8)
 
-
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
 
         self._get_valid_indices(batch_size)
 
         for i, idx in enumerate(self.indices):
+            #print('trying', idx)
             # This seems correct to me
             # when adding experience - every input frame is the "next frame",
             # the action that got us to this frame, and the reward received
@@ -317,7 +381,7 @@ class ReplayMemory:
                 continue
             # dont add if there was a terminal flag in previous
             # history_length steps
-            if self.terminal_flags[index - self.agent_history_length:index].any():
+            if self.end_flags[index - self.agent_history_length:index].any():
                 continue
             unique_indexes.append(index)
         return np.array(unique_indexes, np.int32)

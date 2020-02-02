@@ -37,6 +37,7 @@ class ConfigHandler():
 
         self._load_config(config_file)
         self._get_output_name(restart_last_run, restart_run)
+        # TODO - when reloading data - cp does happen
         os.system('cp %s %s'%(config_file, self.output_dir))
         self._find_dependent_constants()
 
@@ -156,15 +157,24 @@ class ConfigHandler():
         self.frame_height = self.cfg['ENV']['obs_width']
         self.frame_width = self.cfg['ENV']['obs_width']
         self.maxpool = False
+        trim_before = 0
+        trim_after = 0
+        reduction_fn = None
+        kernel_size = None
         if 'REP' in self.cfg.keys():
-            if self.cfg['REP']['mp_height'] > 0:
-                # if maxpooling is done to output of env.py -> then this is what
-                # goes in the replay buffer. we used maxpool downsample in atari to
-                # get small enough frames, while preserving important info in the
-                # frames
-                self.frame_height = self.cfg['REP']['mp_width']
-                self.frame_width = self.cfg['REP']['mp_width']
-                self.maxpool = True
+            if 'mp_height' in self.cfg['REP'].keys():
+                if self.cfg['REP']['mp_height'] > 0:
+                    # if maxpooling is done to output of env.py -> then this is what
+                    # goes in the replay buffer. we used maxpool downsample in atari to
+                    # get small enough frames, while preserving important info in the
+                    # frames
+                    self.frame_height = self.cfg['REP']['mp_width']
+                    self.frame_width = self.cfg['REP']['mp_width']
+                    trim_before = self.cfg['REP']['trim_before']
+                    trim_after = self.cfg['REP']['trim_after']
+                    kernel_size = self.cfg['REP']['kernel_size']
+                    self.maxpool = True
+                    reduction_fn = eval(self.cfg['REP']['reduction_function'])
         return ReplayMemory(size=buffer_size,
                                frame_height=self.frame_height,
                                frame_width=self.frame_width,
@@ -176,10 +186,10 @@ class ConfigHandler():
                                use_pred_frames=self.cfg['DQN']['use_pred_frames'],
                                # details needed for online max pooling
                                maxpool=self.maxpool,
-                               trim_before=self.cfg['REP']['trim_before'],
-                               trim_after=self.cfg['REP']['trim_after'],
-                               kernel_size=self.cfg['REP']['kernel_size'],
-                               reduction_function=eval(self.cfg['REP']['reduction_function']),
+                               trim_before=trim_before,
+                               trim_after=trim_after,
+                               kernel_size=kernel_size,
+                               reduction_function=reduction_fn,
                              )
 
     def load_memory_buffer(self, phase, load_previously_saved=True):
@@ -223,11 +233,11 @@ class ConfigHandler():
 
 class StateManager():
     def __init__(self):
+        self.reward_space = [-1, 0, 1]
         self.latent_representation_function = None
         pass
 
     def create_new_state_instance(self, config_handler, phase):
-        self.reward_space = [-1, 0, 1]
         self.ch = config_handler
         self.save_time = time.time()-100000
         self.phase = phase
@@ -277,6 +287,7 @@ class StateManager():
         self.random_state = np.random.RandomState()
         self.random_state.set_state(fdict['state_random_state'])
         # TODO NOTE this does not restart at same env state
+        self.seed = self.ch.cfg['RUN']['%s_seed'%self.phase]
         self.env = self.ch.create_environment(self.seed)
         buffer_path = filepath.replace('.pkl', '.npz')
         self.memory_buffer = ReplayMemory(load_file=buffer_path)
@@ -307,6 +318,7 @@ class StateManager():
                     'phase':self.phase,
                     'save_time':self.save_time,
                     'ch':self.ch,
+                    'episodic_eps':self.episodic_eps,
                     }
         fh = open(checkpoint_basepath+'.pkl', 'wb')
         pickle.dump(save_dict, fh)
@@ -323,11 +335,16 @@ class StateManager():
         self.episodic_step_ends.append(self.end_step_number)
         self.episodic_loss.append(np.mean(self.episode_losses))
         self.episodic_times.append(self.end_time-self.start_time)
-        self.episodic_eps.append(self.eps)
+        try:
+            self.episodic_eps.append(self.eps)
+        except:
+            self.episodic_eps = [1.0 for x in range(len(self.episodic_times))]
         # smoothed reward over last 100 episodes
         self.episodic_reward_avg.append(np.mean(self.episodic_reward[-self.ch.cfg['PLOT']['num_prev_steps_avg']:]))
         num_steps = self.episodic_step_count[-1]
-        print("*** %s E%05d S%010d R%s num random/total steps:%s/%s***"%(self.phase, self.episode_number, self.step_number, self.episodic_reward[-1], self.num_random_steps, num_steps ))
+        print("*** %s E%05d S%010d AH%s-R%s num random/total steps:%s/%s***"%(
+            self.phase, self.episode_number, self.step_number, self.active_head,
+            self.episodic_reward[-1], self.num_random_steps, num_steps ))
         self.episode_active = False
         self.episode_number += 1
 
@@ -358,10 +375,14 @@ class StateManager():
                                           frame=state[i],
                                           reward=0,
                                           terminal=0,
+                                          end=0,
                                           )
 
         # get correctly formatted last state
         self.state = self.memory_buffer.get_last_state()
+        if self.state.shape != (self.memory_buffer.agent_history_length,self.memory_buffer.frame_height,self.memory_buffer.frame_width):
+            print("start shape wrong")
+            embed()
         self.episode_active = True
         return self.state
 
@@ -381,46 +402,60 @@ class StateManager():
         ep_steps = self.end_step_number-self.start_step_number
         self.plot_histogram(plot_basepath+'_ep_histrewards_%06d.png'%self.episode_number, data=self.episode_rewards, bins=self.reward_space,  title='rewards TR%s'%self.episode_reward)
         self.plot_histogram(plot_basepath+'_ep_histactions_%06d.png'%self.episode_number, data=self.episode_actions, bins=self.env.action_space,  title='actions acthead:%s nrand:%s/%s'%(self.active_head, self.num_random_steps, ep_steps))
-        ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes = self.memory_buffer.get_last_episode()
-        self.plot_episode_states(ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes)
 
-    def plot_episode_states(self, states, actions, rewards, next_states, terminals, masks, indexes):
+    def plot_last_episode(self):
+        ep_steps = self.end_step_number-self.start_step_number
+        ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes = self.memory_buffer.get_last_n_states(ep_steps)
+        pred_next_states, zs, latents = self.latent_representation_function(ep_states, ep_actions, ep_rewards)
         plot_basepath = self.get_plot_basepath()+'_episode_states_frames'
+        self.plot_episode_states(plot_basepath, ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes, pred_next_states)
+
+    def plot_episode_states(self, plot_basepath, states, actions, rewards, next_states, terminals, masks, indexes, pred_next_states):
         if not os.path.exists(plot_basepath):
             os.makedirs(plot_basepath)
         n_steps = states.shape[0]
-        if self.latent_representation_function == None:
-            n_cols = 4+1
+        print('plotting episode of length %s'%n_steps)
+        if pred_next_states  == None:
+            n_cols = 1+1
         else:
-            n_cols = 4+2
-            # todo - will need to batch this when episodes are longer
-            try:
-                pred_next_states, zs, latents = self.latent_representation_function(states, actions, rewards)
-            except:
-                print('unable to get representation function')
-                embed()
-            pred_next_states = pred_next_states.detach().cpu().numpy()
+            n_cols = 1+2
         f, ax = plt.subplots(1, n_cols, figsize=(n_cols,1.5))
         image_path = os.path.join(plot_basepath, 'step_%05d.png')
-        movie_path = plot_basepath+'_movie.mp4'
+        ep_reward = sum(rewards)
+        movie_path = plot_basepath+'_movie_R%04d.mp4'%ep_reward
         for step in range(n_steps):
-            ax[0].matshow(states[step, 0])
-            ax[1].matshow(states[step, 1])
-            ax[2].matshow(states[step, 2])
-            ax[2].set_xlabel('I%s' %(indexes[step]-1))
-            ax[3].matshow(states[step, 3])
-            ax[3].set_xlabel('OS-A%s' %(actions[step]))
-            ax[4].matshow(next_states[step, 3])
-            ax[4].set_xlabel('NS-R%s'%rewards[step])
-            if self.latent_representation_function != None:
-                ax[5].matshow(pred_next_states[step,0])
-                ax[5].set_xlabel('PNS')
+            if not step%20:
+                print('plotting step', step)
+            ax[0].matshow(states[step, 3])
+            ax[0].set_xlabel('OS-A%s' %(actions[step]))
+            ax[1].matshow(next_states[step, 3])
+            ax[1].set_xlabel('NS-R%s'%rewards[step])
+            if pred_next_states != None:
+                ax[2].matshow(pred_next_states[step])
+                ax[2].set_xlabel('PNS')
+            #ax[0].matshow(states[step, 0])
+            #ax[1].matshow(states[step, 1])
+            #ax[2].matshow(states[step, 2])
+            #ax[2].set_xlabel('I%s' %(indexes[step]-1))
+            #ax[3].matshow(states[step, 3])
+            #ax[3].set_xlabel('OS-A%s' %(actions[step]))
+            #ax[4].matshow(next_states[step, 3])
+            #ax[4].set_xlabel('NS-R%s'%rewards[step])
+            #if self.latent_representation_function != None:
+            #    ax[5].matshow(pred_next_states[step])
+            #    ax[5].set_xlabel('PNS')
             for aa in range(n_cols):
                 ax[aa].set_xticks([])
                 ax[aa].set_yticks([])
             plt.savefig(image_path%step)
-        cmd = "ffmpeg -r 30 -i %s -c:v libx264 -pix_fmt yuv420p %s"%(image_path,movie_path)
-        os.system(cmd)
+
+        plt.close()
+        w_path = plot_basepath+'_write_movie_R%04d.sh'%ep_reward
+        a = open(w_path, 'w')
+        cmd = "ffmpeg -n -r 30 -i %s -c:v libx264 -pix_fmt yuv420p %s"%(os.path.abspath(image_path),os.path.abspath(movie_path))
+        a.write(cmd)
+        a.close()
+        #os.system(cmd)
 
     def plot_histogram(self, plot_path, data, bins, title=''):
         n, bins, _ = plt.hist(data, bins=bins)
@@ -516,11 +551,16 @@ class StateManager():
                                           frame=next_state[-1],
                                           reward=self.prev_reward,
                                           terminal=self.life_lost,
+                                          end=self.terminal,
                                             )
         self.episode_actions.append(self.prev_action)
         self.episode_rewards.append(self.prev_reward)
         self.step_number+=1
         self.state = self.memory_buffer.get_last_state()
+        if self.state.shape[0] == 0:
+            print('handler state chan 0')
+            embed()
+
 
     def set_eps(self):
         # TODO function to find eps - for now use constant

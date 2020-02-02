@@ -1,6 +1,6 @@
 [RUN]
 # directory name to save this experiment in
-NAME=DEBUG_MFBreakout_acn_22mrepvid
+NAME=MFrecBreakout_acn_hs512to
 # load buffer from previous agent
 REPLAY_MEMORY_LOADPATH=
 REPLAY_MEMORY_VALID_LOADPATH= 
@@ -16,8 +16,7 @@ TRAIN_BUFFER_SIZE = 500000
 # eval buffer used for evaluating model_based
 EVAL_BUFFER_SIZE = 10000
 # how often to run evaluation (in steps)
-#EVAL_AND_CHECKPOINT_EVERY_STEPS= 250000
-EVAL_AND_CHECKPOINT_EVERY_STEPS= 100000
+EVAL_AND_CHECKPOINT_EVERY_STEPS= 250000
 # how often to write pkl of model and npz of data buffer
 # max number of steps to train
 TOTAL_TRAIN_STEPS = 25000000
@@ -81,7 +80,8 @@ N_PLAYOUT=50
 [DQN]
 USE_PRED_FRAMES=0
 # min steps needed to start training neural nets
-MIN_STEPS_TO_LEARN=50000
+#MIN_STEPS_TO_LEARN=50000
+MIN_STEPS_TO_LEARN=25000
 # SIZE Expected by DQN - should make this more automated
 # 10*10*16 for mb
 # 3136 for mf?
@@ -107,6 +107,7 @@ LEARN_EVERY_STEPS=4
 ADAM_LEARNING_RATE = .0000625 
 # Batch size to use for learning
 BATCH_SIZE = 64
+N_HIDDEN = 512
 # Gamma weight in Q update
 GAMMA = .99
 #Gradient clipping setting
@@ -118,7 +119,8 @@ USE_EMBEDDING=0
 # EPS initially is usually high, then tapers down. With bootstrap, this isn't
 # needed I think
 # without any eps - the bootstrap/prior network on breakout did not train - high score of 40 
-EPS_ANNEALING_STEPS=500000
+#EPS_ANNEALING_STEPS=500000
+EPS_ANNEALING_STEPS=200000
 EPS_INIT = 1.0
 # 0.01 in osband
 EPS_FINAL = 0.01
@@ -126,7 +128,7 @@ EPS_FINAL = 0.01
 LOAD_RANDOM_TRAIN_BUFFER=1
 LOAD_RANDOM_EVAL_BUFFER=1
 # if LOAD_RANDOM_phase_BUFFER prefill with this many steps
-NUM_PURE_RANDOM_STEPS_TRAIN = 50000
+NUM_PURE_RANDOM_STEPS_TRAIN = 20000
 NUM_PURE_RANDOM_STEPS_EVAL = 0
 #
 [REP]
@@ -139,5 +141,5 @@ reduction_function='np.max'
 MP_HEIGHT = 40
 MP_WIDTH = 40
 # number of steps before the env should end
-REP_MODEL_PATH="/usr/local/data/jhansen/planning/model_savedir/mid_trbreakout_spvq_twgrad40x40/mid_trbreakout_spvq_twgrad40x40_0022800000ex.pt"
+REP_MODEL_PATH="/usr/local/data/jhansen/planning/model_savedir/mid_trbreakout_spvq_twgrad40x40/mid_trbreakout_spvq_twgrad40x40_0019500000ex.pt"
 

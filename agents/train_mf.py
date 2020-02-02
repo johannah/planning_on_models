@@ -117,15 +117,17 @@ def prepare_state(ch, state):
     pt_state = torch.Tensor(state.astype(np.float)/ch.norm_by).to(ch.device)
     return pt_state
 
-def train_agent(sm, model_dict, steps_to_train):
+def run_agent(sm, model_dict, steps_to_train):
     print('training at S%s'%sm.step_number)
     start_step = deepcopy(sm.step_number)
     while (sm.step_number-start_step) < steps_to_train:
         #### START MAIN LOOP #####################################################################
         sm.start_episode()
         while not sm.terminal:
-            is_random, action = sm.is_random_action()
-            if not is_random:
+            is_random = sm.is_random_action()
+            if is_random and sm.step_number > 0:
+                action = sm.random_action()
+            else:
                 # state coming from the model looks like (4,84,84) and is a uint8
                 pt_state = prepare_state(sm.ch, sm.state[None])
                 vals = get_action_vals(model_dict['policy_net'], pt_state)
@@ -215,12 +217,12 @@ if __name__ == '__main__':
     # this will load latest availalbe buffer - if none available - it will
     # create or load a random replay for this seed
     train_sm = StateManager()
-    eval_sm = StateManager()
+    #eval_sm = StateManager()
 
     if args.config_path == '':
         print('loading checkpoint and its config')
         train_sm.load_checkpoint(filepath=args.load_path)
-        eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
+        #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
         ch = train_sm.ch
         ch.device = device
     else:
@@ -229,11 +231,11 @@ if __name__ == '__main__':
         if args.load_path == '':
             print('creating new state instance')
             train_sm.create_new_state_instance(config_handler=ch, phase='train')
-            eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
+            #eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
         else:
             print('loading checkpoint with specified config')
             train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
-            eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
+            #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
 
     seed_everything(ch.cfg['RUN']['train_seed'])
     model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
@@ -250,13 +252,13 @@ if __name__ == '__main__':
     steps_to_train = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
     num_eval_episodes = ch.cfg['EVAL']['num_eval_episodes']
     while train_sm.step_number < ch.cfg['RUN']['total_train_steps']:
-        train_sm, model_dict = train_agent(train_sm, model_dict, steps_to_train)
+        train_sm, model_dict = run_agent(train_sm, model_dict, steps_to_train)
         # we save according to train num - so train should come before eval
-        eval_sm = eval_agent(eval_sm, model_dict, num_eval_episodes)
+        #eval_sm = eval_agent(eval_sm, model_dict, num_eval_episodes)
 
         checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
         save_models(checkpoint_basepath, model_dict)
         train_sm.save_checkpoint(checkpoint_basepath+'_train')
-        eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
-        eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
+        #eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
+        #eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
 

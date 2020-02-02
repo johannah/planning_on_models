@@ -30,7 +30,7 @@ def weights_init(m):
 
 
 class CoreNet(nn.Module):
-    def __init__(self, code_length, num_hidden=84):
+    def __init__(self, code_length, num_hidden=1024):
         super(CoreNet, self).__init__()
         self.code_length = code_length
         # params from ddqn appendix
@@ -46,6 +46,8 @@ class CoreNet(nn.Module):
         self.h1 = nn.Linear(nh, nh)
         self.h2 = nn.Linear(nh, nh)
         self.h3 = nn.Linear(nh, nh)
+        self.out1 = nn.Linear(nh, nh)
+        self.out2 = nn.Linear(nh, nh)
 
     def forward(self, x):
         # Skip connections like prior net
@@ -66,7 +68,7 @@ class DuelingHeadNet(nn.Module):
     def __init__(self, input_size, n_actions=4):
         super(DuelingHeadNet, self).__init__()
         self.input_size = input_size
-        self.split_size = 36
+        self.split_size = 512
         self.fc1 = nn.Linear(self.input_size, self.split_size*2)
         self.value = nn.Linear(self.split_size, 1)
         self.advantage = nn.Linear(self.split_size, n_actions)
@@ -86,8 +88,8 @@ class DuelingHeadNet(nn.Module):
 class HeadNet(nn.Module):
     def __init__(self, input_size, n_actions):
         super(HeadNet, self).__init__()
-        self.fc1 = nn.Linear(input_size, 36)
-        self.fc2 = nn.Linear(36, n_actions)
+        self.fc1 = nn.Linear(input_size, 512)
+        self.fc2 = nn.Linear(512, n_actions)
         self.fc1.apply(weights_init)
         self.fc2.apply(weights_init)
 

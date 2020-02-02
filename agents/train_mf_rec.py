@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from dqn_acn_model import EnsembleNet, NetWithPrior
 
 sys.path.append('../models')
-from acn_utils import count_parameters, sample_from_discretized_mix_logistic
+from acn_utils import count_parameters, sample_from_discretized_mix_logistic, set_model_mode
 from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import ConvVAE, GatedPixelCNN, PriorNetwork
 from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import make_state as rep_make_state
 
@@ -118,14 +118,16 @@ def dqn_learn(sm, model_dict):
 def save_models(checkpoint_basepath, model_dict):
     model_state_dict = {}
     for model_name in model_dict.keys():
-        model_state_dict[model_name] = model_dict[model_name].state_dict
+        model_state_dict[model_name] = model_dict[model_name].state_dict()
     models_savepath = checkpoint_basepath+'.pt'
     print("saving models at: %s"%models_savepath)
     torch.save(model_state_dict, models_savepath)
 
 def load_models(filepath, model_dict):
-    model_state_dict = torch.load(filepath)
+    model_state_dict = torch.load(filepath, map_location=lambda storage, loc:storage)
+    print('loading dqn models from', filepath)
     for model_name in model_dict.keys():
+        print('loaded', model_name)
         model_dict[model_name].load_state_dict(model_state_dict[model_name])
     return model_dict
 
@@ -133,13 +135,13 @@ def create_dqn_model_dict(ch, num_actions, model_dict={}):
     model_dict['policy_net'] = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
                                       n_actions=num_actions,
                                       code_length=192,
-                                      num_hidden=84,
+                                      num_hidden=ch.cfg['DQN']['n_hidden'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
 
     model_dict['target_net'] = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
                                       n_actions=num_actions,
                                       code_length=192,
-                                      num_hidden=84,
+                                      num_hidden=ch.cfg['DQN']['n_hidden'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
 
     if ch.cfg['DQN']['prior']:
@@ -147,7 +149,7 @@ def create_dqn_model_dict(ch, num_actions, model_dict={}):
         prior_net = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
                                       n_actions=num_actions,
                                       code_length=192,
-                                      num_hidden=84,
+                                      num_hidden=ch.cfg['DQN']['n_hidden'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
 
         model_dict['policy_net'] = NetWithPrior(model_dict['policy_net'], prior_net, ch.cfg['DQN']['prior_scale'])
@@ -168,11 +170,16 @@ def load_uvdeconv_representation_model(representation_model_path):
     # will output a acn flat float representation and a vq discrete
     # representation - which to use?
     rep_info = {'device':device, 'args':args}
-    rep_model_dict, _, rep_info, train_cnt, epoch_cnt, rescale, rescale_inv = create_models(rep_info, representation_model_path)
+    rep_model_dict, _, rep_info, train_cnt, epoch_cnt, rescale, rescale_inv = create_models(rep_info, representation_model_path, load_data=False)
+    rep_model_dict = set_model_mode(rep_model_dict, 'valid')
     return rep_model_dict, rep_info, prepare_uv_state_latents, rescale, rescale_inv
 
 def prepare_uv_state_latents(states):
     # resize using max pool
+    bs,c,h,w =  states.shape
+    if c == 0:
+        print("BAD size of channels")
+        embed()
     with torch.no_grad():
         z, u_q = rep_model_dict['mid_vq_acn_model'](torch.FloatTensor(rescale(states)).to(device))
     return z
@@ -180,22 +187,56 @@ def prepare_uv_state_latents(states):
 def get_dummy_representation(states, actions, rewards):
     return states
 
+def pad_and_split(arr, bs):
+    tot = arr.shape[0]
+    leftover = tot % bs
+    pad = bs - leftover
+    pad_arr = torch.Tensor(np.zeros((pad, arr.shape[1], arr.shape[2], arr.shape[3])))
+    arr = torch.cat([arr, pad_arr])
+    return torch.split(arr, bs)
+
 def get_latent_pred_representation(states, actions, rewards):
+    bs = rep_info['batch_size']
+    tot = states.shape[0]
+    # split states, action_cond, and reward_cond into batch size chunks
+    # before returning to prevent overrun on gpu
+    # next state is the corresponding action
+    action_cond = torch.zeros((tot,num_actions,8,8))
+    reward_cond = torch.zeros((tot,num_rewards,8,8))
+    # add in actions/reward as conditioning
+    for i in range(tot):
+        a = actions[i]
+        r = rewards[i]
+        action_cond[i,a]=1.0
+        reward_cond[i,r]=1.0
+    # without chunking
+    #with torch.no_grad():
+    #    z = prepare_uv_state_latents(states)
+    #    rec_dml, z_e_x, z_q_x, latents =  rep_model_dict['mid_vq_acn_model'].decode(z, action_cond.to(device), reward_cond.to(device))
+    #    rec_yhat = sample_from_discretized_mix_logistic(rec_dml, rep_info['nr_logistic_mix'], only_mean=False, sampling_temperature=0.1)
+    #    rec_yhat = rescale_inv(rec_yhat).cpu().numpy()[:,0]
+    #return rec_yhat, z, latents
+    state_chunks = pad_and_split(torch.FloatTensor(states), bs)
+    reward_chunks = pad_and_split(reward_cond, bs)
+    action_chunks = pad_and_split(action_cond, bs)
+
     with torch.no_grad():
-        z = prepare_uv_state_latents(states)
-        bs,_,h,w = states.shape
-        # next state is the corresponding action
-        action_cond = torch.zeros((bs,num_actions,8,8))
-        reward_cond = torch.zeros((bs,num_rewards,8,8))
-        # add in actions/reward as conditioning
-        for i in range(bs):
-            a = actions[i]
-            r = rewards[i]
-            action_cond[i,a]=1.0
-            reward_cond[i,r]=1.0
-        rec_dml, z_e_x, z_q_x, latents =  rep_model_dict['mid_vq_acn_model'].decode(z, action_cond.to(device), reward_cond.to(device))
-        rec_yhat = sample_from_discretized_mix_logistic(rec_dml, rep_info['nr_logistic_mix'], only_mean=False, sampling_temperature=0.1)
-    return rescale_inv(rec_yhat), z, latents
+        fktot = bs*len(state_chunks)
+        rec_out = np.empty((fktot, 40, 40), dtype=np.uint8)
+        z_out = np.zeros((fktot, 3, 8, 8))
+        latent_out = np.zeros((fktot, 8, 8))
+        for chunk in range(len(state_chunks)):
+            print(state_chunks[chunk].sum())
+            print(state_chunks[chunk].shape)
+            z = prepare_uv_state_latents(state_chunks[chunk])
+            rec_dml, z_e_x, z_q_x, latents =  rep_model_dict['mid_vq_acn_model'].decode(z, action_chunks[chunk].to(device), reward_chunks[chunk].to(device))
+            rec_yhat = sample_from_discretized_mix_logistic(rec_dml, rep_info['nr_logistic_mix'], only_mean=False, sampling_temperature=0.1)
+            rec_yhat = rescale_inv(rec_yhat).cpu().numpy()[:,0].astype(np.uint8)
+            rec_out[chunk*bs:(chunk+1)*bs] = rec_yhat
+            z_out[chunk*bs:(chunk+1)*bs] = z.cpu().numpy()
+            latent_out[chunk*bs:(chunk+1)*bs] = latents.cpu().numpy()
+    return rec_out[:tot], z_out[:tot], latent_out[:tot]
+
 
 def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
     """
@@ -216,7 +257,10 @@ def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
             if is_random and sm.step_number > 0:
                 action = sm.random_action()
             else:
-                # state coming from the env looks like (4,84,84) and is a uint8
+                # state coming from the env looks like (4,40,40) and is a uint8
+                if sm.state[None].shape != (1,4,40,40):
+                    print('wrong state size')
+                    embed()
                 pt_state = prepare_state_fn(sm.state[None])
                 vals = get_action_vals(model_dict['policy_net'], pt_state)
                 if phase == 'train':
@@ -236,7 +280,6 @@ def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
             count = sm.step_number-start_step
         else:
             count = sm.episode_number-start_episode
-        #get_latent_pred_representation(z, states, actions, rewards, next_states)
     return sm, model_dict
 
 
@@ -247,6 +290,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('-cp', '--config_path', default='configs/mf_rep_breakout_config.txt', help='path of config file that will be used to generate random data')
     parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')
+    parser.add_argument('-ll', '--load_last_path', default='', help='given working directory of last checkpoint, load last checkpoints')
     parser.add_argument('-mp', '--model_path', default='', help='path of .pt model file to load checkpoint')
     parser.add_argument('-c', '--cuda', action='store_true', default=False, help='flag to use cuda device')
     # TODO - add reload and continue of previous projects
@@ -258,12 +302,12 @@ if __name__ == '__main__':
     # this will load latest availalbe buffer - if none available - it will
     # create or load a random replay for this seed
     train_sm = StateManager()
-    eval_sm = StateManager()
+    #eval_sm = StateManager()
 
     if args.config_path == '':
         print('loading checkpoint and its config')
         train_sm.load_checkpoint(filepath=args.load_path)
-        eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
+        #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
         ch = train_sm.ch
         ch.device = device
     else:
@@ -272,11 +316,11 @@ if __name__ == '__main__':
         if args.load_path == '':
             print('creating new state instance')
             train_sm.create_new_state_instance(config_handler=ch, phase='train')
-            eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
+            #eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
         else:
             print('loading checkpoint with specified config')
-            train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
-            eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
+            train_sm.load_checkpoint(filepath=args.load_path,  config_handler=ch)
+            #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), config_handler=ch)
 
     # make sure given info in the config file is the same as what the
     # representation model was trained on
@@ -296,7 +340,7 @@ if __name__ == '__main__':
     if args.model_path != '':
         model_dict = load_models(args.model_path, model_dict)
     elif args.load_path != '':
-        model_dict = load_models(args.load_path.replace('_train', '.pt'), model_dict)
+        model_dict = load_models(args.load_path.replace('_train.pkl', '.pt'), model_dict)
     else:
         print('fresh models')
 
@@ -308,11 +352,13 @@ if __name__ == '__main__':
 
         train_sm, model_dict = run_agent(train_sm, model_dict,  phase='train', max_count=steps_to_train, count_type='steps')
         # we save according to train num - so train should come before eval
-        eval_sm, _ = run_agent(eval_sm, model_dict,  phase='eval', max_count=num_eval_episodes, count_type='episodes')
+        # this wasnt working
+        #eval_sm, _ = run_agent(eval_sm, model_dict,  phase='eval', max_count=num_eval_episodes, count_type='episodes')
 
         checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
         save_models(checkpoint_basepath, model_dict)
         train_sm.save_checkpoint(checkpoint_basepath+'_train')
-        eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
-        eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
+        #eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
+        #eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
+    embed()
 
