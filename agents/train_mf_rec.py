@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import datetime
 import time
+from glob import glob
 from collections import Counter
 from copy import deepcopy
 
@@ -23,8 +24,6 @@ sys.path.append('../models')
 from acn_utils import count_parameters, sample_from_discretized_mix_logistic, set_model_mode
 from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import ConvVAE, GatedPixelCNN, PriorNetwork
 from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import make_state as rep_make_state
-
-
 from IPython import embed
 
 def seed_everything(seed=1234):
@@ -49,10 +48,12 @@ def single_head_action_function(vals, head):
 def vote_action_function(vals):
     # if head is a list of head indexes, vote on these heads (done in eval)
     acts = [torch.argmax(vals[h],dim=1).item() for h in range(len(vals))]
-    data = Counter(acts)
-    # TODO -  is most_common biased towards low action values?
-    action =  data.most_common(1)[0][0]
-    print("vote", data, action)
+    values,counts = np.unique(acts, return_counts=True)
+    maxvals = values[counts == counts.max()]
+    # TODO - make random state
+    action = sm.random_state.choice(maxvals)
+    print(values, counts)
+    print(maxvals, 'action', action)
     return action
 
 def prepare_details(actions, rewards, terminal_flags, masks, device):
@@ -226,8 +227,6 @@ def get_latent_pred_representation(states, actions, rewards):
         z_out = np.zeros((fktot, 3, 8, 8))
         latent_out = np.zeros((fktot, 8, 8))
         for chunk in range(len(state_chunks)):
-            print(state_chunks[chunk].sum())
-            print(state_chunks[chunk].shape)
             z = prepare_uv_state_latents(state_chunks[chunk])
             rec_dml, z_e_x, z_q_x, latents =  rep_model_dict['mid_vq_acn_model'].decode(z, action_chunks[chunk].to(device), reward_chunks[chunk].to(device))
             rec_yhat = sample_from_discretized_mix_logistic(rec_dml, rep_info['nr_logistic_mix'], only_mean=False, sampling_temperature=0.1)
@@ -243,14 +242,14 @@ def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
     num_to_run: number of steps or episodes to run - training is conventionally
     measured in steps while evaluation is measured in episodes.
     """
-    print('training at S%s'%sm.step_number)
+    print('running %s agent at S%s'%(phase, sm.step_number))
     start_step = deepcopy(sm.step_number)
     start_episode = deepcopy(sm.episode_number)
     count = 0
     while count < max_count:
-        print('count', count, count_type)
         #### START MAIN LOOP #####################################################################
         sm.start_episode()
+        total_reward = 0
         while not sm.terminal:
             is_random = sm.is_random_action()
             # make first step go thru agent for debugging
@@ -262,14 +261,21 @@ def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
                     print('wrong state size')
                     embed()
                 pt_state = prepare_state_fn(sm.state[None])
+                total_reward += sm.prev_reward
+
                 vals = get_action_vals(model_dict['policy_net'], pt_state)
-                if phase == 'train':
-                    action = single_head_action_function(vals, sm.active_head)
-                else:
-                    action = vote_action_function(vals)
+                #if phase == 'train':
+                #    action = single_head_action_function(vals, sm.active_head)
+                #else:
+                #    action = vote_action_function(vals)
+                action = single_head_action_function(vals, sm.active_head)
+            step_count = sm.step_number-start_step
+            print(step_count, total_reward, sm.active_head, pt_state.sum(), sm.state.sum(), action)
             sm.step(action)
-            if phase == 'train':
-                sm, model_dict =  dqn_learn(sm, model_dict)
+            #if phase == 'train':
+            #    sm, model_dict =  dqn_learn(sm, model_dict)
+            #if sm.step_number %100:
+            #    print(action, sm.step_number, sum(sm.episode_rewards), pt_state.sum())
         sm.end_episode()
         sm.handle_plotting()
         print(phase, 'total reward', np.sum(sm.episode_rewards))
@@ -284,6 +290,14 @@ def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
 
 
 if __name__ == '__main__':
+    """
+    TODO -
+    - when loading a model - write a file to indicate where it was reloadedi if training and write new files in same dir
+    - load and eval all files
+    - keep track of each heads avg score
+    - track of min/max/avg reward
+    """
+
     from train_atari_uvdeconv_tacn_midtwgradloss import create_models, forward_pass, make_atari_channel_action_reward_state
     from argparse import ArgumentParser
     from handler import ConfigHandler, StateManager
@@ -291,37 +305,40 @@ if __name__ == '__main__':
     parser.add_argument('-cp', '--config_path', default='configs/mf_rep_breakout_config.txt', help='path of config file that will be used to generate random data')
     parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')
     parser.add_argument('-ll', '--load_last_path', default='', help='given working directory of last checkpoint, load last checkpoints')
+    parser.add_argument('-p', '--plot', default=False, action='store_true', help='plot a loaded model')
+    parser.add_argument('-e', '--evaluate', default=False, action='store_true', help='eval a loaded model')
     parser.add_argument('-mp', '--model_path', default='', help='path of .pt model file to load checkpoint')
     parser.add_argument('-c', '--cuda', action='store_true', default=False, help='flag to use cuda device')
     # TODO - add reload and continue of previous projects
     args = parser.parse_args()
     if args.cuda: device = 'cuda';
     else: device='cpu'
-
-
+    num_train_steps = 0
     # this will load latest availalbe buffer - if none available - it will
     # create or load a random replay for this seed
-    train_sm = StateManager()
-    #eval_sm = StateManager()
 
-    if args.config_path == '':
-        print('loading checkpoint and its config')
-        train_sm.load_checkpoint(filepath=args.load_path)
-        #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
-        ch = train_sm.ch
-        ch.device = device
+    if args.evaluate:
+        phase = 'eval'
+        # breakout_S014342_N0001754345_train.pkl[
     else:
-        # load given configuration file and create experiment directory
-        ch = ConfigHandler(args.config_path, device=device)
-        if args.load_path == '':
-            print('creating new state instance')
-            train_sm.create_new_state_instance(config_handler=ch, phase='train')
-            #eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
-        else:
-            print('loading checkpoint with specified config')
-            train_sm.load_checkpoint(filepath=args.load_path,  config_handler=ch)
-            #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), config_handler=ch)
+        phase = 'train'
 
+    print("phase is %s"%phase)
+    sm = StateManager()
+    #if args.config_path == '':
+    #    print('loading checkpoint and its config')
+    #    sm.load_checkpoint(filepath=args.load_path)
+    #    ch = sm.ch
+    #    ch.device = device
+    #else:
+    # load given configuration file and create experiment directory
+    ch = ConfigHandler(args.config_path, device=device)
+    if args.load_path == '' or phase == 'eval':
+        print('creating new state instance')
+        sm.create_new_state_instance(config_handler=ch, phase=phase)
+    else:
+        print('loading checkpoint with specified config - always load train')
+        sm.load_checkpoint(filepath=args.load_path, config_handler=ch)
     # make sure given info in the config file is the same as what the
     # representation model was trained on
     #assert (rep_info['wsize'] ==  ch.cfg['ENV']['obs_width'])
@@ -331,34 +348,67 @@ if __name__ == '__main__':
     # prescribed size - this is available in replay.py
     rep_model_path = ch.cfg['REP']['rep_model_path']
     rep_model_dict, rep_info, prepare_state_fn, rescale, rescale_inv = load_uvdeconv_representation_model(rep_model_path)
-
+    sm.latent_representation_function = get_latent_pred_representation
     seed_everything(ch.cfg['RUN']['train_seed'])
-    train_sm.latent_representation_function = get_latent_pred_representation
-    num_actions = train_sm.env.num_actions
-    num_rewards = train_sm.ch.num_rewards
-    model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
+    num_actions = sm.env.num_actions
+    num_rewards = sm.ch.num_rewards
+    model_dict = create_dqn_model_dict(ch, num_actions=sm.env.num_actions)
     if args.model_path != '':
+        #TODO - not sure it is actually loading model
+        num_train_steps = int(os.path.split(args.model_path)[1].split('.')[0].split('_')[-1][1:])
         model_dict = load_models(args.model_path, model_dict)
     elif args.load_path != '':
-        model_dict = load_models(args.load_path.replace('_train.pkl', '.pt'), model_dict)
+        lpath = args.load_path.replace('_train.pkl', '.pt')
+        num_train_steps = int(os.path.split(lpath)[1].split('.')[0].split('_')[-2][1:])
+        model_dict = load_models(lpath, model_dict)
     else:
         print('fresh models')
 
+    if phase == 'train':
+        max_count = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
+        count_type = 'steps'
+    else:
+        max_count = ch.cfg['EVAL']['num_eval_episodes']
+        count_type = 'episodes'
 
-    #TODO load model_dict
-    steps_to_train = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
-    num_eval_episodes = ch.cfg['EVAL']['num_eval_episodes']
-    while train_sm.step_number < ch.cfg['RUN']['total_train_steps']:
-
-        train_sm, model_dict = run_agent(train_sm, model_dict,  phase='train', max_count=steps_to_train, count_type='steps')
-        # we save according to train num - so train should come before eval
-        # this wasnt working
-        #eval_sm, _ = run_agent(eval_sm, model_dict,  phase='eval', max_count=num_eval_episodes, count_type='episodes')
-
-        checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
-        save_models(checkpoint_basepath, model_dict)
-        train_sm.save_checkpoint(checkpoint_basepath+'_train')
-        #eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
-        #eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
-    embed()
+    ll_idx = 0
+    #if args.evaluate and args.load_last_path != '':
+    #    while True:
+    #        avail_models = sorted(glob(os.path.join(args.load_last_path, '*.pt')))
+    #        if ll_idx > len(avail_models)-1:
+    #            break
+    #        cur_path = avail_models[ll_idx]
+    #        num_train_steps = int(os.path.split(cur_path)[1].split('.')[0].split('_')[-2][1:])
+    #        # todo - load last checkpoint
+    #        checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
+    #        if not os.path.exists(checkpoint_basepath+'.pkl'):
+    #            sm.load_checkpoint(filepath=cur_path, config_handler=ch)
+    #            model_dict = load_models(cur_path, model_dict)
+    #            sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
+    #            sm.save_checkpoint(checkpoint_basepath)
+    #        if args.plot:
+    #            print('plotting last episode')
+    #            sm.plot_last_episode()
+    #if args.evaluate:
+    if 1:
+        print("-----------starting eval--------------")
+        sm.active_head = 0
+        sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
+        checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
+        #sm.save_checkpoint(checkpoint_basepath)
+        if args.plot:
+            print('plotting last episode')
+            sm.plot_last_episode()
+        sys.exit()
+    else:
+        print("TRAINING")
+        if num_train_steps < ch.cfg['RUN']['total_train_steps'] and phase == 'train':
+            sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
+            num_train_steps = sm.step_number
+            checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
+            sm.save_checkpoint(checkpoint_basepath)
+            save_models(checkpoint_basepath, model_dict)
+            if args.plot:
+                print('plotting last episode')
+                sm.plot_last_episode()
 

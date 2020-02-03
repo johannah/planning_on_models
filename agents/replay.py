@@ -40,11 +40,13 @@ class ReplayMemory:
 
         """
         if maxpool:
-            self.maxpool = maxpool
-            self.trim_before = trim_before
-            self.trim_after = trim_after
-            self.kernel_size = kernel_size
-            self.reduction_function = reduction_function
+            self.maxpool = True
+        else:
+            self.maxpool = False
+        self.trim_before = trim_before
+        self.trim_after = trim_after
+        self.kernel_size = kernel_size
+        self.reduction_function = reduction_function
         self.unique_available = False
         self.use_pred_frames = use_pred_frames
         if load_file != '':
@@ -191,6 +193,8 @@ class ReplayMemory:
             if self.maxpool:
                 frame = self.online_shrink_frame_size(frame)
             else:
+                print('maxpool issue')
+                embed()
                 raise ValueError('Dimension of frame is wrong!', frame.shape)
         self.actions[self.current] = action
         self.frames[self.current, ...] = frame
@@ -280,6 +284,9 @@ class ReplayMemory:
     def get_last_n_states(self, num_steps):
         # terminal_flags[self.current-1] will be True if it was the end of the
         # episode
+        if num_steps > self.size:
+            print('limiting last n states to %s from %s due to size of replay buffer'%(num_steps,  self.size - self.agent_history_length))
+            num_steps = self.size - self.agent_history_length
         index = self.current-1
         get_indexes = []
         for i in range(num_steps):
@@ -314,6 +321,8 @@ class ReplayMemory:
             # idea how this will work across buffer boundaries -
             get_indexes.append(last_index)
             last_index-=1
+            if len(get_indexes) >= self.size - self.agent_history_length:
+                break
         # change order
         get_indexes = get_indexes[::-1]
         #TODO - finish getting arrays
@@ -420,7 +429,7 @@ class ReplayMemory:
             frame = trim_array(frame, self.trim_after)
         return frame[0]
 
-    def shrink_frame_size(self, kernel_size=2, reduction_function=np.max, trim_before=0, trim_after=0,  batch_size=32):
+    def shrink_frame_size(self, kernel_size=(2,2), reduction_function=np.max, trim_before=0, trim_after=0,  batch_size=32):
         _, oh, ow = self.frames.shape
         if trim_before > 0:
             self.frames = trim_array(self.frames, trim_before)

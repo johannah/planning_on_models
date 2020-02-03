@@ -372,7 +372,7 @@ class StateManager():
             # add enough memories to use the memory buffer
             # not sure if this is correct
             self.memory_buffer.add_experience(action=0,
-                                          frame=state[i],
+                                          frame=state[-1], # use last frame in state bc it is only nonzero one
                                           reward=0,
                                           terminal=0,
                                           end=0,
@@ -406,56 +406,51 @@ class StateManager():
     def plot_last_episode(self):
         ep_steps = self.end_step_number-self.start_step_number
         ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes = self.memory_buffer.get_last_n_states(ep_steps)
-        pred_next_states, zs, latents = self.latent_representation_function(ep_states, ep_actions, ep_rewards)
         plot_basepath = self.get_plot_basepath()+'_episode_states_frames'
-        self.plot_episode_states(plot_basepath, ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes, pred_next_states)
+        self.plot_episode_states(plot_basepath, ep_states, ep_actions, ep_rewards, ep_next_states, ep_terminals, ep_masks, indexes)
 
-    def plot_episode_states(self, plot_basepath, states, actions, rewards, next_states, terminals, masks, indexes, pred_next_states):
+    def plot_episode_states(self, plot_basepath, states, actions, rewards, next_states, terminals, masks, indexes):
         if not os.path.exists(plot_basepath):
             os.makedirs(plot_basepath)
         n_steps = states.shape[0]
         print('plotting episode of length %s'%n_steps)
-        if pred_next_states  == None:
-            n_cols = 1+1
+        if self.latent_representation_function == None:
+            n_cols = 2
         else:
-            n_cols = 1+2
-        f, ax = plt.subplots(1, n_cols, figsize=(n_cols,1.5))
+            pred_next_states, zs, latents = self.latent_representation_function(states, actions, rewards)
+            n_cols = 4
         image_path = os.path.join(plot_basepath, 'step_%05d.png')
         ep_reward = sum(rewards)
-        movie_path = plot_basepath+'_movie_R%04d.mp4'%ep_reward
-        for step in range(n_steps):
-            if not step%20:
-                print('plotting step', step)
-            ax[0].matshow(states[step, 3])
-            ax[0].set_xlabel('OS-A%s' %(actions[step]))
-            ax[1].matshow(next_states[step, 3])
-            ax[1].set_xlabel('NS-R%s'%rewards[step])
-            if pred_next_states != None:
-                ax[2].matshow(pred_next_states[step])
-                ax[2].set_xlabel('PNS')
-            #ax[0].matshow(states[step, 0])
-            #ax[1].matshow(states[step, 1])
-            #ax[2].matshow(states[step, 2])
-            #ax[2].set_xlabel('I%s' %(indexes[step]-1))
-            #ax[3].matshow(states[step, 3])
-            #ax[3].set_xlabel('OS-A%s' %(actions[step]))
-            #ax[4].matshow(next_states[step, 3])
-            #ax[4].set_xlabel('NS-R%s'%rewards[step])
-            #if self.latent_representation_function != None:
-            #    ax[5].matshow(pred_next_states[step])
-            #    ax[5].set_xlabel('PNS')
-            for aa in range(n_cols):
-                ax[aa].set_xticks([])
-                ax[aa].set_yticks([])
-            plt.savefig(image_path%step)
 
-        plt.close()
+        movie_path = plot_basepath+'_movie_R%04d.mp4'%ep_reward
+        print('starting to make movie', movie_path)
         w_path = plot_basepath+'_write_movie_R%04d.sh'%ep_reward
         a = open(w_path, 'w')
         cmd = "ffmpeg -n -r 30 -i %s -c:v libx264 -pix_fmt yuv420p %s"%(os.path.abspath(image_path),os.path.abspath(movie_path))
         a.write(cmd)
         a.close()
-        #os.system(cmd)
+
+        w,h = states[0,3].shape
+        treward = 0
+        for step in range(n_steps):
+            f, ax = plt.subplots(1, n_cols, figsize=(n_cols*.5,.9))
+            if not step%20:
+                print('plotting step', step)
+            ax[0].matshow(states[step, 3])
+            #ax[0].set_title('OS-A%s' %(actions[step]))
+            ax[1].matshow(next_states[step, 3])
+            treward+=rewards[step]
+            if self.latent_representation_function != None:
+                ax[2].matshow(pred_next_states[step])
+                z = np.hstack((zs[step,0], zs[step,1], zs[step,2]))
+                ax[3].imshow(z)
+            for aa in range(n_cols):
+                ax[aa].set_xticks([])
+                ax[aa].set_yticks([])
+            f.suptitle('%sA%sR%sT%sD%s'%(step, actions[step], rewards[step], treward, int(terminals[step])))
+            plt.savefig(image_path%step)
+            plt.close()
+        os.system('sh %s'%w_path)
 
     def plot_histogram(self, plot_path, data, bins, title=''):
         n, bins, _ = plt.hist(data, bins=bins)

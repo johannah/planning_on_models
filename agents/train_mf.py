@@ -39,10 +39,12 @@ def single_head_action_function(vals, head):
 def vote_action_function(vals):
     # if head is a list of head indexes, vote on these heads (done in eval)
     acts = [torch.argmax(vals[h],dim=1).item() for h in range(len(vals))]
-    data = Counter(acts)
-    # TODO -  is most_common biased towards low action values?
-    action =  data.most_common(1)[0][0]
-    print("vote", data, action)
+    values,counts = np.unique(acts, return_counts=True)
+    maxvals = values[counts == counts.max()]
+    # TODO - make random state
+    action = sm.random_state.choice(maxvals)
+    print(values, counts)
+    print(maxvals, 'action', action)
     return action
 
 def get_frame_prepared_minibatch(ch, minibatch):
@@ -117,10 +119,12 @@ def prepare_state(ch, state):
     pt_state = torch.Tensor(state.astype(np.float)/ch.norm_by).to(ch.device)
     return pt_state
 
-def run_agent(sm, model_dict, steps_to_train):
+def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
     print('training at S%s'%sm.step_number)
     start_step = deepcopy(sm.step_number)
-    while (sm.step_number-start_step) < steps_to_train:
+    start_episode = deepcopy(sm.episode_number)
+    count = 0
+    while count < max_count:
         #### START MAIN LOOP #####################################################################
         sm.start_episode()
         while not sm.terminal:
@@ -131,36 +135,28 @@ def run_agent(sm, model_dict, steps_to_train):
                 # state coming from the model looks like (4,84,84) and is a uint8
                 pt_state = prepare_state(sm.ch, sm.state[None])
                 vals = get_action_vals(model_dict['policy_net'], pt_state)
+            if phase == 'train':
                 action = single_head_action_function(vals, sm.active_head)
-            sm.step(action)
-            sm, model_dict =  dqn_learn(sm, model_dict)
-        sm.end_episode()
-        sm.handle_plotting()
-        # TODO plot every
-    return sm, model_dict
-
-def eval_agent(sm, model_dict, num_episodes_to_eval):
-    start_episode = deepcopy(sm.episode_number)
-    while (sm.episode_number-start_episode) < num_episodes_to_eval:
-        #### START MAIN LOOP #####################################################################
-        sm.start_episode()
-        while not sm.terminal:
-            is_random, action = sm.is_random_action()
-            if not is_random:
-                pt_state = prepare_state(sm.ch, sm.state[None])
-                vals = get_action_vals(model_dict['policy_net'], pt_state)
+            else:
                 action = vote_action_function(vals)
             sm.step(action)
+            if phase == 'train':
+                sm, model_dict =  dqn_learn(sm, model_dict)
         sm.end_episode()
-        print('eval', np.sum(sm.episode_rewards))
-        print(sm.episode_rewards)
-        print(sm.episode_actions)
-    return sm
+        sm.handle_plotting()
+        if phase == 'eval':
+            sm.plot_current_episode()
+        if count_type == 'steps':
+            count = sm.step_number - start_step
+        else:
+            count = sm.episode_number - start_episode
+        # TODO plot every
+    return sm, model_dict
 
 def save_models(checkpoint_basepath, model_dict):
     model_state_dict = {}
     for model_name in model_dict.keys():
-        model_state_dict[model_name] = model_dict[model_name].state_dict
+        model_state_dict[model_name] = model_dict[model_name].state_dict()
     models_savepath = checkpoint_basepath+'.pt'
     print("saving models at: %s"%models_savepath)
     torch.save(model_state_dict, models_savepath)
@@ -168,7 +164,11 @@ def save_models(checkpoint_basepath, model_dict):
 def load_models(filepath, model_dict):
     model_state_dict = torch.load(filepath)
     for model_name in model_dict.keys():
-        model_dict[model_name].load_state_dict(model_state_dict[model_name])
+        try:
+            model_dict[model_name].load_state_dict(model_state_dict[model_name])
+        except:
+            # forgot to make function when saving in some versions
+            model_dict[model_name].load_state_dict(model_state_dict[model_name]())
     return model_dict
 
 def create_dqn_model_dict(ch, num_actions, model_dict={}):
@@ -201,64 +201,164 @@ def create_dqn_model_dict(ch, num_actions, model_dict={}):
 
 
 if __name__ == '__main__':
+    """
+    TODO -
+    - when loading a model - write a file to indicate where it was reloadedi if training and write new files in same dir
+    - load and eval all files
+    - keep track of each heads avg score
+    """
     from argparse import ArgumentParser
     from handler import ConfigHandler, StateManager
     parser = ArgumentParser()
-    parser.add_argument('-cp', '--config_path', help='path of config file that will be used to generate random data')
+    parser.add_argument('-cp', '--config_path', default='configs/mf_rep_breakout_config.txt', help='path of config file that will be used to generate random data')
     parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')
+    parser.add_argument('-ll', '--load_last_path', default='', help='given working directory of last checkpoint, load last checkpoints')
+    parser.add_argument('-p', '--plot', default=False, action='store_true', help='plot a loaded model')
+    parser.add_argument('-e', '--evaluate', default=False, action='store_true', help='eval a loaded model')
     parser.add_argument('-mp', '--model_path', default='', help='path of .pt model file to load checkpoint')
     parser.add_argument('-c', '--cuda', action='store_true', default=False, help='flag to use cuda device')
     # TODO - add reload and continue of previous projects
     args = parser.parse_args()
     if args.cuda: device = 'cuda';
     else: device='cpu'
-
-
+    num_train_steps = 0
     # this will load latest availalbe buffer - if none available - it will
     # create or load a random replay for this seed
-    train_sm = StateManager()
-    #eval_sm = StateManager()
 
-    if args.config_path == '':
-        print('loading checkpoint and its config')
-        train_sm.load_checkpoint(filepath=args.load_path)
-        #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
-        ch = train_sm.ch
-        ch.device = device
+    if args.evaluate:
+        phase = 'eval'
+        # breakout_S014342_N0001754345_train.pkl[
     else:
-        # load given configuration file and create experiment directory
-        ch = ConfigHandler(args.config_path, device=device)
-        if args.load_path == '':
-            print('creating new state instance')
-            train_sm.create_new_state_instance(config_handler=ch, phase='train')
-            #eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
-        else:
-            print('loading checkpoint with specified config')
-            train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
-            #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
+        phase = 'train'
 
+    print("phase is %s"%phase)
+    sm = StateManager()
+    # load given configuration file and create experiment directory
+    ch = ConfigHandler(args.config_path, device=device)
+    if args.load_path == '' or phase == 'eval':
+        print('creating new state instance')
+        sm.create_new_state_instance(config_handler=ch, phase=phase)
+    else:
+        print('loading checkpoint with specified config - always load train')
+        sm.load_checkpoint(filepath=args.load_path, config_handler=ch)
     seed_everything(ch.cfg['RUN']['train_seed'])
-    model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
+    num_actions = sm.env.num_actions
+    num_rewards = sm.ch.num_rewards
+    model_dict = create_dqn_model_dict(ch, num_actions=sm.env.num_actions)
     if args.model_path != '':
+        num_train_steps = int(os.path.split(args.model_path)[1].split('.')[0].split('_')[-1][1:])
         model_dict = load_models(args.model_path, model_dict)
     elif args.load_path != '':
-        model_dict = load_models(args.load_path.replace('_train', '.pt'), model_dict)
+        lpath = args.load_path.replace('_train.pkl', '.pt')
+        num_train_steps = int(os.path.split(lpath)[1].split('.')[0].split('_')[-2][1:])
+        model_dict = load_models(lpath, model_dict)
     else:
         print('fresh models')
 
-    checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
-    save_models(checkpoint_basepath, model_dict)
+    if phase == 'train':
+        max_count = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
+        count_type = 'steps'
+    else:
+        max_count = ch.cfg['EVAL']['num_eval_episodes']
+        count_type = 'episodes'
 
-    steps_to_train = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
-    num_eval_episodes = ch.cfg['EVAL']['num_eval_episodes']
-    while train_sm.step_number < ch.cfg['RUN']['total_train_steps']:
-        train_sm, model_dict = run_agent(train_sm, model_dict, steps_to_train)
-        # we save according to train num - so train should come before eval
-        #eval_sm = eval_agent(eval_sm, model_dict, num_eval_episodes)
+    ll_idx = 0
+    #if args.evaluate and args.load_last_path != '':
+    #    while True:
+    #        avail_models = sorted(glob(os.path.join(args.load_last_path, '*.pt')))
+    #        if ll_idx > len(avail_models)-1:
+    #            break
+    #        cur_path = avail_models[ll_idx]
+    #        num_train_steps = int(os.path.split(cur_path)[1].split('.')[0].split('_')[-2][1:])
+    #        # todo - load last checkpoint
+    #        checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
+    #        if not os.path.exists(checkpoint_basepath+'.pkl'):
+    #            sm.load_checkpoint(filepath=cur_path, config_handler=ch)
+    #            model_dict = load_models(cur_path, model_dict)
+    #            sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
+    #            sm.save_checkpoint(checkpoint_basepath)
+    #        if args.plot:
+    #            print('plotting last episode')
+    #            sm.plot_last_episode()
+    if args.evaluate:
+        print("-----------starting eval--------------")
+        sm.active_head = 0
+        sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
+        checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
+        sm.save_checkpoint(checkpoint_basepath)
+        if args.plot:
+            print('plotting last episode')
+            sm.plot_last_episode()
+    else:
+        print("TRAINING")
+        if num_train_steps < ch.cfg['RUN']['total_train_steps'] and phase == 'train':
+            sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
+            num_train_steps = sm.step_number
+            checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
+            sm.save_checkpoint(checkpoint_basepath)
+            save_models(checkpoint_basepath, model_dict)
+            if args.plot:
+                print('plotting last episode')
+                sm.plot_last_episode()
 
-        checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
-        save_models(checkpoint_basepath, model_dict)
-        train_sm.save_checkpoint(checkpoint_basepath+'_train')
-        #eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
-        #eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
-
+#    from argparse import ArgumentParser
+#    from handler import ConfigHandler, StateManager
+#    parser = ArgumentParser()
+#    parser.add_argument('-cp', '--config_path', help='path of config file that will be used to generate random data')
+#    parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')
+#    parser.add_argument('-mp', '--model_path', default='', help='path of .pt model file to load checkpoint')
+#    parser.add_argument('-c', '--cuda', action='store_true', default=False, help='flag to use cuda device')
+#    # TODO - add reload and continue of previous projects
+#    args = parser.parse_args()
+#    if args.cuda: device = 'cuda';
+#    else: device='cpu'
+#
+#
+#    # this will load latest availalbe buffer - if none available - it will
+#    # create or load a random replay for this seed
+#    train_sm = StateManager()
+#    #eval_sm = StateManager()
+#
+#    if args.config_path == '':
+#        print('loading checkpoint and its config')
+#        train_sm.load_checkpoint(filepath=args.load_path)
+#        #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'))
+#        ch = train_sm.ch
+#        ch.device = device
+#    else:
+#        # load given configuration file and create experiment directory
+#        ch = ConfigHandler(args.config_path, device=device)
+#        if args.load_path == '':
+#            print('creating new state instance')
+#            train_sm.create_new_state_instance(config_handler=ch, phase='train')
+#            #eval_sm.create_new_state_instance(config_handler=ch, phase='eval')
+#        else:
+#            print('loading checkpoint with specified config')
+#            train_sm.load_checkpoint(filepath=args.load_path, phase='train', config_handler=ch)
+#            #eval_sm.load_checkpoint(filepath=args.load_path.replace('train', 'eval'), phase='eval', config_handler=ch)
+#
+#    seed_everything(ch.cfg['RUN']['train_seed'])
+#    model_dict = create_dqn_model_dict(ch, num_actions=train_sm.env.num_actions)
+#    if args.model_path != '':
+#        model_dict = load_models(args.model_path, model_dict)
+#    elif args.load_path != '':
+#        model_dict = load_models(args.load_path.replace('_train', '.pt'), model_dict)
+#    else:
+#        print('fresh models')
+#
+#    checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
+#    save_models(checkpoint_basepath, model_dict)
+#
+#    steps_to_train = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
+#    num_eval_episodes = ch.cfg['EVAL']['num_eval_episodes']
+#    while train_sm.step_number < ch.cfg['RUN']['total_train_steps']:
+#        train_sm, model_dict = run_agent(train_sm, model_dict, steps_to_train)
+#        # we save according to train num - so train should come before eval
+#        #eval_sm = eval_agent(eval_sm, model_dict, num_eval_episodes)
+#
+#        checkpoint_basepath = ch.get_checkpoint_basepath(train_sm.step_number)
+#        save_models(checkpoint_basepath, model_dict)
+#        train_sm.save_checkpoint(checkpoint_basepath+'_train')
+#        #eval_sm.save_checkpoint(checkpoint_basepath+'_eval')
+#        #eval_sm.plot_current_episode(plot_basepath=checkpoint_basepath+'_eval')
+#

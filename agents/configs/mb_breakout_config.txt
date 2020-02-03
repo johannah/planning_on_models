@@ -14,7 +14,7 @@ EVAL_SEED = 100
 # Buffer size for experience replay
 TRAIN_BUFFER_SIZE = 500000
 # eval buffer used for evaluating model_based
-EVAL_BUFFER_SIZE = 10000
+EVAL_BUFFER_SIZE = 30000
 # how often to run evaluation (in steps)
 EVAL_AND_CHECKPOINT_EVERY_STEPS= 250000
 # how often to write pkl of model and npz of data buffer
