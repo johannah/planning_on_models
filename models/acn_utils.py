@@ -89,17 +89,35 @@ def plot_example(img_filepath, example, plot_on=[], num_plot=10):
     if not len(plot_on):
         # plot all
         plot_on = sorted(example.keys())
-    for cnt, pon in enumerate(plot_on):
+    n_cols = len(plot_on)
+    f, ax = plt.subplots(num_plot, n_cols)
+    for col, pon in enumerate(plot_on):
         bs,c,h,w = example[pon].shape
         num_plot = min([bs, num_plot])
-        eimgs = example[pon].view(bs,c,h,w)[:num_plot]
-        print('plotting', pon, eimgs.min(), eimgs.max())
-        if not cnt:
-            comparison = eimgs
-        else:
-            comparison = torch.cat([comparison, eimgs])
-    save_image(comparison.cpu(), img_filepath, nrow=num_plot)
+        eimgs = example[pon].view(bs,c,h,w)[:num_plot].detach().cpu().numpy()
+        for row in range(num_plot):
+            if not row:
+                ax[row,col].set_title(pon)
+            if c == 1:
+                ax[row, col].matshow(eimgs[row,0])
+            if c == 3:
+                ax[row, col].matshow(eimgs[row])
+            print(row,pon,eimgs[row].min(),eimgs[row].max())
+            ax[row,col].set_xticks([])
+            ax[row,col].set_yticks([])
+            ax[row,col].set_xticklabels([])
+            ax[row,col].set_yticklabels([])
+        #print('plotting', pon, eimgs.min(), eimgs.max())
+        #if not cnt:
+        #    comparison = eimgss
+        #    comparison = torch.cat([comparison, eimgs])
+    #save_image(comparison.cpu(), img_filepath, nrow=num_plot)
+    #f.tight_layout()
+
+    plt.subplots_adjust(wspace=0, hspace=0)       #else:
+    plt.savefig(img_filepath)
     print('writing comparison image: %s img_path'%img_filepath)
+    plt.close()
 
 def count_parameters(model):
     # https://discuss.pytorch.org/t/how-do-i-check-the-number-of-parameters-of-a-model/4325/9

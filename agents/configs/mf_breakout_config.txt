@@ -61,8 +61,7 @@ MAX_EPISODE_STEPS = 27000
 # random number of noops applied to beginning of each episode
 MAX_NO_OP_FRAMES = 30
 # do you send finished=true to agent while training when it loses a life?
-# it will train faster this way, but some papers do not do it this way. I don't
-# remember which don't atm.
+# it will train faster this way, but some papers do not do it this way. 
 DEAD_AS_END = 1 
 
 [PLOT]

@@ -90,13 +90,13 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST', load_dat
         info['frame_shrink_trim_before'] = 2
         info['frame_height'] = 20
         info['frame_width'] = 20
-    #else:
-    #    # dont adjust replay buffer size
-    #    info['frame_shrink_kernel_size'] = (0,0)
-    #    info['frame_shrink_trim_after'] = 0
-    #    info['frame_shrink_trim_before'] = 0
-    #    info['frame_height'] = 40
-    #    info['frame_width'] = 40
+    elif info['big']:
+        # dont adjust replay buffer size
+        info['frame_shrink_kernel_size'] = (0,0)
+        info['frame_shrink_trim_after'] = 0
+        info['frame_shrink_trim_before'] = 0
+        info['frame_height'] = 84
+        info['frame_width'] = 84
     else:
         info['frame_shrink_kernel_size'] = (2,2)
         info['frame_shrink_trim_after'] = 1
@@ -124,7 +124,7 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST', load_dat
                                num_z=info['num_z'],
                                num_actions=info['num_actions'],
                                num_rewards=info['num_rewards'],
-                               small=info['small']).to(info['device'])
+                               small=info['small'], big=info['big']).to(info['device'])
 
     prior_model = tPTPriorNetwork(size_training_set=info['size_training_set'],
                                code_length=info['code_length'], k=info['num_k']).to(info['device'])
@@ -270,7 +270,7 @@ def run(train_cnt, model_dict, data_dict, phase, info):
                        'prev_frame':rescale_inv(states[:,-1:].detach().cpu()),
                        'diff_mask':diff_mask.detach().cpu()[:,None],
                        'target':rescale_inv(target.detach().cpu()),
-                       'deconv_yhat':rescale_inv(rec_yhat.detach().cpu()),
+                       #'deconv_yhat':rescale_inv(rec_yhat.detach().cpu()),
                        'rec_yhat':rescale_inv(rec_yhat.detach().cpu()),
                        }
         if not idx % 10:
@@ -413,7 +413,8 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
     parser.add_argument('--nr_logistic_mix', default=10, type=int)
-    parser.add_argument('--small', action='store_true', default=False)
+    parser.add_argument('--small', action='store_true', default=False, help='create and operate on smaller, 20x20 maxpooled frames  as opposed to default 40x40')
+    parser.add_argument('--big', action='store_true', default=False, help='operate on orig 84x84 frames')
     # acn model setup
     parser.add_argument('-cl', '--code_length', default=192, type=int)
     parser.add_argument('-k', '--num_k', default=5, type=int)
@@ -445,6 +446,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.small:
         sz = '20x20'
+    elif args.big:
+        sz = '84x84'
     else:
         # convert size of buffer down
         sz = '40x40'

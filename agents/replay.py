@@ -192,7 +192,7 @@ class ReplayMemory:
         """
         if frame.shape != (self.frame_height, self.frame_width):
             if self.maxpool:
-                frame = self.online_shrink_frame_size(frame)
+                frame = self.online_shrink_frame_size(frame, trim_before=self.trim_before, kernel_size=self.kernel_size, trim_after=self.trim_after)
             else:
                 print('maxpool issue')
                 embed()
@@ -421,13 +421,14 @@ class ReplayMemory:
         return np.array(unique_indices, np.int32), np.array(index_indices, np.int32)
 
 
-    def online_shrink_frame_size(self, frame):
+    def online_shrink_frame_size(self, frame, trim_before, kernel_size, trim_after):
         frame = frame[None]
-        if self.trim_before > 0:
-            frame = trim_array(frame, self.trim_before)
-        frame = pool_2d(frame, self.kernel_size, self.reduction_function)
-        if self.trim_after > 0:
-            frame = trim_array(frame, self.trim_after)
+        if trim_before > 0:
+            frame = trim_array(frame, trim_before)
+        if kernel_size[0] > 0:
+            frame = pool_2d(frame, kernel_size, np.max)
+        if trim_after > 0:
+            frame = trim_array(frame, trim_after)
         return frame[0]
 
     def shrink_frame_size(self, kernel_size=(2,2), reduction_function=np.max, trim_before=0, trim_after=0,  batch_size=32):

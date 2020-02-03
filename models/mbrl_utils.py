@@ -1,9 +1,11 @@
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import os
 import sys
 import numpy as np
 from IPython import embed
+from imageio import imwrite
 
 def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100000, kernel_size=(2,2), trim_before=0, trim_after=0):
     sys.path.append('../agents')
@@ -37,10 +39,36 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
     if not len(buffers.keys()) == 2:
         print('creating new train/valid buffers')
         load_buffer = ReplayMemory(load_file=buffer_path)
+        orig_states = []
+        small_states = []
+        for index in range(10,400):
+            if load_buffer.is_valid_index(index):
+                s,_ = load_buffer._get_state(index)
+                orig_states.append(s[-1])
+                small_states.append(load_buffer.online_shrink_frame_size(s[-1], trim_before, kernel_size, trim_after))
+        bdir = small_path.replace('.npz', '')
+        if not os.path.exists(bdir):
+            os.makedirs(bdir)
+        image_path = os.path.join(bdir, 'step_%03d.png')
+        movie_path = os.path.join(bdir, 'movie.mp4')
+        for index in range(len(orig_states)):
+            f,ax = plt.subplots(1,2)
+            ax[0].matshow(orig_states[index])
+            ax[1].matshow(small_states[index])
+            plt.savefig(image_path%index)
+            plt.close()
+        cmd = "ffmpeg -n -r 10 -i %s -c:v libx264 -pix_fmt yuv420p %s"%(os.path.abspath(image_path),os.path.abspath(movie_path))
+        print(cmd)
+        os.system(cmd)
+
         if max(list(kernel_size)+[trim_before, trim_after]) > 1:
             load_buffer.shrink_frame_size(kernel_size=kernel_size,
                                           reduction_function=np.max,
                                           trim_before=trim_before, trim_after=trim_after)
+
+
+        #for r in range(states.shape[0]):
+        #    imwrite('mp%s.png'%r, states[r,-1])
 
         load_buffer.reset_unique()
         # history_length + 1 for every random example

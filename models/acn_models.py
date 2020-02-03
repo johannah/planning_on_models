@@ -523,7 +523,7 @@ class VQVAEres(nn.Module):
 class midACNVQVAEres(nn.Module):
     def __init__(self, code_len, input_size=1, output_size=1,
                        hidden_size=256,
-                 num_clusters=512, num_z=32, num_actions=3, num_rewards=2, small=False):
+                 num_clusters=512, num_z=32, num_actions=3, num_rewards=2, small=False, big=False):
 
         super(midACNVQVAEres, self).__init__()
         self.code_len = code_len
@@ -535,6 +535,7 @@ class midACNVQVAEres(nn.Module):
         self.num_actions = num_actions
         self.num_rewards = num_rewards
         self.small = small
+        self.big = big
         fsos = first_stage_output_size = 128
         encoder_match_size = ems = hidden_size
         self.action_encoder = nn.Sequential(
@@ -571,11 +572,48 @@ class midACNVQVAEres(nn.Module):
                 nn.Conv2d(hidden_size, 16, 1, 1, 0),
                 nn.Conv2d(16, 3, 1, 1, 0),
                 # need to get small enough to have reasonable knn - this is
+                nn.Conv2d(hidden_size, hidden_size, 2, 1, 0),
                 # 3*8*8=192
                 )
-        else:
+            self.decoder = nn.Sequential(
+                  ResBlock(hidden_size),
+                  ResBlock(hidden_size),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 2, 1, 0),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 1, 1, 0),
+                  nn.BatchNorm2d(hidden_size),
+                  nn.ReLU(True),
+                  nn.ConvTranspose2d(hidden_size, output_size, 4, 2, 0),
+                  )
+
+        elif self.big:
             self.encoder = nn.Sequential(
                 nn.Conv2d(fsos, hidden_size, 4, 2, 1),
+                nn.BatchNorm2d(hidden_size),
+                nn.ReLU(True),
+                nn.Conv2d(hidden_size, hidden_size, 4, 2, 0),
+                nn.Conv2d(hidden_size, hidden_size, 4, 2, 0),
+                nn.Conv2d(hidden_size, hidden_size, 2, 1, 0),
+                #nn.Conv2d(hidden_size, hidden_size, 2, 1, 0),
+                ResBlock(hidden_size),
+                ResBlock(hidden_size),
+                nn.Conv2d(hidden_size, 16, 1, 1, 0),
+                nn.Conv2d(16, 3, 1, 1, 0),
+                # need to get small enough to have reasonable knn - this is
+                # 3*8*8=192
+                )
+            self.decoder = nn.Sequential(
+                  ResBlock(hidden_size),
+                  ResBlock(hidden_size),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 2, 1, 0),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 4, 2, 0),
+                  nn.ConvTranspose2d(hidden_size, hidden_size, 4, 2, 0),
+                  nn.BatchNorm2d(hidden_size),
+                  nn.ReLU(True),
+                  nn.ConvTranspose2d(hidden_size, output_size, 4, 2, 1),
+                  )
+        else:
+            self.encoder = nn.Sequential(
+                nn.Conv2d(fsos, hidden_size, 4, 2, 0),
                 nn.BatchNorm2d(hidden_size),
                 nn.ReLU(True),
                 nn.Conv2d(hidden_size, hidden_size, 4, 2, 0),
@@ -587,27 +625,6 @@ class midACNVQVAEres(nn.Module):
                 # need to get small enough to have reasonable knn - this is
                 # 3*8*8=192
                 )
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(3, 16, 1, 1, 0),
-            nn.Conv2d(16, hidden_size, 1, 1, 0),
-            nn.BatchNorm2d(hidden_size),
-            nn.ReLU(True),
-            nn.Conv2d(hidden_size, hidden_size, 1, 1, 0),
-            ResBlock(hidden_size),
-            nn.Conv2d(hidden_size, hidden_size, 1, 1, 0),
-            )
-        self.codebook = VQEmbedding(num_clusters, hidden_size)
-        if self.small:
-            self.decoder = nn.Sequential(
-                  ResBlock(hidden_size),
-                  ResBlock(hidden_size),
-                  nn.ConvTranspose2d(hidden_size, hidden_size, 2, 1, 0),
-                  nn.ConvTranspose2d(hidden_size, hidden_size, 1, 1, 0),
-                  nn.BatchNorm2d(hidden_size),
-                  nn.ReLU(True),
-                  nn.ConvTranspose2d(hidden_size, output_size, 4, 2, 0),
-                  )
-        else:
             self.decoder = nn.Sequential(
                   ResBlock(hidden_size),
                   ResBlock(hidden_size),
@@ -618,6 +635,17 @@ class midACNVQVAEres(nn.Module):
                   nn.ConvTranspose2d(hidden_size, output_size, 4, 2, 1),
                   )
 
+
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(3, 16, 1, 1, 0),
+            nn.Conv2d(16, hidden_size, 1, 1, 0),
+            nn.BatchNorm2d(hidden_size),
+            nn.ReLU(True),
+            nn.Conv2d(hidden_size, hidden_size, 1, 1, 0),
+            ResBlock(hidden_size),
+            nn.Conv2d(hidden_size, hidden_size, 1, 1, 0),
+            )
+        self.codebook = VQEmbedding(num_clusters, hidden_size)
         self.apply(weights_init)
 
     def reparameterize(self, mu):
@@ -1061,6 +1089,8 @@ class tPTPriorNetwork(nn.Module):
         self.batch_indexer = torch.LongTensor(torch.arange(batch_size))
 
     def update_codebook(self, indexes, values):
+        assert indexes.min() >= 0
+        assert indexes.max() < self.codes.shape[0]
         self.codes[indexes] = values
 
     def kneighbors(self, test, n_neighbors):
