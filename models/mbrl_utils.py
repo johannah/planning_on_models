@@ -41,11 +41,15 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
             load_buffer.shrink_frame_size(kernel_size=kernel_size,
                                           reduction_function=np.max,
                                           trim_before=trim_before, trim_after=trim_after)
+
         load_buffer.reset_unique()
         # history_length + 1 for every random example
         frame_multiplier = (load_buffer.agent_history_length+1)
+        #frame_multiplier = 2
         total_frames_needed = int((max_examples*1.15)*frame_multiplier)+1
-        if load_buffer.count < total_frames_needed:
+        # not sure why we weren't allowing overlapping frames
+        #total_frames_needed = int((max_examples*1.15))
+        if load_buffer.count < total_frames_needed%load_buffer.size:
            raise ValueError('load buffer is not large enough (%s) to collect number of examples (%s)'%(load_buffer.count, total_frames_needed))
         print('loading prescribed buffer path.... this may take a while')
         print(buffer_path)
@@ -89,16 +93,17 @@ def make_random_subset_buffers(dataset_path, buffer_path, train_max_examples=100
                             #action = actions[batch_idx]
                             #reward = rewards[batch_idx]
                             terminal_flag = True
+                            end_flag = True
                             num_examples += 1
                             if not num_examples % 5000:
                                 print('added %s examples to %s buffer'%(num_examples, phase))
                         else:
                             # use this to debug and assert that all actions/rewards
                             # in sampled minibatch of sbuffer are < 99
-                            #action = 99
-                            #reward = 99
                             terminal_flag = False
-                        sbuffer.add_experience(action, frame, reward, terminal_flag)
+                            end_flag = False
+
+                        sbuffer.add_experience(action, frame, reward, terminal_flag, end_flag)
             sbuffer.rewards = sbuffer.rewards.astype(np.int32)
             sbuffer.init_unique()
             sbuffer.save_buffer(paths[phase])

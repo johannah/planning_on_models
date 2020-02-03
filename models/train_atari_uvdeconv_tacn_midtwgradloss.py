@@ -90,12 +90,19 @@ def create_models(info, model_loadpath='', dataset_name='FashionMNIST', load_dat
         info['frame_shrink_trim_before'] = 2
         info['frame_height'] = 20
         info['frame_width'] = 20
+    #else:
+    #    # dont adjust replay buffer size
+    #    info['frame_shrink_kernel_size'] = (0,0)
+    #    info['frame_shrink_trim_after'] = 0
+    #    info['frame_shrink_trim_before'] = 0
+    #    info['frame_height'] = 40
+    #    info['frame_width'] = 40
     else:
         info['frame_shrink_kernel_size'] = (2,2)
         info['frame_shrink_trim_after'] = 1
         info['frame_shrink_trim_before'] = 0
-        info['frame_height'] = 20
-        info['frame_width'] = 20
+        info['frame_height'] = 40
+        info['frame_width'] = 40
 
     # pixel cnn architecture is dependent on loss
     # for dml prediction, need to output mixture of size nmix
@@ -401,7 +408,7 @@ if __name__ == '__main__':
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
     parser.add_argument('--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-e', '--exp_name', default='mid_trbreakout_spvq_twgrad', help='name of experiment')
+    parser.add_argument('-e', '--exp_name', default='mid_trfreeway_spvq_twgrad', help='name of experiment')
     parser.add_argument('-dr', '--dropout_rate', default=0.0, type=float)
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
@@ -421,7 +428,8 @@ if __name__ == '__main__':
     # dataset setup
     parser.add_argument('--model_savedir', default='../../model_savedir', help='save checkpoints here')
     parser.add_argument('--base_datadir', default='../../dataset/trained_dqn_ATARI', help='save datasets here')
-    parser.add_argument('--base_train_buffer_path',  type=str, default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_00/breakout_S014342_N0002813995_train.npz', help='load frames/actions from pretrained dqn')
+    #parser.add_argument('--base_train_buffer_path',  type=str, default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_00/breakout_S014342_N0002813995_train.npz', help='load frames/actions from pretrained dqn')
+    parser.add_argument('--base_train_buffer_path',  type=str, default='/usr/local/data/jhansen/planning/model_savedir/MFFreeway_train_anneal_14342_09/freeway_S014342_N0000503002_train.npz', help='load frames/actions from pretrained dqn')
     #parser.add_argument('--size_training_set', default=85000, type=int, help='number of random examples from base_train_buffer_path to use')
     parser.add_argument('--size_training_set', default=60000, type=int, help='number of random examples from base_train_buffer_path to use')
     # sampling info
@@ -438,6 +446,7 @@ if __name__ == '__main__':
     if args.small:
         sz = '20x20'
     else:
+        # convert size of buffer down
         sz = '40x40'
     # note - when reloading model, this will use the seed given in args - not
     # the original random seed

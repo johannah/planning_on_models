@@ -25,7 +25,7 @@ class ReplayMemory:
     def __init__(self, size=1000000, frame_height=84, frame_width=84,
                  agent_history_length=4, batch_size=32, num_heads=1,
                  bernoulli_probability=1.0, load_file='', seed=393, use_pred_frames=False,
-                 maxpool=False, trim_before=0, trim_after=0, kernel_size=0, reduction_function=np.max):
+                 maxpool=False, trim_before=0, trim_after=0, kernel_size=(0,0), reduction_function=np.max):
                 # bernoulli_probability=1.0, latent_frame_height=0, latent_frame_width=0, load_file='', seed=393):
         """
         Args:
@@ -121,7 +121,7 @@ class ReplayMemory:
                  maxpool=self.maxpool,
                  trim_before=self.trim_before,
                  trim_after=self.trim_after,
-                 kernel_size=self.kernel_size,
+                 kernel_size=list(self.kernel_size),
                  reduction_function=str(self.reduction_function),
                  )
         print("finished saving buffer", time.time()-st)
@@ -155,12 +155,13 @@ class ReplayMemory:
         self.bernoulli_probability = npfile['bernoulli_probability']
         if 'maxpool' in npfile.keys():
             self.maxpool = npfile['maxpool']
-            self.trim_before = npfile['trim_before']
-            self.trim_after = npfile['trim_after']
-            self.kernel_size = npfile['kernel_size']
-            #self.reduction_function = eval(npfile['reduction_function'])
-            print("not loading reduction function")
-            self.reduction_function = np.max
+            if self.maxpool:
+                self.trim_before = npfile['trim_before']
+                self.trim_after = npfile['trim_after']
+                self.kernel_size = npfile['kernel_size']
+                #self.reduction_function = eval(npfile['reduction_function'])
+                print("ALERT not loading reduction function setting to max")
+                self.reduction_function = np.max
         else:
             self.maxpool = False
         self.unique_available = False
