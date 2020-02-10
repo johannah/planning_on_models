@@ -161,12 +161,14 @@ class ConfigHandler():
         self.frame_height = self.cfg['ENV']['obs_width']
         self.frame_width = self.cfg['ENV']['obs_width']
         self.history_length = self.cfg['ENV']['history_size']
+        self.num_prev_steps =  1
         self.maxpool = False
         trim_before = 0
         trim_after = 0
         reduction_fn = None
         kernel_size = None
         if 'REP' in self.cfg.keys():
+            self.num_prev_steps =  self.cfg['REP']['num_prev_steps']
             if 'mp_height' in self.cfg['REP'].keys():
                 if self.cfg['REP']['mp_height'] > 0:
                     # if maxpooling is done to output of env.py -> then this is what
@@ -373,7 +375,7 @@ class StateManager():
         state = self.env.reset()
         self.prev_action = 0
         self.prev_reward = 0
-        for i in range(state.shape[0]):
+        for i in range(state.shape[0]+1):
             # add enough memories to use the memory buffer
             # not sure if this is correct
             self.memory_buffer.add_experience(action=0,
@@ -384,8 +386,10 @@ class StateManager():
                                           )
 
         # get correctly formatted last state
-        self.state = self.memory_buffer.get_last_state()
-        if self.state.shape != (self.memory_buffer.agent_history_length,self.memory_buffer.frame_height,self.memory_buffer.frame_width):
+        batch = self.memory_buffer.get_history_minibatch(indices='last')
+        # get state
+        self.state = batch[0][0]
+        if self.state.shape != (self.ch.num_prev_steps,self.memory_buffer.agent_history_length,self.memory_buffer.frame_height,self.memory_buffer.frame_width):
             print("start shape wrong")
             embed()
         self.episode_active = True
@@ -576,8 +580,11 @@ class StateManager():
         self.episode_actions.append(self.prev_action)
         self.episode_rewards.append(self.prev_reward)
         self.step_number+=1
-        self.state = self.memory_buffer.get_last_state()
-        if self.state.shape[0] == 0:
+        batch = self.memory_buffer.get_history_minibatch(indices='last')
+        # get state
+        self.state = batch[0][0]
+        #self.state = self.memory_buffer.get_last_state()
+        if self.state.shape[1] == 0:
             print('handler state chan 0')
             embed()
 

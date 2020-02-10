@@ -1,0 +1,146 @@
+[RUN]
+# directory name to save this experiment in
+NAME=DEBUG_MFrecFreeway_acn84x84
+# load buffer from previous agent
+REPLAY_MEMORY_LOADPATH=
+REPLAY_MEMORY_VALID_LOADPATH= 
+# if blank then default name is used
+TRAIN_BUFFER_NAME=
+# if blank then default name is used
+EVAL_BUFFER_NAME=
+# Number of episodes to run
+TRAIN_SEED = 14342
+EVAL_SEED = 100
+# Buffer size for experience replay
+TRAIN_BUFFER_SIZE = 500000
+# eval buffer used for evaluating model_based
+EVAL_BUFFER_SIZE = 30000
+# how often to run evaluation (in steps)
+EVAL_AND_CHECKPOINT_EVERY_STEPS= 250000
+# how often to write pkl of model and npz of data buffer
+# max number of steps to train
+TOTAL_TRAIN_STEPS = 30000000
+
+[EVAL]
+# How often to take a random step in evaluation.
+# 0 in osband, .05 in others....
+EPS_EVAL = 0.0
+# num examples to average in eval
+NUM_EVAL_EPISODES = 1
+
+[ENV]
+# PATH to GAME ALE
+GAME=roms/freeway.bin
+# make rewards be sign(reward) from the emulator - this gives us three rewards
+# back. For some games like breakout, there is no negative reward, so we have
+# unused reward space - is this good?
+# For now - i am going to specify these, because we can't always get rewards/actions 
+# in random beginning so it is hard to know exactly how many - this allows us to setup the latent model correctly
+REWARD_SPACE = [0,1]
+# divide the float(of uint) by this number to normalize - max val of data is 255
+NORM_BY = 255.
+# how many past frames to use for state input
+HISTORY_SIZE = 4
+# how big are the observations
+OBS_WIDTH = 84
+OBS_HEIGHT = 84
+# 50e6 steps is 200e6 frames
+MAX_FRAMES = 200000000
+# number of frames to skip between each observation
+# in general - "frames" are the images given from the emulator and "steps" are the
+# observations presented to the agent
+# deterministic frame skips to match deepmind
+FRAME_SKIP = 4
+# Orig dqn give 18k steps, Rainbow seems to give 27k steps
+# this is steps according to the agent - so MAX_EPISODE_STEPS*FRAME_SKIP will
+# give the number of emulator frames
+MAX_EPISODE_STEPS = 27000
+# random number of noops applied to beginning of each episode
+MAX_NO_OP_FRAMES = 30
+# do you send finished=true to agent while training when it loses a life?
+# it will train faster this way, but some papers do not do it this way. I don't
+# remember which don't atm.
+DEAD_AS_END = 1 
+
+[PLOT]
+# min score to plot gif in eval
+MIN_SCORE_GIF=10
+# how often to plot in training
+PLOT_EVERY_TRAIN_EPISODES = 100
+PLOT_EPISODE_EVERY_TRAIN_EPISODES = 100
+PLOT_EVERY_EVAL_EPISODES = 1
+PLOT_EPISODE_EVERY_EVAL_EPISODES = 1
+# Used for plotting demarcation - should be -1
+RANDOM_HEAD = -1
+NUM_PREV_STEPS_AVG = 100
+
+[SEARCH]
+N_PLAYOUT=50
+
+[DQN]
+USE_PRED_FRAMES=0
+# min steps needed to start training neural nets
+#MIN_STEPS_TO_LEARN=50000
+MIN_STEPS_TO_LEARN=25000
+# SIZE Expected by DQN - should make this more automated
+# 10*10*16 for mb
+# 3136 for mf?
+RESHAPE_SIZE = 3136
+# use dueling dqn
+DUELING = 1
+# use double dqn
+DOUBLE_DQN=1
+# turn on to use randomized prior
+PRIOR =1
+# what to scale prior by
+PRIOR_SCALE = 10
+# number of bootstrap heads to use. when 1, this is a normal dqn
+N_ENSEMBLE = 9
+# Probability of experience to go to each head - if 1, every experience goes to every head
+BERNOULLI_PROBABILITY=0.9
+# how often to update target network
+# 500000 may be too much
+TARGET_UPDATE_EVERY_STEPS=10000
+# train DQN network every 4 steps after MIN_STEPS_TO_LEARN
+LEARN_EVERY_STEPS=4
+#6.25e-5
+ADAM_LEARNING_RATE = .0000625 
+# Batch size to use for learning
+BATCH_SIZE = 64
+N_HIDDEN = 512
+# Gamma weight in Q update
+GAMMA = .99
+#Gradient clipping setting
+CLIP_GRAD = 5
+#if use_embedding in ensemble model - input should be float, otherwise long
+USE_EMBEDDING=0
+
+# I think this randomness might need to be higher
+# EPS initially is usually high, then tapers down. With bootstrap, this isn't
+# needed I think
+# without any eps - the bootstrap/prior network on breakout did not train - high score of 40 
+#EPS_ANNEALING_STEPS=500000
+EPS_ANNEALING_STEPS=200000
+EPS_INIT = 1.0
+# 0.01 in osband
+EPS_FINAL = 0.01
+# if the random buffer doesn't exist, then create one
+LOAD_RANDOM_TRAIN_BUFFER=1
+LOAD_RANDOM_EVAL_BUFFER=1
+# if LOAD_RANDOM_phase_BUFFER prefill with this many steps
+NUM_PURE_RANDOM_STEPS_TRAIN = 20000
+NUM_PURE_RANDOM_STEPS_EVAL = 0
+#
+[REP]
+# details for maxpooling operation for representation
+NUM_PREV_STEPS=5
+trim_before=0
+trim_after=0
+kernel_size=(0,0)
+reduction_function='np.max'
+# max pool to get to a particular height/width used by representation model
+MP_HEIGHT = 84
+MP_WIDTH = 84
+# number of steps before the env should end
+REP_MODEL_PATH="/usr/local/data/jhansen/planning/model_savedir/mid_trfreeway_spvq_twgrad84x84/mid_trfreeway_spvq_twgrad84x84_0034500000ex.pt"
+

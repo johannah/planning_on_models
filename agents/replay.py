@@ -87,7 +87,6 @@ class ReplayMemory:
         self.pred_new_states = np.empty((batch_size, self.agent_history_length,
                                     self.frame_height, self.frame_width), dtype=np.uint8)
 
-        self.indices = np.empty(batch_size, dtype=np.int32)
         self.random_state = np.random.RandomState(seed)
 
     def percentages_rewards(self, unique_rewards=[]):
@@ -242,8 +241,8 @@ class ReplayMemory:
             return False
         if index > self.count:
             return False
-        #if index < self.agent_history_length-1:
-        #    return False
+        if index < self.agent_history_length-1 and self.count < self.size:
+            return False
         # Jan 2020 - not sure why this flag was in there - doesnt allow me to
         # get last state though - which is needed
         if not last_state_allowed:
@@ -258,15 +257,14 @@ class ReplayMemory:
         return True
 
     def _get_valid_indices(self, batch_size):
-        if batch_size != self.indices.shape[0]:
-             self.indices = np.empty(batch_size, dtype=np.int32)
-
+        indices = np.empty(batch_size, dtype=np.int32)
         for i in range(batch_size):
             valid = False
             while not valid:
                 index = self.random_state.randint(self.agent_history_length, min([self.count, self.size]) - 1)
                 valid = self.is_valid_index(index)
-            self.indices[i] = index
+            indices[i] = index
+        return indices
 
     def get_last_state(self):
         # not handling rollovers of replay buffer correctly
@@ -340,6 +338,50 @@ class ReplayMemory:
             next_states[i], _ = self._get_state(idx)
         return states, self.actions[get_indexes], self.rewards[get_indexes], next_states, self.terminal_flags[get_indexes], self.masks[get_indexes], get_indexes
 
+    def get_history_minibatch(self, batch_size=1, num_steps_back=5, indices=None):
+        """
+        Returns a minibatch of batch_size
+        for each index in minibatch, return previous num_steps_back states/actions/rewards as well
+
+        """
+        if indices == 'last':
+            indices = [self.current-1]
+            batch_size = 1
+        elif indices == None:
+            indices = self._get_valid_indices(batch_size)
+        else:
+            # use provided indices
+            pass
+        # the specified index should be good - but previous indices may not be
+        _states = np.zeros((batch_size, num_steps_back, self.agent_history_length, self.frame_height, self.frame_width), dtype=np.uint8)
+        _new_states = np.zeros((batch_size, num_steps_back, self.agent_history_length, self.frame_height, self.frame_width), dtype=np.uint8)
+        _rewards = np.zeros((batch_size, num_steps_back))
+        _actions = np.zeros((batch_size, num_steps_back))
+        _terminal_flags = np.zeros((batch_size, num_steps_back))
+        for i, idx in enumerate(indices):
+            for steps_back in range(0, num_steps_back):
+                # start with most recent, then step back as allowed
+                # if it is not a valid index, then copy previous
+                # state/reward/action
+                # when steps_back == 0 - it will be a valid index
+                sbidx = idx - steps_back
+                if self.is_valid_index(sbidx-1, last_state_allowed=True):
+                    states, _ = self._get_state(sbidx - 1)
+                    new_states, _ = self._get_state(sbidx)
+                    a = self.actions[idx]
+                    r = self.rewards[idx]
+                    tf = self.terminal_flags[idx]
+                _states[i, steps_back] = states
+                _new_states[i, steps_back] = new_states
+                #_actions[i, steps_back] = a
+                #_rewards[i, steps_back] = r
+                #_terminal_flags[i, steps_back] = tf
+        # reverse output so oldest data is first
+        _rewards = self.rewards[indices]
+        _actions = self.actions[indices]
+        _terminal_flags = self.terminal_flags[indices]
+        return _states[:,::-1], _actions, _rewards, _new_states[:,::-1], _terminal_flags, self.masks[indices]
+
     def get_minibatch(self, batch_size):
         """
         Returns a minibatch of batch_size
@@ -357,17 +399,16 @@ class ReplayMemory:
         if self.count < self.agent_history_length:
             raise ValueError('Not enough memories to get a minibatch')
 
-        self._get_valid_indices(batch_size)
+        indices = self._get_valid_indices(batch_size)
 
-        for i, idx in enumerate(self.indices):
+        for i, idx in enumerate(indices):
             #print('trying', idx)
             # This seems correct to me
             # when adding experience - every input frame is the "next frame",
             # the action that got us to this frame, and the reward received
             self.states[i], self.pred_states[i] = self._get_state(idx - 1)
             self.new_states[i], self.pred_new_states[i] = self._get_state(idx)
-        return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices]
-        #return self.states, self.actions[self.indices], self.rewards[self.indices], self.new_states, self.terminal_flags[self.indices], self.masks[self.indices], self.pred_states, self.pred_new_states
+        return self.states, self.actions[indices], self.rewards[indices], self.new_states, self.terminal_flags[indices], self.masks[indices]
 
     def init_unique(self):
         """ must call this to before using reset_unique - this will change when adding to buffer """

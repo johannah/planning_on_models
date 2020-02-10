@@ -3,6 +3,8 @@ TODO add annealing
 
 in this version, we are testing learning a mf policy based on reconstructions from a trained
 reconstruction model
+
+in this version - we use the past x z states for decision making - the hope is that this will balance some jitter and also give a long perspective
 """
 import os
 import sys
@@ -22,8 +24,6 @@ from dqn_acn_model import EnsembleNet, NetWithPrior
 
 sys.path.append('../models')
 from acn_utils import count_parameters, sample_from_discretized_mix_logistic, set_model_mode
-from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import ConvVAE, GatedPixelCNN, PriorNetwork
-from train_breakout_conv_acn_pcnn_bce_prediction_actgrad import make_state as rep_make_state
 from IPython import embed
 
 def seed_everything(seed=1234):
@@ -65,12 +65,23 @@ def prepare_details(actions, rewards, terminal_flags, masks, device):
     masks = torch.FloatTensor(masks.astype(np.int)).to(device)
     return actions, rewards, terminal_flags, masks
 
+def prepare_past_details(actions, rewards, terminal_flags, masks, device):
+    rewards = torch.Tensor(rewards).to(device)
+    assert(rewards.max() <= 1)
+    assert(rewards.min() >= -1)
+    embed()
+    actions = torch.LongTensor(actions).to(device)
+    terminal_flags = torch.Tensor(terminal_flags.astype(np.int)).to(device)
+    masks = torch.FloatTensor(masks.astype(np.int)).to(device)
+    return actions, rewards, terminal_flags, masks
+
+
 def dqn_learn(sm, model_dict):
     # TODO - put rep model in eval / no_grad
     s_loss = 0
     if sm.step_number > sm.ch.cfg['DQN']['min_steps_to_learn']:
         if not sm.step_number%sm.ch.cfg['DQN']['learn_every_steps']:
-            minibatch = sm.memory_buffer.get_minibatch(sm.ch.cfg['DQN']['batch_size'])
+            minibatch = sm.memory_buffer.get_history_minibatch(sm.ch.cfg['DQN']['batch_size'])
             states, actions, rewards, next_states, terminal_flags, masks = minibatch
             # pt_states is acn representation bs,3,8,8
             pt_states = prepare_state_fn(states)
@@ -133,15 +144,17 @@ def load_models(filepath, model_dict):
     return model_dict
 
 def create_dqn_model_dict(ch, num_actions, model_dict={}):
+    cl = 192 # todo load this
+    rsize = cl*ch.cfg['REP']['num_prev_steps']
     model_dict['policy_net'] = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
                                       n_actions=num_actions,
-                                      code_length=192,
+                                      code_length=rsize,
                                       num_hidden=ch.cfg['DQN']['n_hidden'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
 
     model_dict['target_net'] = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
                                       n_actions=num_actions,
-                                      code_length=192,
+                                      code_length=rsize,
                                       num_hidden=ch.cfg['DQN']['n_hidden'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
 
@@ -149,7 +162,7 @@ def create_dqn_model_dict(ch, num_actions, model_dict={}):
         print("using randomized prior")
         prior_net = EnsembleNet(n_ensemble=ch.cfg['DQN']['n_ensemble'],
                                       n_actions=num_actions,
-                                      code_length=192,
+                                      code_length=rsize,
                                       num_hidden=ch.cfg['DQN']['n_hidden'],
                                       dueling=ch.cfg['DQN']['dueling']).to(ch.device)
 
@@ -173,7 +186,29 @@ def load_uvdeconv_representation_model(representation_model_path):
     rep_info = {'device':device, 'args':args}
     rep_model_dict, _, rep_info, train_cnt, epoch_cnt, rescale, rescale_inv = create_models(rep_info, representation_model_path, load_data=False)
     rep_model_dict = set_model_mode(rep_model_dict, 'valid')
-    return rep_model_dict, rep_info, prepare_uv_state_latents, rescale, rescale_inv
+    #return rep_model_dict, rep_info, prepare_uv_state_latents, rescale, rescale_inv
+    return rep_model_dict, rep_info, prepare_uv_state_hist_latents, rescale, rescale_inv
+
+def prepare_uv_state_hist_latents(states):
+    # resize using max pool
+    bs,nh,c,h,w =  states.shape
+    if c == 0:
+        print("BAD size of channels")
+    with torch.no_grad():
+        # rep model is trained on past 4 states, we have prev "4-frame-states"
+        # here and need to find the z for each of them -
+        for bi in range(bs):
+            # treat prev frames like batch and do all at once if the batch size
+            # is tiny
+            z, u_q = rep_model_dict['mid_vq_acn_model'](torch.FloatTensor(rescale(states[bi])).to(device))
+            # reshape so that zs are stacked in the channel dim
+            # this will be shape = (1,3*nh, 8, 8)
+            z = z.permute(2,3,0,1).reshape(8,8,-1).permute(2,0,1)[None]
+            if not bi:
+                zo = z
+            else:
+                zo = torch.cat((zo, z), dim=0)
+    return zo
 
 def prepare_uv_state_latents(states):
     # resize using max pool
@@ -257,7 +292,7 @@ def run_agent(sm, model_dict, phase, max_count, count_type='steps'):
                 action = sm.random_action()
             else:
                 # state coming from the env looks like (4,40,40) and is a uint8
-                if sm.state[None].shape != (1, sm.ch.history_length, sm.ch.frame_height, sm.ch.frame_width):
+                if sm.state[None].shape != (1, sm.ch.num_prev_steps, sm.ch.history_length, sm.ch.frame_height, sm.ch.frame_width):
                     print('wrong state size')
                     embed()
                 pt_state = prepare_state_fn(sm.state[None])
@@ -299,7 +334,7 @@ if __name__ == '__main__':
 
     from train_atari_uvdeconv_tacn_midtwgradloss import create_models, forward_pass, make_atari_channel_action_reward_state
     from argparse import ArgumentParser
-    from handler import ConfigHandler, StateManager
+    from handler_hist import ConfigHandler, StateManager
     parser = ArgumentParser()
     parser.add_argument('config_path', help='path of config file that will be used to generate random data')
     parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')
@@ -346,6 +381,7 @@ if __name__ == '__main__':
     # env.py, then resized again with max pooling to get it down to the
     # prescribed size - this is available in replay.py
     rep_model_path = ch.cfg['REP']['rep_model_path']
+    #rep_model_dict, rep_info, prepare_state_fn, rescale, rescale_inv = load_uvdeconv_representation_model(rep_model_path)
     rep_model_dict, rep_info, prepare_state_fn, rescale, rescale_inv = load_uvdeconv_representation_model(rep_model_path)
     sm.latent_representation_function = get_latent_pred_representation
     seed_everything(ch.cfg['RUN']['train_seed'])
@@ -363,12 +399,6 @@ if __name__ == '__main__':
     else:
         print('fresh models')
 
-    if phase == 'train':
-        max_count = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
-        count_type = 'steps'
-    else:
-        max_count = ch.cfg['EVAL']['num_eval_episodes']
-        count_type = 'episodes'
 
     ll_idx = 0
     #if args.evaluate and args.load_last_path != '':
@@ -389,6 +419,8 @@ if __name__ == '__main__':
     #            print('plotting last episode')
     #            sm.plot_last_episode()
     if args.evaluate:
+        max_count = ch.cfg['EVAL']['num_eval_episodes']
+        count_type = 'episodes'
         print("-----------starting eval--------------")
         sm.active_head = 0
         sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
@@ -399,10 +431,12 @@ if __name__ == '__main__':
             sm.plot_last_episode()
         sys.exit()
     else:
-        print("TRAINING")
-        if num_train_steps < ch.cfg['RUN']['total_train_steps'] and phase == 'train':
+        max_count = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
+        count_type = 'steps'
+        if num_train_steps < ch.cfg['RUN']['total_train_steps']:
             sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
             num_train_steps = sm.step_number
+            print("TRAINING on step number %s"%num_train_steps)
             checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
             sm.save_checkpoint(checkpoint_basepath)
             save_models(checkpoint_basepath, model_dict)
