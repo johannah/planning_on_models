@@ -334,7 +334,7 @@ if __name__ == '__main__':
 
     from train_atari_uvdeconv_tacn_midtwgradloss import create_models, forward_pass, make_atari_channel_action_reward_state
     from argparse import ArgumentParser
-    from handler_hist import ConfigHandler, StateManager
+    from handler_past import ConfigHandler, StateManager
     parser = ArgumentParser()
     parser.add_argument('config_path', help='path of config file that will be used to generate random data')
     parser.add_argument('-lp', '--load_path', default='', help='path of .pkl state manager file to load checkpoint')

@@ -1,6 +1,6 @@
 [RUN]
 # directory name to save this experiment in
-NAME=DEBUG_MFrecFreeway_acn84x84
+NAME=MFrecFreeway_acn84x84
 # load buffer from previous agent
 REPLAY_MEMORY_LOADPATH=
 REPLAY_MEMORY_VALID_LOADPATH= 

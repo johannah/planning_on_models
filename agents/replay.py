@@ -210,26 +210,25 @@ class ReplayMemory:
         return frame
 
     def _get_state(self, index):
-        try:
-            if self.count < self.agent_history_length - 1:
-                raise ValueError("The replay memory is empty!")
-            if index <= self.agent_history_length and self.count >= self.size:
-                print("WE HIT THE BOUNDARY CONDITION")
-                #if index < self.agent_history_length - 1:
-                #    raise ValueError("Index must be min 3")
-                index_frames = []
-                for j in range(self.agent_history_length):
-                    ii = index - self.agent_history_length + 1 + j
-                    index_frames.append(ii)
-                frames = self.frames[index_frames, ...]
-                pframes = self.pred_frames[index_frames, ...]
-            else:
-                frames = self.frames[index-self.agent_history_length+1:index+1, ...]
-                # if not use_pred_states, this will be a copy of frames
-                pframes =  self.pred_frames[index-self.agent_history_length+1:index+1, ...]
-        except Exception as e:
-            print('get_indices', e)
+        """
+        """
+        if index <= self.agent_history_length and self.count >= self.size:
+            print("WE HIT THE BOUNDARY CONDITION")
+            #if index < self.agent_history_length - 1:
+            #    raise ValueError("Index must be min 3")
+            index_frames = []
+            for j in range(self.agent_history_length):
+                ii = index - self.agent_history_length + 1 + j
+                index_frames.append(ii)
+            frames = self.frames[index_frames, ...]
+            pframes = self.pred_frames[index_frames, ...]
+        elif index < index-self.agent_history_length+1  < 0:
+            print('given index less than 0 - should not have been given this')
             embed()
+        else:
+            frames = self.frames[index-self.agent_history_length+1:index+1, ...]
+            # if not use_pred_states, this will be a copy of frames
+            pframes =  self.pred_frames[index-self.agent_history_length+1:index+1, ...]
         if frames.shape[0] == 0:
             print('frames wrong size')
             embed()
@@ -241,7 +240,7 @@ class ReplayMemory:
             return False
         if index > self.count:
             return False
-        if index < self.agent_history_length-1 and self.count < self.size:
+        if index < self.agent_history_length-1 and self.count < self.size-1:
             return False
         # Jan 2020 - not sure why this flag was in there - doesnt allow me to
         # get last state though - which is needed
@@ -345,6 +344,9 @@ class ReplayMemory:
 
         """
         if indices == 'last':
+            if not self.is_valid_index(self.current-1):
+                print('current index is not valid')
+                embed()
             indices = [self.current-1]
             batch_size = 1
         elif indices == None:
@@ -365,14 +367,22 @@ class ReplayMemory:
                 # state/reward/action
                 # when steps_back == 0 - it will be a valid index
                 sbidx = idx - steps_back
+                if self.is_valid_index(sbidx, last_state_allowed=True):
+                    new_states, _ = self._get_state(sbidx)
                 if self.is_valid_index(sbidx-1, last_state_allowed=True):
                     states, _ = self._get_state(sbidx - 1)
-                    new_states, _ = self._get_state(sbidx)
-                    a = self.actions[idx]
-                    r = self.rewards[idx]
-                    tf = self.terminal_flags[idx]
-                _states[i, steps_back] = states
-                _new_states[i, steps_back] = new_states
+                else:
+                    states = new_states
+
+                    #a = self.actions[idx]
+                    #r = self.rewards[idx]
+                    #tf = self.terminal_flags[idx]
+                try:
+                    _states[i, steps_back] = states
+                    _new_states[i, steps_back] = new_states
+                except Exception as e:
+                    print('minibatch states',e)
+                    embed()
                 #_actions[i, steps_back] = a
                 #_rewards[i, steps_back] = r
                 #_terminal_flags[i, steps_back] = tf

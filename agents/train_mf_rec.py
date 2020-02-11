@@ -400,13 +400,14 @@ if __name__ == '__main__':
         sys.exit()
     else:
         print("TRAINING")
-        if num_train_steps < ch.cfg['RUN']['total_train_steps'] and phase == 'train':
+        #if num_train_steps < ch.cfg['RUN']['total_train_steps'] and phase == 'train':
+        while True:
+            print(num_train_steps, ch.cfg['RUN']['total_train_steps'])
             sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
             num_train_steps = sm.step_number
-            checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
-            sm.save_checkpoint(checkpoint_basepath)
-            save_models(checkpoint_basepath, model_dict)
-            if args.plot:
-                print('plotting last episode')
-                sm.plot_last_episode()
+            sm.save_checkpoint(ch.get_checkpoint_basepath(num_train_steps)+'_'+phase)
+            save_models(ch.get_checkpoint_basepath(num_train_steps), model_dict)
+            #if args.plot:
+            #    print('plotting last episode')
+            #    sm.plot_last_episode()
 

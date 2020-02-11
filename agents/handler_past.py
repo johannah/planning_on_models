@@ -478,7 +478,6 @@ class StateManager():
                 latent_movie = np.zeros((n, z.shape[0], z.shape[1]))
             movie[step] = img
             latent_movie[step] = z
-        embed()
         vwrite(movie_path,movie)
 
     def plot_histogram(self, plot_path, data, bins, title=''):
