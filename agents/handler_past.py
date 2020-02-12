@@ -116,6 +116,30 @@ class ConfigHandler():
         self.cfg['ENV']['num_rewards'] = len(self.cfg['ENV']['reward_space'])
         self.norm_by = float(self.cfg['ENV']['norm_by'])
         self.num_rewards = len(self.cfg['ENV']['reward_space'])
+        self.frame_height = self.cfg['ENV']['obs_width']
+        self.frame_width = self.cfg['ENV']['obs_width']
+        self.history_length = self.cfg['ENV']['history_size']
+        self.num_prev_steps =  1
+        self.maxpool = False
+        trim_before = 0
+        trim_after = 0
+        reduction_fn = None
+        kernel_size = None
+        if 'REP' in self.cfg.keys():
+            self.num_prev_steps =  self.cfg['REP']['num_prev_steps']
+            if 'mp_height' in self.cfg['REP'].keys():
+                if self.cfg['REP']['mp_height'] > 0:
+                    # if maxpooling is done to output of env.py -> then this is what
+                    # goes in the replay buffer. we used maxpool downsample in atari to
+                    # get small enough frames, while preserving important info in the
+                    # frames
+                    self.frame_height = self.cfg['REP']['mp_width']
+                    self.frame_width = self.cfg['REP']['mp_width']
+                    trim_before = self.cfg['REP']['trim_before']
+                    trim_after = self.cfg['REP']['trim_after']
+                    kernel_size = self.cfg['REP']['kernel_size']
+                    self.maxpool = True
+                    reduction_fn = eval(self.cfg['REP']['reduction_function'])
 
     def get_random_buffer_path(self, phase, seed):
         assert phase in ['train', 'eval']
@@ -157,31 +181,7 @@ class ConfigHandler():
         else:
             return ""
 
-    def create_empty_memory_buffer(self, seed, buffer_size, kernel_size=(0,0), reduction_function=np.max, trim_before=0, trim_after=0):
-        self.frame_height = self.cfg['ENV']['obs_width']
-        self.frame_width = self.cfg['ENV']['obs_width']
-        self.history_length = self.cfg['ENV']['history_size']
-        self.num_prev_steps =  1
-        self.maxpool = False
-        trim_before = 0
-        trim_after = 0
-        reduction_fn = None
-        kernel_size = None
-        if 'REP' in self.cfg.keys():
-            self.num_prev_steps =  self.cfg['REP']['num_prev_steps']
-            if 'mp_height' in self.cfg['REP'].keys():
-                if self.cfg['REP']['mp_height'] > 0:
-                    # if maxpooling is done to output of env.py -> then this is what
-                    # goes in the replay buffer. we used maxpool downsample in atari to
-                    # get small enough frames, while preserving important info in the
-                    # frames
-                    self.frame_height = self.cfg['REP']['mp_width']
-                    self.frame_width = self.cfg['REP']['mp_width']
-                    trim_before = self.cfg['REP']['trim_before']
-                    trim_after = self.cfg['REP']['trim_after']
-                    kernel_size = self.cfg['REP']['kernel_size']
-                    self.maxpool = True
-                    reduction_fn = eval(self.cfg['REP']['reduction_function'])
+    def create_empty_memory_buffer(self, seed, buffer_size):
         return ReplayMemory(size=buffer_size,
                                frame_height=self.frame_height,
                                frame_width=self.frame_width,

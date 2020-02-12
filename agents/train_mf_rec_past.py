@@ -433,12 +433,13 @@ if __name__ == '__main__':
     else:
         max_count = ch.cfg['RUN']['eval_and_checkpoint_every_steps']
         count_type = 'steps'
-        if num_train_steps < ch.cfg['RUN']['total_train_steps']:
+        #if num_train_steps < ch.cfg['RUN']['total_train_steps']:
+        while True:
             sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
             num_train_steps = sm.step_number
             print("TRAINING on step number %s"%num_train_steps)
-            checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
-            sm.save_checkpoint(checkpoint_basepath)
+            checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)
+            sm.save_checkpoint(checkpoint_basepath+'_'+phase)
             save_models(checkpoint_basepath, model_dict)
             if args.plot:
                 print('plotting last episode')

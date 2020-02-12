@@ -308,6 +308,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--evaluate', default=False, action='store_true', help='eval a loaded model')
     parser.add_argument('-mp', '--model_path', default='', help='path of .pt model file to load checkpoint')
     parser.add_argument('-c', '--cuda', action='store_true', default=False, help='flag to use cuda device')
+    parser.add_argument('-ah', '--active_head', default=1, help='use active head in eval instead of vote - if "best" use highest scoring head')
     # TODO - add reload and continue of previous projects
     args = parser.parse_args()
     if args.cuda: device = 'cuda';
@@ -390,7 +391,7 @@ if __name__ == '__main__':
     #            sm.plot_last_episode()
     if args.evaluate:
         print("-----------starting eval--------------")
-        sm.active_head = 0
+        sm.active_head = args.active_head
         sm, model_dict = run_agent(sm, model_dict,  phase=phase, max_count=max_count, count_type=count_type)
         checkpoint_basepath = ch.get_checkpoint_basepath(num_train_steps)+'_'+phase
         sm.save_checkpoint(checkpoint_basepath)
