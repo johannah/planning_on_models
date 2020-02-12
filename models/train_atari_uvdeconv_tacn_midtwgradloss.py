@@ -213,7 +213,7 @@ def run(train_cnt, model_dict, data_dict, phase, info):
              'change':0,
              'static':0,
               }
-    print('starting', phase, 'cuda', torch.cuda.memory_allocated(device=None))
+    #print('starting', phase, 'cuda', torch.cuda.memory_allocated(device=None))
     data_loader = data_dict[phase]
     data_loader.reset_unique()
     num_batches = len(data_loader.unique_indexes)//info['batch_size']
@@ -273,7 +273,7 @@ def run(train_cnt, model_dict, data_dict, phase, info):
                        #'deconv_yhat':rescale_inv(rec_yhat.detach().cpu()),
                        'rec_yhat':rescale_inv(rec_yhat.detach().cpu()),
                        }
-        if not idx % 10:
+        if not idx % 100:
             print(train_cnt, idx, account_losses(loss_dict))
             print(phase, 'cuda', torch.cuda.memory_allocated(device=None))
         idx+=1
@@ -283,11 +283,11 @@ def run(train_cnt, model_dict, data_dict, phase, info):
                                                 time.time()-st,
                                                 train_cnt,
                                                 ))
-    print(loss_avg)
-    print('end', phase, 'cuda', torch.cuda.memory_allocated(device=None))
-    del states; del target; del actions; del rewards
-    torch.cuda.empty_cache()
-    print('after delete end', phase, 'cuda', torch.cuda.memory_allocated(device=None))
+    #print(loss_avg)
+    #print('end', phase, 'cuda', torch.cuda.memory_allocated(device=None))
+    #del states; del target; del actions; del rewards
+    #torch.cuda.empty_cache()
+    #print('after delete end', phase, 'cuda', torch.cuda.memory_allocated(device=None))
     #return model_dict, data_dict, loss_avg, example
     return loss_avg, example
 
@@ -299,11 +299,13 @@ def train_acn(train_cnt, epoch_cnt, model_dict, data_dict, info, rescale_inv):
     while train_cnt < info['num_examples_to_train']:
         print('starting epoch %s on %s'%(epoch_cnt, info['device']))
         #model_dict, data_dict, train_loss_avg, train_example = run(train_cnt,
-        train_loss_avg, train_example = run(train_cnt,
+
+        with torch.autograd.profiler.profile(use_cuda=info['device']=='cuda') as prof:
+            train_loss_avg, train_example = run(train_cnt,
                                                        model_dict,
                                                        data_dict,
                                                        phase='train', info=info)
-
+            print(prof)
         epoch_cnt +=1
         train_cnt +=info['size_training_set']
         if not epoch_cnt % info['save_every_epochs'] or epoch_cnt == 1:
@@ -408,7 +410,7 @@ if __name__ == '__main__':
     parser.add_argument('--input_channels', default=4, type=int, help='num of channels of input')
     parser.add_argument('--target_channels', default=1, type=int, help='num of channels of target')
     parser.add_argument('--num_examples_to_train', default=50000000, type=int)
-    parser.add_argument('-e', '--exp_name', default='mid_trfreeway_spvq_twgrad', help='name of experiment')
+    parser.add_argument('-e', '--exp_name', default='mid_1e6trfreeway_spvq_twgrad', help='name of experiment')
     parser.add_argument('-dr', '--dropout_rate', default=0.0, type=float)
     parser.add_argument('-r', '--reduction', default='sum', type=str, choices=['sum', 'mean'])
     parser.add_argument('--rec_loss_type', default='dml', type=str, help='name of loss. options are dml', choices=['dml'])
@@ -430,7 +432,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_savedir', default='../../model_savedir', help='save checkpoints here')
     parser.add_argument('--base_datadir', default='../../dataset/trained_dqn_ATARI', help='save datasets here')
     #parser.add_argument('--base_train_buffer_path',  type=str, default='/usr/local/data/jhansen/planning/model_savedir/MFBreakout_train_anneal_14342_00/breakout_S014342_N0002813995_train.npz', help='load frames/actions from pretrained dqn')
-    parser.add_argument('--base_train_buffer_path',  type=str, default='/usr/local/data/jhansen/planning/model_savedir/MFFreeway_train_anneal_14342_09/freeway_S014342_N0000503002_train.npz', help='load frames/actions from pretrained dqn')
+    parser.add_argument('--base_train_buffer_path',  type=str, default='/usr/local/data/jhansen/planning/model_savedir/good_MFFreeway_train_anneal_14342_09/freeway_S014342_N0001005985_train.npz', help='load frames/actions from pretrained dqn')
     #parser.add_argument('--size_training_set', default=85000, type=int, help='number of random examples from base_train_buffer_path to use')
     parser.add_argument('--size_training_set', default=60000, type=int, help='number of random examples from base_train_buffer_path to use')
     # sampling info
