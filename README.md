@@ -5,5 +5,7 @@ How can we use planning if we don't know the future? In this repo, we combine ge
 
 Atari with MCTS forward planning with vqvae+pixel-cnn
 
+![alt text](valid_E00001_R020_cropped.gif?raw=true "Freeway Agent - MCTS planning on imagination with gradcam")
+
 ![alt text](a_fast_seed_110.gif?raw=true "Freeway Agent - MCTS planning on imagination")
 
